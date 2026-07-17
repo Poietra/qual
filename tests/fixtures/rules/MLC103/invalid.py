@@ -1,0 +1,8 @@
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        square = Square()
+        self.play(square.shift, RIGHT)
+        self.play(square.rotate, PI)
