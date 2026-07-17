@@ -1,8 +1,6 @@
-//! Syntactic frontend: parsing facade, imports, names, index, CFG
-//! (DESIGN §5.1 pipeline stages before the abstract interpreter).
-//!
-//! Phase 1 implements `parser`, `imports`, `names`, and `index`.
-//! TODO(phase-2): `cfg`.
+//! Syntactic frontend: parsing facade, imports, names, index, and the
+//! intra-procedural CFG (DESIGN §5.1 pipeline stages before the abstract
+//! interpreter).
 
 pub mod cfg;
 pub mod imports;

@@ -33,13 +33,13 @@ pub use crate::frontend::index::QualifiedCallFacts;
 /// subclass discovery.
 pub use crate::frontend::index::ProjectIndex as ProjectIndexFacts;
 
-/// Lifecycle events and abstract state snapshots.
+/// Lifecycle events, membership snapshots, play groups, updater and
+/// builder facts, produced by the abstract interpreter
+/// (`semantic::interpreter::analyze`, DESIGN §5.6 / §3).
 ///
-/// TODO(phase-2): populated by `semantic::interpreter` with the event IR of
-/// DESIGN §5.6 (`SceneAdd`, `RegisterUpdater`, `BeginPlay`, ...).
-#[derive(Debug, Default)]
-#[non_exhaustive]
-pub struct LifecycleFacts {}
+/// See [`LifecycleFacts`] for the per-rule query map (which facts each
+/// Phase-2 rule should read).
+pub use crate::semantic::interpreter::LifecycleFacts;
 
 /// Symbolic cost facts (invocation contexts and multiplicities).
 ///
@@ -98,6 +98,17 @@ impl<'a> RuleContext<'a> {
         self
     }
 
+    /// Attaches lifecycle facts from the abstract interpreter
+    /// (`semantic::interpreter::analyze`).
+    ///
+    /// Without this call the context keeps an empty default — no scene was
+    /// analyzed — and lifecycle rules must stay silent.
+    #[must_use]
+    pub fn with_lifecycle(mut self, lifecycle: LifecycleFacts) -> Self {
+        self.lifecycle_facts = lifecycle;
+        self
+    }
+
     /// Parsed files, tokens, comments, and span conversions.
     #[must_use]
     pub const fn sources(&self) -> &'a SourceManager {
@@ -140,9 +151,11 @@ impl<'a> RuleContext<'a> {
         &self.project_index
     }
 
-    /// Lifecycle events from the abstract interpreter.
+    /// Lifecycle events and state snapshots from the abstract
+    /// interpreter.
     ///
-    /// TODO(phase-2): currently empty.
+    /// Empty unless attached via [`RuleContext::with_lifecycle`]; an empty
+    /// fact set means "not analyzed", never "no scenes exist".
     #[must_use]
     pub const fn lifecycle_facts(&self) -> &LifecycleFacts {
         &self.lifecycle_facts
