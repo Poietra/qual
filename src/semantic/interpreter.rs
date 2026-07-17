@@ -1232,7 +1232,7 @@ struct Machine<'a, 'b> {
     current_method: String,
     call_context: CallContextId,
     play_counter: u64,
-    /// Emit ops / facts (first pass only).
+    /// Emit ops / facts (post-convergence final pass only).
     emit: bool,
     /// Record statement snapshots (final pass of scene methods only).
     snapshot: bool,
@@ -1276,8 +1276,16 @@ impl<'a> Machine<'a, '_> {
         let outer_emit = self.emit;
         let outer_snapshot = self.snapshot;
 
+        // Facts, ops, and snapshots are recorded only on the final pass
+        // below, after the fixpoint converges. On pass 0 a block after a
+        // loop has not yet absorbed the loop's back-edge state, so a fact
+        // recorded that early can present a pre-fixpoint `Absent` as a
+        // converged all-paths truth — exactly the certain/high-on-Maybe
+        // violation DESIGN §15.2 forbids (e.g. `generate_target()` inside
+        // a loop consumed by `MoveToTarget` after it). The fixpoint passes
+        // are therefore pure state computation.
         for pass in 0..MAX_PASSES {
-            self.emit = outer_emit && pass == 0;
+            self.emit = false;
             self.snapshot = false;
             let mut changed = false;
             for &block_id in &order {
@@ -1316,8 +1324,13 @@ impl<'a> Machine<'a, '_> {
             }
         }
 
-        // Final pass over the converged states: snapshots + exit state.
-        self.emit = false;
+        // Final pass over the converged states: facts, ops, snapshots, and
+        // the exit state. Every reachable block executes exactly once here,
+        // in the same reverse postorder as the fixpoint passes, so the
+        // recorded event stream keeps program order while every state read
+        // (target/saved-state presence, epochs, membership) reflects the
+        // converged join of all paths, including loop back edges.
+        self.emit = outer_emit;
         self.snapshot = outer_snapshot;
         let mut exit: Option<ExecState> = None;
         for &block_id in &order {

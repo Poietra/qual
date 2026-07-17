@@ -397,6 +397,70 @@ fn mlr104_resolves_assets_exactly_like_manim() {
     assert!(tried.to_string().contains("missing.svg"));
 }
 
+const MLR104_WINDOWS_PYPROJECT: &str = "\
+[tool.manim-lint]
+default-profile = \"win\"
+
+[[tool.manim-lint.profile]]
+name = \"win\"
+platform = \"windows\"
+assets-dir = \"assets\"
+";
+
+/// Case-only mismatches are silent when every declared target platform is
+/// case-insensitive: the render's lookup on windows/macos finds the file
+/// as written, so an error would claim a failure that happens on no
+/// declared target (DESIGN §7.2 per-platform prose, AGENTS rule 4; DESIGN
+/// §6 fixes one severity per rule ID, so no downgrade either). Genuinely
+/// missing assets keep firing — their search fails on every platform.
+#[test]
+fn mlr104_case_only_mismatch_is_silent_on_case_insensitive_targets() {
+    let (project, diagnostics) = run_fixture("MLR104", MLR104_WINDOWS_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            error("MLR104", "\"missing.svg\"", 1, 0),
+            error("MLR104", "\"absent\"", 1, 0),
+        ],
+    );
+}
+
+/// An absolute path outside the project tree can only be checked against
+/// the lint host's filesystem (DESIGN §7.2 prose decides validity by the
+/// runtime's own search); the diagnostic declares that environment
+/// dependence as evidence for downstream consumers.
+#[test]
+fn mlr104_absolute_out_of_project_path_declares_environment_dependence() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("scene.py"),
+        "from manim import *\n\n\nclass Abs(Scene):\n    def construct(self):\n        \
+         a = ImageMobject(\"/nonexistent-manim-lint-probe/pic.png\")\n",
+    )
+    .unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), MLR104_PYPROJECT).unwrap();
+    let args = CheckArgs {
+        paths: vec![project.path().to_path_buf()],
+        format: OutputFormat::Concise,
+        ..CheckArgs::default()
+    };
+    let report = check(&args).expect("check pipeline must succeed");
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule_id == "MLR104")
+        .expect("unresolved absolute path fires MLR104");
+    assert_eq!(
+        diagnostic
+            .evidence
+            .get("environment_dependent")
+            .map(ToString::to_string),
+        Some("true".to_owned())
+    );
+}
+
 // ---------------------------------------------------------------------------
 // MLR105
 // ---------------------------------------------------------------------------

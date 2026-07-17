@@ -14,7 +14,10 @@
 //!   which carries the SAFE case fix; this rule covers Manim's
 //!   extension-augmented candidates (`assets_dir/name.svg` for
 //!   `SVGMobject("Name")`) that `MLR104`'s scan cannot map back onto the
-//!   literal.
+//!   literal. A case-only mismatch whose affected profiles all target
+//!   case-insensitive platforms (windows/macos) is silent under both
+//!   rules: the declared renders resolve the file as written, so there is
+//!   no failure to report (AGENTS rule 4; see `MLR104`'s case branch).
 //!
 //! `has_drive_prefix` and the component-wise case-insensitive scan are
 //! shared with `rules::rendering::assets` (exported through

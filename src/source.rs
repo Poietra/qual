@@ -408,8 +408,14 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
     };
     match declared {
         Some(label) => {
-            let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) else {
-                return Err(format!("unknown source encoding declared: {label}"));
+            let Some(encoding) = resolve_declared_encoding(&label) else {
+                // MLC000's contract is "the configured target Python cannot
+                // decode this file" (DESIGN §7.1). A codec we cannot map is
+                // reported as a linter limitation, not as a decode failure
+                // CPython would raise (DESIGN §15.2 / AGENTS rule 4).
+                return Err(format!(
+                    "source encoding {label} is not supported by manim-lint; the file is skipped"
+                ));
             };
             if encoding == encoding_rs::UTF_8 {
                 return decode_strict_utf8(bytes, byte_order_mark);
@@ -428,6 +434,59 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
         }
         None => decode_strict_utf8(bytes, byte_order_mark),
     }
+}
+
+/// Resolves a PEP 263 encoding label to a decoder, accepting both WHATWG
+/// labels and `CPython` codec names/aliases (`latin-1`, `cp932`, ...) for
+/// codecs `encoding_rs` can represent.
+///
+/// The declared label is what the *target Python* resolves through its own
+/// codec alias table, so spellings like `latin-1` (WHATWG only knows
+/// `latin1`) or `cp932` (WHATWG calls it `shift_jis`/`ms932`) are valid
+/// sources that must decode, not MLC000 errors (DESIGN §7.1).
+fn resolve_declared_encoding(label: &str) -> Option<&'static encoding_rs::Encoding> {
+    if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+        return Some(encoding);
+    }
+    // CPython `encodings.normalize_encoding`: lowercase, runs of
+    // non-alphanumeric characters collapse to a single `_`.
+    let mut normalized = String::with_capacity(label.len());
+    let mut pending_separator = false;
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_separator && !normalized.is_empty() {
+                normalized.push('_');
+            }
+            pending_separator = false;
+            normalized.push(ch.to_ascii_lowercase());
+        } else {
+            pending_separator = true;
+        }
+    }
+    // CPython codec names and aliases whose spelling no WHATWG label
+    // covers, mapped onto the closest encoding_rs decoder.
+    let mapped: Option<&str> = match normalized.as_str() {
+        "latin" | "latin_1" | "l1" | "8859" | "iso8859" | "cp819" => Some("iso-8859-1"),
+        "cp932" | "ms_kanji" | "mskanji" | "windows_31j" | "shiftjis" => Some("shift_jis"),
+        "cp936" | "ms936" | "euc_cn" | "euccn" | "eucgb2312_cn" => Some("gbk"),
+        "cp950" | "big5_tw" => Some("big5"),
+        "cp949" | "ms949" | "uhc" | "euckr" | "ks_c_5601" | "ks_x_1001" => Some("euc-kr"),
+        "eucjp" | "ujis" | "u_jis" => Some("euc-jp"),
+        "iso2022_jp" | "iso2022jp" => Some("iso-2022-jp"),
+        "cp874" | "tis620" | "tis_620" => Some("windows-874"),
+        "mac_roman" | "macroman" => Some("macintosh"),
+        "mac_cyrillic" | "maccyrillic" => Some("x-mac-cyrillic"),
+        "u8" | "cp65001" => Some("utf-8"),
+        _ => None,
+    };
+    if let Some(mapped) = mapped {
+        return encoding_rs::Encoding::for_label(mapped.as_bytes());
+    }
+    // The remaining CPython spellings differ from a WHATWG label only in
+    // using `_` where WHATWG uses `-` (`iso_8859_5`, `euc_kr`, `koi8_r`,
+    // `utf_8`, `us_ascii`, `shift_jis`, ...).
+    let hyphenated = normalized.replace('_', "-");
+    encoding_rs::Encoding::for_label(hyphenated.as_bytes())
 }
 
 fn decode_strict_utf8(
@@ -689,7 +748,46 @@ mod tests {
             Path::new("/project/enc.py"),
             b"# -*- coding: not-an-encoding -*-\nx = 1\n",
         );
-        assert!(!sources.files()[0].is_parsed());
+        let file = &sources.files()[0];
+        assert!(!file.is_parsed());
+        // The message reports a linter limitation, not a decode failure the
+        // target Python would raise (DESIGN §7.1, §15.2).
+        let diagnostic = file.parse_diagnostic().expect("unsupported encoding");
+        assert!(diagnostic.message.contains("not supported by manim-lint"));
+    }
+
+    #[test]
+    fn decodes_python_codec_aliases_latin_1_and_cp932() {
+        // `latin-1` is CPython's alias spelling; WHATWG only knows
+        // `latin1`. Verified against CPython 3.11: tokenize.open decodes
+        // and ast.parse parses this file, so MLC000 must stay silent.
+        let mut sources = manager();
+        sources.load_bytes(
+            Path::new("/project/latin.py"),
+            b"# -*- coding: latin-1 -*-\n# caf\xe9\nfrom manim import *\n",
+        );
+        let file = &sources.files()[0];
+        assert!(file.is_parsed(), "latin-1 must decode");
+        assert!(file.text().contains("café"));
+
+        // `cp932` is CPython's canonical name for Windows Shift_JIS;
+        // WHATWG's shift_jis label set omits it.
+        let mut bytes = b"# -*- coding: cp932 -*-\nx = \"".to_vec();
+        bytes.extend([0x82, 0xa0]); // あ in cp932
+        bytes.extend(b"\"\n");
+        let mut sources = manager();
+        sources.load_bytes(Path::new("/project/cp932.py"), &bytes);
+        let file = &sources.files()[0];
+        assert!(file.is_parsed(), "cp932 must decode");
+        assert!(file.text().contains('あ'));
+
+        // Underscore spellings of hyphenated WHATWG labels resolve too.
+        let mut sources = manager();
+        sources.load_bytes(
+            Path::new("/project/koi8.py"),
+            b"# -*- coding: koi8_r -*-\nx = 1\n",
+        );
+        assert!(sources.files()[0].is_parsed(), "koi8_r must decode");
     }
 
     #[test]

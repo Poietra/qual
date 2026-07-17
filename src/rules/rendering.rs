@@ -33,6 +33,7 @@ mod tex_keys;
 pub(crate) use assets::{case_insensitive_match, has_drive_prefix};
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use rustpython_parser::Tok;
 use rustpython_parser::ast::{self, Ranged};
@@ -882,10 +883,9 @@ impl Rule for UnresolvedAssetPath {
             }
             let file = context.sources().file(call.file);
 
-            let mut case_matches: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let mut case_matches: BTreeMap<String, Vec<(String, Platform)>> = BTreeMap::new();
             let mut missing_profiles: Vec<String> = Vec::new();
             let mut missing_platforms: Vec<Platform> = Vec::new();
-            let mut case_platforms: Vec<Platform> = Vec::new();
             let mut tried: Vec<String> = Vec::new();
             for render_profile in context.active_profiles() {
                 let working_dir = project_root.join(&render_profile.working_directory);
@@ -901,8 +901,7 @@ impl Rule for UnresolvedAssetPath {
                         case_matches
                             .entry(corrected)
                             .or_default()
-                            .push(render_profile.name.clone());
-                        case_platforms.push(render_profile.platform);
+                            .push((render_profile.name.clone(), render_profile.platform));
                     }
                     assets::AssetResolution::NotFound { tried: candidates } => {
                         missing_profiles.push(render_profile.name.clone());
@@ -914,8 +913,28 @@ impl Rule for UnresolvedAssetPath {
                 }
             }
             let constructor = short_name(constructor_id);
-            for (corrected, profile_names) in case_matches {
-                let wording = if case_platforms.iter().all(|p| *p == Platform::Linux) {
+            for (corrected, profiles) in case_matches {
+                // DESIGN §7.2 prose: the case-only mismatch is presented
+                // per target platform. The lookup fails only on
+                // case-sensitive targets (linux); on a windows/macos
+                // target the render's case-insensitive filesystem lookup
+                // finds the file and the render succeeds, so those
+                // profiles are not applicable — and when NO case-sensitive
+                // target is affected the error would claim a render
+                // failure that does not happen on any declared target
+                // (AGENTS rule 4). DESIGN §6 fixes one severity per rule
+                // ID, so the rule stays silent rather than downgrading;
+                // a project that only declares case-insensitive targets
+                // has declared that this render succeeds as written.
+                let applicable: Vec<String> = profiles
+                    .iter()
+                    .filter(|(_, platform)| *platform == Platform::Linux)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if applicable.is_empty() {
+                    continue;
+                }
+                let wording = if applicable.len() == profiles.len() {
                     "the lookup is case-sensitive on linux"
                 } else {
                     "case-insensitive filesystems may mask this locally, but the \
@@ -939,7 +958,7 @@ impl Rule for UnresolvedAssetPath {
                      the path, so a case-only mismatch fails on case-sensitive \
                      filesystems.",
                     evidence,
-                    profile_names,
+                    applicable,
                     case_correction_fix(file, *range, &corrected),
                 ));
             }
@@ -959,6 +978,19 @@ impl Rule for UnresolvedAssetPath {
                 evidence.insert("literal".to_owned(), json!(value));
                 evidence.insert("tried".to_owned(), json!(tried));
                 evidence.insert("exists_next_to_source".to_owned(), json!(next_to_source));
+                // DESIGN §7.2 prose: validity is decided by performing the
+                // same search Manim's runtime would, on this machine. For
+                // an absolute path outside the project tree that check is
+                // inherently about the lint host, not necessarily the
+                // render host (CI linting a repo rendered elsewhere), so
+                // the environment dependence is declared as evidence. The
+                // metadata floor (§6: confidence at or above the rule
+                // minimum) keeps this at high rather than capping lower.
+                if Path::new(value.as_str()).is_absolute()
+                    && !Path::new(value.as_str()).starts_with(project_root)
+                {
+                    evidence.insert("environment_dependent".to_owned(), json!(true));
+                }
                 diagnostics.push(build_diagnostic(
                     &MLR104,
                     file,

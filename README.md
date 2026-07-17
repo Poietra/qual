@@ -77,6 +77,33 @@ Transform identity facts (`MLC116`), and a local fork overlay profile
 cache (`--no-cache` is an accepted no-op), threshold calibration against
 rendered baselines, and a nightly render-comparison CI.
 
+## Known limitations
+
+- **Asset checks probe the linting machine.** `MLR104` resolves literal
+  asset paths with Manim's own runtime search, on the machine running the
+  lint. For absolute paths outside the project tree that is evidence about
+  the lint host, not necessarily the render host (e.g. CI linting a repo
+  rendered elsewhere); those diagnostics carry
+  `environment_dependent: true` as evidence. Case-only mismatches are
+  reported only against case-sensitive target platforms (`linux`); when
+  every affected profile targets windows/macos, the declared renders
+  resolve the file as written and the linter stays silent.
+- **Source encodings.** PEP 263 declarations resolve through WHATWG labels
+  plus a CPython codec-alias table (`latin-1`, `cp932`, `koi8_r`, ...). A
+  rare Python codec the linter cannot represent is skipped with an
+  explicit `MLC000` "not supported by manim-lint" notice — never a claim
+  that the target Python could not decode the file.
+- **Deliberately conservative silences.** Some catalog detections are
+  narrower than their prose and stay silent rather than guess (AGENTS.md
+  rule 4): `MLR106` sees NaN/inf only in literal form, not through
+  `float("nan")` calls; `MLD301` proves FPS dependence only for updaters
+  that lack a `dt` parameter (a declared-but-unused `dt` is not flagged);
+  `MLC113`/`MLC124` recognize their documented call shapes only; `MLR102`
+  needs the interpreter to prove the played bare builder's target
+  unchanged; `MLR105` validates a verified Pango subset (a bare `&` is
+  allowed); `MLD304` implements only the ThreeDScene fixed-object cleanup
+  divergence. `manim-lint explain RULE` states each rule's exact scope.
+
 ## Build and run
 
 A Rust toolchain (1.85+) is required.

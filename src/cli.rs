@@ -139,7 +139,7 @@ pub struct CheckArgs {
     /// Output format (concise|full|json|sarif|github).
     #[arg(long, default_value = "concise")]
     pub format: OutputFormat,
-    /// Apply safe fixes (no current rule emits fixes yet).
+    /// Apply safe fixes.
     #[arg(long)]
     pub fix: bool,
     /// Also apply unsafe fixes (requires --fix).
