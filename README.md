@@ -1,161 +1,404 @@
 # manim-lint
 
-`manim-lint` is a static analyzer for Manim Community projects, implemented in
-Rust. It reads Python source with a Rust Python parser and never imports Manim
-or executes the analyzed project.
+**Static analysis for [Manim Community](https://www.manim.community/) scenes — catch definite runtime errors, silent mis-rendering, performance multipliers, and non-determinism before you render.**
 
-The current implementation covers the **Phase 0 foundation**, the **Phase 1
-name resolution and direct-call rules**, the **Phase 2/3 semantic
-foundations and their state-dependent rules**, and the **Phase 4
-determinism/portability rules** described in [`DESIGN.md`](DESIGN.md):
+English | [日本語](README.ja.md)
 
-- source loading with PEP 263 encoding declarations, newline preservation,
-  and UTF-8-byte-column to Unicode-character-column conversion (Japanese
-  source is a first-class test case)
-- `MLC000` syntax-error diagnostics; a broken file never stops analysis of
-  the other files
-- configuration from `[tool.manim-lint]` in `pyproject.toml`, a minimal
-  `manim.cfg` reader, and the explicit precedence chain
-  `CLI > selected profile > pyproject base > manim.cfg > builtin defaults`
-- inline suppressions (`# manim-lint: ignore[...]`, standalone comments,
-  header-only `file-ignore[...]`); invalid suppressions warn as `MLC001`
-- deterministic, byte-stable output: `concise`, `full`, `github`
-  annotations, JSON matching `schemas/diagnostics-v1.json`, and SARIF 2.1.0
-  (`--format sarif`, generated without external SARIF dependencies)
-- baselines (`--write-baseline` / `--baseline`) whose fingerprints follow
-  `schemas/baseline-v1.json` and never contain line numbers, so inserting
-  unrelated lines does not invalidate entries
-- fix application (`--fix`, `--unsafe-fixes`): safe/unsafe separation,
-  overlap rejection, re-parse validation with per-file rollback, and
-  Unicode-correct span editing
-- a versioned Manim 0.20 knowledge profile (no Manim import, ever), import
-  and alias resolution including `from manim import *`, a project-wide
-  symbol/class-hierarchy index, and qualified Manim call facts with
-  candidate sets that degrade to `Unknown` instead of guessing
-- the **Phase 1 rule set**, implemented and enforced through golden fixture
-  tests with alias-import parity and suppression coverage:
-  - lifecycle: `MLC101`–`MLC106`, `MLC109`, `MLC122`, `MLC126`, `MLC127`
-  - rendering: `MLR101`, `MLR103`–`MLR106`, `MLR115`, `MLR117`, `MLR124`,
-    `MLR126`
-  - several emit fixes (safe: `MLC127`, `MLR104`; unsafe: e.g. `MLC102`,
-    `MLC106`, `MLC122`, `MLR103`, `MLR105`, `MLR117`, `MLR124`)
-- the **lifecycle abstract interpreter** (DESIGN §3/§5.6): intra-function
-  CFG, interprocedural helper summaries with SCC fixpoints, per-Scene MRO
-  composition with `super()` dispatch, allocation-site identity, Scene
-  membership/order/updater tracking, and play-group semantics — exposed to
-  rules as `LifecycleFacts` on the `RuleContext`
-- the **symbolic cost model** (DESIGN §4): hot-context propagation
-  (updaters, `always_redraw`, stop conditions, interpolate overrides),
-  frame-count intervals from literal durations (never fabricated numbers),
-  and machine-readable evidence — exposed to rules as `CostFacts`
-- the **Phase 2 state-dependent rules** over those facts, firing only on
-  definite (all-paths) evidence:
-  - lifecycle: `MLC107`, `MLC108`, `MLC110`, `MLC113` (safe kwargs-move
-    fix), `MLC115`, `MLC117`, `MLC119`–`MLC121`, `MLC124`, `MLC125`,
-    `MLC128`, `MLC129`
-  - rendering: `MLR102`, `MLR113`, `MLR114`, `MLR125`, `MLR127`
-- the **first Phase 3 performance tranche**: `MLP201`, `MLP204`–`MLP206`,
-  `MLP220`, `MLP226`, plus the `manim-lint cost` command (per-scene play
-  list with frame intervals, hot contexts with provenance, per-frame
-  constructions, resource-key growth; unknown durations are printed as
-  unknown, never as fabricated numbers)
-- the **Phase 4 determinism/portability rules**: `MLD301`–`MLD307`
-- specificity dedup per DESIGN §7.3: when two diagnostics share a primary
-  span and one rule declares `supersedes` over the other (`MLP226` >
-  `MLP201`, `MLP220` > `MLP204`/`MLP211`), only the more specific one is
-  reported
+`manim-lint` is a standalone static analyzer for Manim Community **0.20**
+projects, written in Rust. It parses your Python source and checks it against
+a curated, versioned model of Manim's semantics — it **never imports or
+executes** Manim or your code. Instead of pattern-matching API names, it runs
+a lifecycle abstract interpreter that models what `Scene.play` actually does
+(argument compilation, auto-add, introducers/removers, updaters) and a
+symbolic cost model that knows which code runs once and which code runs every
+frame.
 
-All remaining catalog rules are **reserved** and never presented as
-checked (`manim-lint rules` lists their status honestly). They wait on
-capabilities the fact layers do not provide yet, for example: callback
-body summaries (`MLC123`, `MLP218`, `MLC112`), family/points cardinality
-bridged into `CostFacts` (`MLP202`/`MLP203`/`MLP207`/`MLP208`/`MLP211`/
-`MLP216`), tuple literal facts and curated `ParametricFunction`
-(`MLP221`), interpreter tracking of `point_count` (`MLR116`), post-
-Transform identity facts (`MLC116`), and a local fork overlay profile
-(`MLP214`/`MLP225`). Still unimplemented beyond rules: the SQLite result
-cache (`--no-cache` is an accepted no-op), threshold calibration against
-rendered baselines, and a nightly render-comparison CI.
+## Example
+
+`scenes/demo.py`:
+
+```python
+from manim import *
+
+
+class TrackerDemo(Scene):
+    def construct(self):
+        title = Text("Tracking x", font_size=0)
+        square = Square()
+        tracker = ValueTracker(0)
+        label = always_redraw(lambda: MathTex(f"x={tracker.get_value():.2f}"))
+        self.add(title, square, label)
+        self.play(square.shift(RIGHT))
+        square.add_updater(lambda m: m.rotate(0.05))
+        self.play(tracker.animate.set_value(8), run_time=8)
+        self.wait(0)
+```
+
+```console
+$ manim-lint check .
+scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
+scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`).
+scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
+scenes/demo.py:12:38: MLD301 warning Updater lambda applies `rotate` with a fixed step every frame but declares no `dt` parameter; the motion speed depends on the profile frame rate
+scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is non-positive and `Scene` rejects it with `ValueError` before rendering.
+```
+
+Two of these would crash the render (`MLC102`, `MLC104`), one renders an
+invisible title (`MLR115`), one silently changes speed with the frame rate
+(`MLD301`), and one launches the external TeX compiler for a fresh cache key
+on every rendered frame (`MLP226`).
+
+## What it checks
+
+Rules come in four families:
+
+- **MLC — lifecycle / correctness.** Definite runtime errors and lifecycle
+  mistakes that render the wrong picture: non-Animation arguments to
+  `Scene.play` (`MLC102`), `MoveToTarget` without `generate_target()` on any
+  path (`MLC107`), `Restore` without `save_state()` (`MLC120`), two
+  animations writing the same channel of the same mobject in one play
+  (`MLC108`), a `Scene.remove(child)` undone by re-adding the surviving
+  parent (`MLC115`).
+- **MLR — rendering.** Code that renders, but not what you meant: a Python
+  escape corrupting a TeX command in a non-raw `MathTex` literal (`MLR103`),
+  asset paths that fail Manim's exact runtime search (`MLR104`), Pango markup
+  passed to plain `Text` (`MLR124`), `Transform(mob, mob)` (`MLR113`).
+- **MLP — performance.** Cost multipliers with machine-readable evidence:
+  `Text`/`MathTex`/`SVGMobject` construction inside an updater or
+  `always_redraw` (`MLP201`), frame-varying TeX cache keys that mint one disk
+  asset per frame (`MLP226`), scene graphs growing every frame (`MLP204`),
+  `TracedPath` without `dissipating_time` (`MLP220`).
+- **MLD — determinism / portability.** Renders that differ between machines,
+  frame rates, or renderers: fixed per-frame steps without `dt` scaling
+  (`MLD301`), unseeded global randomness in frame callbacks (`MLD302`),
+  case-only asset path mismatches on case-sensitive targets (`MLD305`).
+
+### Semantic depth, not name matching
+
+The analyzer's core principle (DESIGN §1): never warn on an API name alone.
+`FadeOut(mob)` is fine on a mobject that was never added — play's preparation
+auto-adds it and the remover deletes it afterwards. So the pipeline builds
+real facts first:
+
+- a **lifecycle abstract interpreter**: intra-function CFG, interprocedural
+  helper summaries, per-Scene MRO composition with `super()` dispatch,
+  allocation-site identity, scene membership/order/updater tracking, and
+  play-group semantics;
+- a **symbolic cost model**: hot-context propagation (updaters,
+  `always_redraw`, stop conditions, interpolate overrides) and frame-count
+  intervals derived only from literal durations — the cost report above says
+  `duration 8 s -> frames ~480` because `run_time=8` at 60 FPS is provable,
+  and prints `unknown` otherwise, never a fabricated number.
+
+Every diagnostic separates **severity** (`error`/`warning`/`info`) from
+**confidence** (`certain`/`high`/`medium`/`low`), and state-dependent rules
+fire only on definite, all-paths evidence. When a value cannot be resolved
+statically, it degrades to `Unknown` and the linter stays **silent rather
+than guessing** — a deliberate design stance carried through every rule.
+
+## Installation
+
+Requires a Rust toolchain (1.85+). There is no crates.io release yet;
+install from source:
+
+```bash
+git clone <this repository>
+cd manim-lint
+cargo install --path .
+```
+
+## Quickstart
+
+```bash
+manim-lint check .                      # analyze, concise output
+manim-lint check scenes --format full   # explanations + evidence
+manim-lint check . --format json       # schemas/diagnostics-v1.json
+manim-lint check . --format sarif      # SARIF 2.1.0
+manim-lint check . --format github     # GitHub Actions annotations
+manim-lint explain MLC102               # full documentation for a rule
+manim-lint rules                        # every rule ID, phase, and status
+manim-lint config                       # resolved effective configuration
+manim-lint cost scenes/demo.py          # per-scene cost breakdown
+```
+
+Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
+least one does; `2` — command-line, configuration, or internal error.
+
+Useful `check` options: `--select` / `--ignore`, `--min-confidence`,
+`--fail-level`, `--profile`, `--renderer`, `--fps`,
+`--resolution WIDTHxHEIGHT`, `--statistics`, and the baseline/fix options
+described below.
+
+`--format full` prints the explanation and machine-readable evidence under
+each diagnostic:
+
+```text
+scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, ...
+    A frame-varying key defeats the `MathTex` cache: instead of one shaping/compile job reused every frame,
+    each frame pays construction plus a cache miss, and for TeX classes each distinct key also launches the
+    external TeX compiler and `dvisvgm`, leaving one disk asset per key. ...
+    evidence.distinct_resource_keys: "per-frame"
+    evidence.invocation_context: "frame-callback"
+    evidence.multiplicity: ["frames"]
+    evidence.state_path: ["construct","always_redraw:9"]
+    applies to profiles: production
+```
+
+## Configuration
+
+Configuration lives in `[tool.manim-lint]` in `pyproject.toml`, found by
+walking up from the checked path. Render profiles are
+`[[tool.manim-lint.profile]]` entries:
+
+```toml
+[tool.manim-lint]
+manim-version = "0.20"
+target-python = "3.11"
+select = ["MLC", "MLR", "MLP", "MLD"]
+ignore = []
+min-confidence = "high"
+fail-level = "warning"
+default-profile = "production"
+knowledge-profile = "upstream_0_20"
+respect-manim-cfg = true
+exclude = [".venv/**", "media/**"]
+per-file-ignores = { "tests/fixtures/**" = ["MLP", "MLD"] }
+
+[[tool.manim-lint.profile]]
+name = "production"
+renderer = "cairo"
+platform = "linux"
+pixel-width = 1920
+pixel-height = 1080
+frame-rate = 60
+assets-dir = "."
+allowed-fonts = ["Noto Sans", "Noto Sans CJK JP"]
+```
+
+Precedence, highest first:
+
+```text
+CLI > selected profile > pyproject base > manim.cfg > builtin defaults
+```
+
+When `respect-manim-cfg` is enabled (the default), a `manim.cfg` supplies
+resolution/fps/renderer defaults below the pyproject settings. Unknown keys,
+unknown rule selectors, duplicate profile names, and unknown profile
+references are configuration errors (exit 2). `--profile all` analyzes every
+defined profile and merges same-evidence diagnostics, listing the affected
+profiles per diagnostic.
+
+## Suppressions
+
+```python
+self.play(square.shift(RIGHT))  # manim-lint: ignore[MLC102]   # same statement
+
+# manim-lint: ignore[MLP201]                                   # next statement
+label = always_redraw(...)
+
+# manim-lint: file-ignore[MLP]   # whole file; must appear in the file header
+```
+
+An unknown rule ID inside an inline suppression does **not** suppress
+anything; it is reported as a dedicated warning:
+
+```text
+scene.py:8:23: MLC001 warning unknown rule ID in suppression: MLC999
+```
+
+For whole directories, use `per-file-ignores` in `pyproject.toml` (see
+above).
+
+## Gradual adoption: baselines
+
+Adopt the linter on an existing project without fixing everything first:
+
+```bash
+manim-lint check . --write-baseline .manim-lint-baseline.json  # record today's findings
+manim-lint check . --baseline .manim-lint-baseline.json        # report only new findings
+```
+
+Baseline fingerprints (`schemas/baseline-v1.json`) contain **no line
+numbers** — they are built from rule ID, relative path, qualified scene name,
+and a surrounding token hash — so inserting unrelated lines elsewhere in a
+file does not invalidate entries. A corrupt or wrong-schema baseline file
+exits 2 with a clear message.
+
+## Autofix
+
+```bash
+manim-lint check . --fix            # apply SAFE fixes only
+manim-lint check . --fix --unsafe-fixes  # also apply UNSAFE fixes
+```
+
+Safe and unsafe fixes are strictly separated: `--fix` alone applies only
+edits that preserve behavior (e.g. `MLC127` removes a duplicate child from
+one `add()`/`VGroup()` call, `MLR104` corrects a case-only asset path).
+Unsafe fixes can change runtime semantics (e.g. rewriting
+`play(mob.shift(...))` to `play(mob.animate.shift(...))` for `MLC102`) and
+require the explicit extra flag. Every fixed file is re-parsed for
+validation; a file whose fix does not survive re-parsing is rolled back.
+
+```console
+$ manim-lint check . --fix
+scene.py:8:37: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
+fixed 1 issue(s) in 1 file(s)
+```
+
+## Cost command
+
+`manim-lint cost` prints the symbolic cost breakdown per scene — play list
+with frame intervals, hot contexts with provenance, per-frame constructions,
+and resource-key growth. Unknown durations are printed as unknown, never as
+fabricated numbers:
+
+```console
+$ manim-lint cost scenes/demo.py
+profiles: production (cairo, 1920x1080, 60 fps)
+
+scene scenes.demo.TrackerDemo (scenes/demo.py)
+  plays:
+    scenes/demo.py:11:9 play duration unknown -> frames per-frame
+    scenes/demo.py:13:9 play duration 8 s -> frames ~480
+    scenes/demo.py:14:9 wait duration 0 s -> frames ~0
+  hot contexts:
+    scenes/demo.py:9:31 entry always_redraw; path construct -> always_redraw:9; factors frames
+    scenes/demo.py:12:28 entry updater; path construct -> updater:12; factors frames
+  per-frame constructions:
+    scenes/demo.py:9:39 MathTex construction x per-frame
+  resource-key growth:
+    scenes/demo.py:9:39 MathTex distinct cache keys: one per rendered frame (f-string key varies per frame)
+```
+
+## CI integration
+
+GitHub Actions annotations directly on the PR diff:
+
+```yaml
+name: manim-lint
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install --path . --locked
+        working-directory: manim-lint   # path to your manim-lint checkout
+      - run: manim-lint check . --format github
+```
+
+Or upload SARIF so findings appear in the GitHub code-scanning UI:
+
+```yaml
+      - run: manim-lint check . --format sarif > manim-lint.sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: manim-lint.sarif
+```
+
+## Rule catalog
+
+92 rule IDs are reserved across the four families; **52 are implemented and
+40 are reserved**:
+
+| Family | Implemented | Reserved |
+| --- | --- | --- |
+| MLC lifecycle / correctness | 25 | 6 |
+| MLR rendering | 14 | 13 |
+| MLP performance | 6 | 21 |
+| MLD determinism / portability | 7 | 0 |
+
+A reserved ID **never fires**: `manim-lint rules` lists it honestly as
+`reserved`, and `check` does not register it. Each reserved rule is blocked
+on a named capability the fact layers do not provide yet — for example
+callback body summaries (`MLC123`, `MLP218`, `MLC112`), family/points
+cardinality bridged into the cost facts (`MLP202`/`MLP203`/`MLP207`/
+`MLP208`/`MLP211`/`MLP216`), tuple literal facts and a curated
+`ParametricFunction` model (`MLP221`), interpreter tracking of `point_count`
+(`MLR116`), post-Transform identity facts (`MLC116`), and a local fork
+overlay profile (`MLP214`/`MLP225`).
+
+The full index with per-rule status, severity, and confidence is in
+[docs/rules/README.md](docs/rules/README.md); each implemented rule has a
+documentation page there, also available via `manim-lint explain <ID>`.
+
+## Architecture
+
+```text
+Python sources
+   |
+SourceManager ............ encoding (PEP 263), newlines, Unicode columns
+   |
+knowledge profile ........ versioned Manim 0.20 semantics (no import, ever)
+   |
+frontend ................. imports/aliases, project index, qualified call facts
+   |
+semantic ................. lifecycle abstract interpreter -> LifecycleFacts
+   |
+cost ..................... hot contexts, frame intervals -> CostFacts
+   |
+rules .................... MLC / MLR / MLP / MLD over the fact layers
+   |
+suppressions, supersedes, baseline
+   |
+output ................... concise | full | json | sarif | github, fixes, cost report
+```
+
+[`DESIGN.md`](DESIGN.md) is the authoritative specification for the semantic
+model, the rule catalog, and every public contract. JSON output follows
+[`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json); baselines
+follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). Output is
+deterministic and byte-stable for the same input.
 
 ## Known limitations
 
+- **Target version.** The shipped knowledge profile covers Manim Community
+  **0.20 only**. Other versions have no profile yet.
 - **Asset checks probe the linting machine.** `MLR104` resolves literal
   asset paths with Manim's own runtime search, on the machine running the
   lint. For absolute paths outside the project tree that is evidence about
   the lint host, not necessarily the render host (e.g. CI linting a repo
-  rendered elsewhere); those diagnostics carry
-  `environment_dependent: true` as evidence. Case-only mismatches are
-  reported only against case-sensitive target platforms (`linux`); when
-  every affected profile targets windows/macos, the declared renders
-  resolve the file as written and the linter stays silent.
+  rendered elsewhere); those diagnostics carry `environment_dependent: true`
+  as evidence. Case-only mismatches are reported only against case-sensitive
+  target platforms (`linux`); when every affected profile targets
+  windows/macos, the declared renders resolve the file as written and the
+  linter stays silent.
 - **Source encodings.** PEP 263 declarations resolve through WHATWG labels
   plus a CPython codec-alias table (`latin-1`, `cp932`, `koi8_r`, ...). A
-  rare Python codec the linter cannot represent is skipped with an
-  explicit `MLC000` "not supported by manim-lint" notice — never a claim
-  that the target Python could not decode the file.
-- **Deliberately conservative silences.** Some catalog detections are
-  narrower than their prose and stay silent rather than guess (AGENTS.md
-  rule 4): `MLR106` sees NaN/inf only in literal form, not through
-  `float("nan")` calls; `MLD301` proves FPS dependence only for updaters
-  that lack a `dt` parameter (a declared-but-unused `dt` is not flagged);
-  `MLC113`/`MLC124` recognize their documented call shapes only; `MLR102`
-  needs the interpreter to prove the played bare builder's target
-  unchanged; `MLR105` validates a verified Pango subset (a bare `&` is
-  allowed); `MLD304` implements only the ThreeDScene fixed-object cleanup
-  divergence. `manim-lint explain RULE` states each rule's exact scope.
-
-## Build and run
-
-A Rust toolchain (1.85+) is required.
-
-```bash
-cargo build --release
-cargo run -- check .
-cargo run -- check scenes --format json
-cargo install --path .   # installs the `manim-lint` binary
-```
-
-## Commands
-
-```text
-manim-lint check [PATH...]   # analyze Python sources
-manim-lint explain RULE      # print rule documentation
-manim-lint rules             # list all rule IDs with phase and status
-manim-lint config            # print the resolved effective configuration
-manim-lint cost PATH [--scene NAME]  # per-scene cost breakdown
-```
-
-`check` options include `--select` / `--ignore`, `--min-confidence`,
-`--fail-level`, `--profile`, `--renderer`, `--fps`,
-`--resolution WIDTHxHEIGHT`, `--format concise|full|json|sarif|github`, and
-`--statistics`. `--write-baseline PATH` records the current diagnostics
-(the run's exit code is unchanged); `--baseline PATH` filters already-known
-diagnostics out before rendering and exit-code computation, and a corrupt
-or wrong-schema baseline file exits 2 with a clear message. `--fix` applies
-safe fixes (`--unsafe-fixes` also applies unsafe ones). `--no-cache` is an
-accepted no-op because no cache exists yet.
-
-Exit status is `0` when no reported diagnostic reaches `fail-level`, `1` when
-one does, and `2` for command-line, configuration, or internal errors.
-
-## Configuration
-
-Configuration is read from `[tool.manim-lint]` in `pyproject.toml` (found by
-walking up from the checked path); render profiles are
-`[[tool.manim-lint.profile]]` entries. When `respect-manim-cfg` is enabled
-(the default), `manim.cfg` supplies resolution/fps/renderer defaults below
-the pyproject settings. Unknown keys, unknown rule selectors, duplicate
-profile names, and unknown profile references are configuration errors
-(exit 2).
+  rare Python codec the linter cannot represent is skipped with an explicit
+  `MLC000` "not supported by manim-lint" notice — never a claim that the
+  target Python could not decode the file.
+- **Deliberately conservative silences.** Some detections are narrower than
+  their catalog prose and stay silent rather than guess: `MLR106` sees
+  NaN/inf only in literal form, not through `float("nan")` calls; `MLD301`
+  proves FPS dependence only for updaters that lack a `dt` parameter (a
+  declared-but-unused `dt` is not flagged); `MLC113`/`MLC124` recognize
+  their documented call shapes only; `MLR102` needs the interpreter to prove
+  the played bare builder's target unchanged; `MLR105` validates a verified
+  Pango subset (a bare `&` is allowed); `MLD304` implements only the
+  ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
+  states each rule's exact scope.
+- **Not yet implemented.** The 40 reserved rules (see above); the SQLite
+  result cache (`--no-cache` is an accepted no-op); threshold calibration
+  against rendered baselines; a nightly render-comparison CI.
 
 ## Development
 
 ```bash
+cargo fmt --check
+cargo build
 cargo test
 cargo clippy --all-targets -- -D warnings
-cargo fmt --check
 ```
 
-`DESIGN.md` is the authoritative specification; `AGENTS.md` describes the
-implementation order. Rule documentation lives in `docs/rules/`, and
-`tests/fixtures/smoke/` is a minimal end-to-end fixture project.
+All four gates must pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+repository layout, the step-by-step guide to adding a rule, and the
+invariants every change must keep. `DESIGN.md` is authoritative; changes to
+public contracts must update it, its schema tests, and the rule docs
+together.
+
+## License
+
+[MIT](LICENSE).
