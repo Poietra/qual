@@ -21,21 +21,16 @@ pub trait Rule {
     fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic>;
 }
 
-/// Qualified Manim call facts.
-///
-/// TODO(phase-1): populated by `frontend::names` / `frontend::imports` with
-/// resolved `manim.*` call targets (alias, star-import, and helper aware).
-#[derive(Debug, Default)]
-#[non_exhaustive]
-pub struct QualifiedCallFacts {}
+/// Qualified Manim call facts, resolved by the frontend
+/// (`frontend::index::QualifiedCallFacts`): per-call candidate target sets,
+/// receiver classification, argument summaries, and enclosing contexts.
+pub use crate::frontend::index::QualifiedCallFacts;
 
-/// Project-wide module/import/symbol/class-hierarchy index.
-///
-/// TODO(phase-1): populated by `frontend::index` with module exports, import
-/// edges, class hierarchies, and Scene subclass discovery.
-#[derive(Debug, Default)]
-#[non_exhaustive]
-pub struct ProjectIndexFacts {}
+/// Project-wide module/import/symbol/class-hierarchy index built by the
+/// frontend (`frontend::index::ProjectIndex`): module tree, namespaces,
+/// export surfaces, class hierarchy, and Scene / Mobject / Animation
+/// subclass discovery.
+pub use crate::frontend::index::ProjectIndex as ProjectIndexFacts;
 
 /// Lifecycle events and abstract state snapshots.
 ///
@@ -81,6 +76,17 @@ impl<'a> RuleContext<'a> {
         }
     }
 
+    /// Attaches frontend facts (project index and qualified calls).
+    ///
+    /// Built by `frontend::index::analyze`; without this call the context
+    /// keeps empty default facts, so Phase 0 callers stay unchanged.
+    #[must_use]
+    pub fn with_frontend(mut self, index: ProjectIndexFacts, calls: QualifiedCallFacts) -> Self {
+        self.project_index = index;
+        self.qualified_calls = calls;
+        self
+    }
+
     /// Parsed files, tokens, comments, and span conversions.
     #[must_use]
     pub const fn sources(&self) -> &'a SourceManager {
@@ -101,7 +107,7 @@ impl<'a> RuleContext<'a> {
 
     /// Resolved qualified Manim call facts.
     ///
-    /// TODO(phase-1): currently empty.
+    /// Empty unless attached via [`RuleContext::with_frontend`].
     #[must_use]
     pub const fn qualified_calls(&self) -> &QualifiedCallFacts {
         &self.qualified_calls
@@ -109,7 +115,7 @@ impl<'a> RuleContext<'a> {
 
     /// Project-wide symbol and class-hierarchy index.
     ///
-    /// TODO(phase-1): currently empty.
+    /// Empty unless attached via [`RuleContext::with_frontend`].
     #[must_use]
     pub const fn project_index(&self) -> &ProjectIndexFacts {
         &self.project_index
