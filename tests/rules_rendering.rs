@@ -1,11 +1,16 @@
 //! Golden tests for the Phase 1 rendering rules (`MLR101`, `MLR103`,
-//! `MLR104`, `MLR105`, `MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`).
+//! `MLR104`, `MLR105`, `MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`)
+//! and the Phase 2 state-dependent rules (`MLR102`, `MLR113`, `MLR114`,
+//! `MLR125`, `MLR127`).
 //!
 //! Each rule has a fixture directory under `tests/fixtures/rules/<ID>/`
 //! (DESIGN §11.1): `invalid.py` (true positives plus one inline-suppressed
 //! case), `valid.py` (near-misses that must stay silent), and `alias.py`
 //! (alias / module-alias import variants proving import style does not
 //! change results; `invalid.py` itself uses the star-import style).
+//! Phase 2 fixtures use `branch.py` (an Unknown / Maybe branch fact that
+//! must silence the rule) and `suppressed.py` (the inline-suppression
+//! case) instead of `alias.py`.
 //!
 //! The tests copy a fixture into a temp project, run the full
 //! `manim_lint::application::check` pipeline, and assert the exact
@@ -58,6 +63,28 @@ fn error(rule: &'static str, needle: &'static str, occurrence: usize, offset: us
         occurrence,
         offset,
         Severity::Error,
+        Confidence::High,
+    )
+}
+
+fn warning(rule: &'static str, needle: &'static str, occurrence: usize, offset: usize) -> Expected {
+    Expected::new(
+        rule,
+        needle,
+        occurrence,
+        offset,
+        Severity::Warning,
+        Confidence::High,
+    )
+}
+
+fn info(rule: &'static str, needle: &'static str, occurrence: usize, offset: usize) -> Expected {
+    Expected::new(
+        rule,
+        needle,
+        occurrence,
+        offset,
+        Severity::Info,
         Confidence::High,
     )
 }
@@ -202,6 +229,37 @@ fn mlr101_flags_confirmed_non_vmobject_targets_only() {
             error("MLR101", "mn.Write(5)", 1, 9),
         ],
     );
+}
+
+// ---------------------------------------------------------------------------
+// MLR102
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr102_flags_played_bare_animate_with_unchanged_displayed_target() {
+    let (project, diagnostics) = run_fixture("MLR102", DEFAULT_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR102", "square.animate)", 1, 0),
+            warning("MLR102", "dot.animate", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // The sole-argument play offers no deletion (an empty play() is a
+    // runtime error); the two-argument play offers the UNSAFE deletion.
+    let sole = find(&diagnostics, "invalid.py", "MLR102", 0);
+    assert!(sole.fix.is_none());
+    let paired = find(&diagnostics, "invalid.py", "MLR102", 1);
+    let fix = paired.fix.as_ref().expect("deletion suggestion");
+    assert_eq!(fix.applicability, FixApplicability::Unsafe);
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +440,64 @@ fn mlr106_flags_confirmed_nan_inf_into_geometry() {
 }
 
 // ---------------------------------------------------------------------------
+// MLR113
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr113_flags_definitely_same_transform_source_and_target() {
+    let (project, diagnostics) = run_fixture("MLR113", DEFAULT_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            info("MLR113", "Transform(square, square)", 1, 0),
+            info("MLR113", "ReplacementTransform(square, square)", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let first = find(&diagnostics, "invalid.py", "MLR113", 0);
+    assert!(first.fix.is_none());
+    assert!(first.message.contains("same object"));
+}
+
+// ---------------------------------------------------------------------------
+// MLR114
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr114_flags_literal_points_rows_that_are_not_three_wide() {
+    let (project, diagnostics) = run_fixture("MLR114", DEFAULT_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            error("MLR114", "[[0, 0], [1, 1], [2, 0]]", 1, 0),
+            error(
+                "MLR114",
+                "[(0.0, 0.0, 0.0, 1.0), (1.0, 2.0, 3.0, 4.0)]",
+                1,
+                0,
+            ),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let first = find(&diagnostics, "invalid.py", "MLR114", 0);
+    assert!(first.message.contains("(N, 3)"));
+    assert_eq!(
+        first.evidence.get("row_lengths").map(ToString::to_string),
+        Some("[2,2,2]".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
 // MLR115
 // ---------------------------------------------------------------------------
 
@@ -460,6 +576,32 @@ fn mlr117_flags_bare_register_font_statements_only() {
     assert!(fix.edits[0].replacement.ends_with("pass"));
 }
 
+#[test]
+fn mlr117_resolves_register_font_through_the_star_export() {
+    // `register_font` is star-exported by Manim (`text_mobject.__all__`);
+    // the knowledge profile export makes the plain `from manim import
+    // register_font` spelling resolve (Wave 2 gap).
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), DEFAULT_PYPROJECT).unwrap();
+    std::fs::write(
+        project.path().join("scene.py"),
+        "from manim import register_font\n\nregister_font(\"custom.ttf\")\n",
+    )
+    .unwrap();
+    let args = CheckArgs {
+        paths: vec![project.path().to_path_buf()],
+        format: OutputFormat::Concise,
+        ..CheckArgs::default()
+    };
+    let report = check(&args).expect("check pipeline must succeed");
+    let rules: Vec<&str> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.rule_id.as_str())
+        .collect();
+    assert_eq!(rules, vec!["MLR117"]);
+}
+
 // ---------------------------------------------------------------------------
 // MLR124
 // ---------------------------------------------------------------------------
@@ -511,6 +653,33 @@ fn mlr124_flags_matched_pango_pairs_in_plain_text() {
 }
 
 // ---------------------------------------------------------------------------
+// MLR125
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr125_flags_bare_mobject_leaf_added_for_display() {
+    let (project, diagnostics) = run_fixture("MLR125", DEFAULT_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            info("MLR125", "self.add(anchor)", 1, 0),
+            info("MLR125", "self.add(marker)", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // The message points at the legitimate container use and the
+    // suppression escape hatch.
+    let first = find(&diagnostics, "invalid.py", "MLR125", 0);
+    assert!(first.message.contains("ignore[MLR125]"));
+    assert!(first.fix.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // MLR126
 // ---------------------------------------------------------------------------
 
@@ -541,4 +710,38 @@ fn mlr126_flags_literal_opacity_and_stroke_width_ranges() {
             error("MLR126", "stroke_width=-1", 1, 13),
         ],
     );
+}
+
+// ---------------------------------------------------------------------------
+// MLR127
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr127_flags_by_tex_keys_absent_from_the_literal() {
+    let (project, diagnostics) = run_fixture("MLR127", DEFAULT_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR127", "\"c^2\"", 1, 0),
+            warning("MLR127", "\"x\"", 1, 0),
+            warning("MLR127", "\"goodbye\"", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // The message suggests isolating a real substring.
+    let first = find(&diagnostics, "invalid.py", "MLR127", 0);
+    assert!(
+        first
+            .explanation
+            .as_deref()
+            .unwrap_or("")
+            .contains("substrings_to_isolate")
+    );
+    let parts = first.evidence.get("tex_arguments").expect("tex parts");
+    assert!(parts.to_string().contains("a^2"));
 }

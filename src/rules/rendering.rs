@@ -7,14 +7,24 @@
 //! straight-line instance kinds. Unknown facts always mean silence
 //! (DESIGN §15 invariant 2).
 //!
-//! TODO(phase-2): state-dependent rules (`MLR102`, `MLR113`, `MLR114`,
-//! `MLR116`, `MLR125`, `MLR127`).
+//! Phase 2 adds the state-dependent rules `MLR102`, `MLR113`, and `MLR125`
+//! over lifecycle facts (`rendering/state.rs`), plus the literal-driven
+//! `MLR114` (`rendering/points.rs`) and `MLR127` (`rendering/tex_keys.rs`).
+//!
+//! `MLR116` (`add_line_to` / `close_path` on a provably empty path) stays
+//! reserved: the interpreter does not track `point_count` for fresh
+//! `VMobjects` (it is always `Unknown`), so path emptiness is unprovable
+//! and the rule must not fake-fire (DESIGN §12 end).
+//!
 //! TODO(phase-4): renderer-dependent rules (`MLR107`-`MLR112`,
 //! `MLR118`-`MLR123`).
 
 mod assets;
 mod markup;
+mod points;
+mod state;
 mod tex;
+mod tex_keys;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,14 +52,19 @@ use crate::source::{FileId, SourceFile};
 pub fn rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(NonVmobjectCreationTarget),
+        Box::new(state::BarePlayedAnimate),
         Box::new(TexEscapeCollision),
         Box::new(UnresolvedAssetPath),
         Box::new(InvalidMarkupLiteral),
         Box::new(NonFiniteGeometryLiteral),
+        Box::new(state::SelfTransform),
+        Box::new(points::NonPoint3Literal),
         Box::new(NonPositiveFontSize),
         Box::new(BareRegisterFont),
         Box::new(MarkupInPlainText),
+        Box::new(state::BareMobjectLeaf),
         Box::new(OpacityStrokeRange),
+        Box::new(tex_keys::UnmatchableTexKey),
     ]
 }
 

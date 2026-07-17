@@ -517,6 +517,10 @@
       "bases": ["manim.mobject.svg.svg_mobject.SVGMobject"],
       "note": "Construction includes shaping, SVG generation/parsing, and glyph family build; markup tags are not interpreted (text_mobject.py Text, MLR124)."
     },
+    "manim.mobject.text.text_mobject.register_font": {
+      "kind": "function",
+      "note": "@contextmanager generator: the font registers on __enter__ and unregisters on __exit__, so a bare call has no effect (text_mobject.py register_font, MLR117). Star-exported via text_mobject.__all__."
+    },
     "manim.mobject.three_d.three_dimensions.Surface": {
       "kind": "vmobject",
       "bases": ["manim.mobject.types.vectorized_mobject.VGroup"],
@@ -852,6 +856,7 @@
     "SVGMobject": "manim.mobject.svg.svg_mobject.SVGMobject",
     "Scene": "manim.scene.scene.Scene",
     "ShowPartial": "manim.animation.creation.ShowPartial",
+    "SingleStringMathTex": "manim.mobject.text.tex_mobject.SingleStringMathTex",
     "Square": "manim.mobject.geometry.polygram.Square",
     "Succession": "manim.animation.composition.Succession",
     "Surface": "manim.mobject.three_d.three_dimensions.Surface",
@@ -875,6 +880,7 @@
     "ValueTracker": "manim.mobject.value_tracker.ValueTracker",
     "Wait": "manim.animation.animation.Wait",
     "Write": "manim.animation.creation.Write",
-    "always_redraw": "manim.animation.updaters.mobject_update_utils.always_redraw"
+    "always_redraw": "manim.animation.updaters.mobject_update_utils.always_redraw",
+    "register_font": "manim.mobject.text.text_mobject.register_font"
   }
 }

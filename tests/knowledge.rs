@@ -95,6 +95,31 @@ fn replacement_transform_declares_replacement() {
 }
 
 #[test]
+fn register_font_is_exported_as_a_function() {
+    // `register_font` is star-exported (`text_mobject.__all__`, re-exported
+    // by `manim/__init__.py`); without this export `from manim import
+    // register_font` never resolves and MLR117 misses the bare call.
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    let (id, entry) = profile
+        .resolve_export("register_font")
+        .expect("register_font is exported");
+    assert_eq!(id, "manim.mobject.text.text_mobject.register_font");
+    assert_eq!(entry.kind, SymbolKind::Function);
+}
+
+#[test]
+fn single_string_math_tex_is_exported() {
+    // Star-exported via `tex_mobject.__all__`; backs the MLR103 / MLR115
+    // constructor lists for explicit imports.
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    let (id, entry) = profile
+        .resolve_export("SingleStringMathTex")
+        .expect("SingleStringMathTex is exported");
+    assert_eq!(id, "manim.mobject.text.tex_mobject.SingleStringMathTex");
+    assert_eq!(entry.kind, SymbolKind::Vmobject);
+}
+
+#[test]
 fn scene_add_has_membership_and_reorder_effect() {
     let profile = knowledge::load(UPSTREAM).expect("load");
     let entry = profile
