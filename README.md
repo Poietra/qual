@@ -18,14 +18,21 @@ The current implementation is the **Phase 0 foundation** described in
 - inline suppressions (`# manim-lint: ignore[...]`, standalone comments,
   header-only `file-ignore[...]`); invalid suppressions warn as `MLC001`
 - deterministic, byte-stable output: `concise`, `full`, `github`
-  annotations, and JSON matching `schemas/diagnostics-v1.json`
+  annotations, JSON matching `schemas/diagnostics-v1.json`, and SARIF 2.1.0
+  (`--format sarif`, generated without external SARIF dependencies)
+- baselines (`--write-baseline` / `--baseline`) whose fingerprints follow
+  `schemas/baseline-v1.json` and never contain line numbers, so inserting
+  unrelated lines does not invalidate entries
+- fix application (`--fix`, `--unsafe-fixes`): safe/unsafe separation,
+  overlap rejection, re-parse validation with per-file rollback, and
+  Unicode-correct span editing
 - the rule engine contract (`Rule`, `RuleContext`) and the reserved rule
   catalog; every later module exists as a documented, compile-clean stub
 
 No lifecycle, rendering, performance, or portability rule is implemented yet.
 `manim-lint rules` lists them all as `reserved`; they are never presented as
-checked. SARIF, baselines, autofix application, the cache, and `manim-lint
-cost` belong to later phases and report clear "not implemented" errors.
+checked. The cache and `manim-lint cost` belong to later phases and report
+clear "not implemented" errors.
 
 ## Build and run
 
@@ -51,9 +58,13 @@ manim-lint cost PATH         # Phase 3; exits 2 with a clear message
 `check` options include `--select` / `--ignore`, `--min-confidence`,
 `--fail-level`, `--profile`, `--renderer`, `--fps`,
 `--resolution WIDTHxHEIGHT`, `--format concise|full|json|sarif|github`, and
-`--statistics`. `--baseline` / `--write-baseline` are Phase 5 and exit 2 for
-now; `--fix` / `--no-cache` are accepted no-ops because no Phase 0 rule
-produces fixes and no cache exists yet.
+`--statistics`. `--write-baseline PATH` records the current diagnostics
+(the run's exit code is unchanged); `--baseline PATH` filters already-known
+diagnostics out before rendering and exit-code computation, and a corrupt
+or wrong-schema baseline file exits 2 with a clear message. `--fix` applies
+safe fixes (`--unsafe-fixes` also applies unsafe ones); no current rule
+emits fixes yet. `--no-cache` is an accepted no-op because no cache exists
+yet.
 
 Exit status is `0` when no reported diagnostic reaches `fail-level`, `1` when
 one does, and `2` for command-line, configuration, or internal errors.

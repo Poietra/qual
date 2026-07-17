@@ -11,7 +11,8 @@ use crate::cli::{CheckArgs, Command, ExitStatus};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::diagnostic::Diagnostic;
-use crate::reporting::{self, RenderContext, suppressions};
+use crate::reporting::fixes::FixReport;
+use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
 use crate::rules::registry;
 use crate::source::SourceManager;
@@ -28,6 +29,9 @@ pub enum ApplicationError {
     /// The requested feature belongs to a later phase.
     #[error("{0}")]
     Unimplemented(String),
+    /// Fix application failed while writing a fixed file.
+    #[error(transparent)]
+    Fix(#[from] fixes::FixError),
     /// Unexpected IO failure outside per-file MLC000 handling.
     #[error("io error on {path}: {source}")]
     Io {
@@ -75,7 +79,7 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
 /// Outcome of a `check` run, for library callers and tests.
 #[derive(Debug)]
 pub struct CheckReport {
-    /// Final (filtered, suppressed, sorted) diagnostics.
+    /// Final (filtered, suppressed, sorted, baseline-filtered) diagnostics.
     pub diagnostics: Vec<Diagnostic>,
     /// Rendered output in the requested format.
     pub output: String,
@@ -83,18 +87,26 @@ pub struct CheckReport {
     pub exit: ExitStatus,
     /// The resolved configuration used for the run.
     pub config: ResolvedConfig,
+    /// Fix-application summary when `--fix` was given.
+    pub fixes: Option<FixReport>,
 }
 
 /// Runs `manim-lint check` and renders its output.
 pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
-    reject_unimplemented_flags(args)?;
+    validate_flag_combinations(args)?;
     let report = check(args)?;
-    let stderr = args
-        .statistics
-        .then(|| render_statistics(&report.diagnostics));
+    let mut stderr = String::new();
+    if args.statistics {
+        stderr.push_str(&render_statistics(&report.diagnostics));
+    }
+    if let Some(fix_report) = &report.fixes {
+        if !fix_report.is_empty() {
+            stderr.push_str(&render_fix_summary(fix_report));
+        }
+    }
     Ok(Execution {
         stdout: report.output,
-        stderr,
+        stderr: (!stderr.is_empty()).then_some(stderr),
         exit: report.exit,
     })
 }
@@ -148,14 +160,46 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
 
     diagnostics.sort_by(Diagnostic::compare_stable);
 
+    // `--write-baseline` records the diagnostics as computed above, before
+    // any `--baseline` filtering, so old entries are never dropped when
+    // both flags are combined.
+    if let Some(path) = &args.write_baseline {
+        let document = baseline::render(&diagnostics, &sources);
+        std::fs::write(path, document).map_err(|source| ApplicationError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    }
+
+    // `--baseline` filters already-known diagnostics out before rendering
+    // and before the exit code is computed.
+    if let Some(path) = &args.baseline {
+        let text = std::fs::read_to_string(path).map_err(|source| ApplicationError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let known = baseline::Baseline::parse(&text).map_err(|message| {
+            ApplicationError::Cli(format!(
+                "cannot use baseline {path}: {message}",
+                path = path.display()
+            ))
+        })?;
+        diagnostics = known.filter(diagnostics, &sources);
+    }
+
+    let fix_report = if args.fix {
+        Some(fixes::apply(&sources, &diagnostics, args.unsafe_fixes)?)
+    } else {
+        None
+    };
+
     let profiles = config.active_profile_names();
     let render_context = RenderContext {
         tool_version: crate::VERSION,
         project_root: ".",
         profiles: &profiles,
     };
-    let output = reporting::render(args.format, &diagnostics, &render_context)
-        .map_err(ApplicationError::Unimplemented)?;
+    let output = reporting::render(args.format, &diagnostics, &render_context);
 
     let exit = if diagnostics
         .iter()
@@ -171,28 +215,58 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         output,
         exit,
         config,
+        fixes: fix_report,
     })
 }
 
-fn reject_unimplemented_flags(args: &CheckArgs) -> Result<(), ApplicationError> {
-    if args.baseline.is_some() {
-        return Err(ApplicationError::Unimplemented(
-            "--baseline is not implemented until Phase 5".to_owned(),
-        ));
-    }
-    if args.write_baseline.is_some() {
-        return Err(ApplicationError::Unimplemented(
-            "--write-baseline is not implemented until Phase 5".to_owned(),
-        ));
-    }
+fn validate_flag_combinations(args: &CheckArgs) -> Result<(), ApplicationError> {
     if args.unsafe_fixes && !args.fix {
         return Err(ApplicationError::Cli(
             "--unsafe-fixes requires --fix".to_owned(),
         ));
     }
-    // --fix and --no-cache are accepted no-ops: no Phase 0 rule produces
-    // fixes and no cache exists yet.
+    // --no-cache is an accepted no-op: no cache exists yet.
     Ok(())
+}
+
+fn render_fix_summary(report: &FixReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "fixed {applied} issue(s) in {files} file(s)",
+        applied = report.applied,
+        files = report.files_changed.len()
+    );
+    if report.skipped_unsafe > 0 {
+        let _ = writeln!(
+            output,
+            "skipped {count} unsafe fix(es); re-run with --unsafe-fixes to apply them",
+            count = report.skipped_unsafe
+        );
+    }
+    if report.skipped_overlapping > 0 {
+        let _ = writeln!(
+            output,
+            "skipped {count} fix(es) with overlapping edits",
+            count = report.skipped_overlapping
+        );
+    }
+    if report.skipped_invalid > 0 {
+        let _ = writeln!(
+            output,
+            "skipped {count} fix(es) with unresolvable edit spans",
+            count = report.skipped_invalid
+        );
+    }
+    for rolled_back in &report.rolled_back {
+        let _ = writeln!(
+            output,
+            "rolled back {path}: {reason}",
+            path = rolled_back.path,
+            reason = rolled_back.reason
+        );
+    }
+    output
 }
 
 fn normalized_input_paths(args: &CheckArgs) -> Result<Vec<PathBuf>, ApplicationError> {

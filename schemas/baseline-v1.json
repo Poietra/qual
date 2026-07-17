@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/baseline-v1.json",
+  "title": "manim-lint baseline v1",
+  "description": "Known-diagnostic fingerprints (DESIGN 8.3). A fingerprint never contains line numbers: it is rule ID + relative path + qualified Scene name + surrounding token hash, so inserting unrelated lines elsewhere in a file does not invalidate entries. Entries are sorted and each entry hides at most one matching diagnostic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "path", "scene", "token_hash"],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "pattern": "^ML[CRPD][0-9]{3}$"
+        },
+        "path": {
+          "type": "string",
+          "description": "Project-relative POSIX path of the diagnosed file"
+        },
+        "scene": {
+          "type": "string",
+          "description": "Qualified Scene name; the empty placeholder string until lifecycle facts exist"
+        },
+        "token_hash": {
+          "type": "string",
+          "pattern": "^fnv1a64:[0-9a-f]{16}$",
+          "description": "FNV-1a 64-bit hash of the token kinds and texts of the diagnostic statement line and its nearest non-blank neighbor lines"
+        }
+      }
+    }
+  }
+}

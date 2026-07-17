@@ -1,4 +1,5 @@
-//! Diagnostic output: text/JSON renderers and inline suppressions.
+//! Diagnostic output: text/JSON/SARIF renderers, inline suppressions,
+//! baseline files, and fix application.
 
 pub mod baseline;
 pub mod fixes;
@@ -19,7 +20,7 @@ pub enum OutputFormat {
     Full,
     /// JSON envelope matching `schemas/diagnostics-v1.json`.
     Json,
-    /// SARIF 2.1.0 (not implemented until Phase 5).
+    /// SARIF 2.1.0.
     Sarif,
     /// GitHub Actions workflow annotations.
     Github,
@@ -68,16 +69,17 @@ pub struct RenderContext<'a> {
 /// Renders sorted diagnostics in the chosen format.
 ///
 /// Output is deterministic and byte-stable for identical inputs.
+#[must_use]
 pub fn render(
     format: OutputFormat,
     diagnostics: &[Diagnostic],
     context: &RenderContext<'_>,
-) -> Result<String, String> {
+) -> String {
     match format {
-        OutputFormat::Concise => Ok(text::render_concise(diagnostics)),
-        OutputFormat::Full => Ok(text::render_full(diagnostics)),
-        OutputFormat::Json => Ok(json::render(diagnostics, context)),
-        OutputFormat::Github => Ok(text::render_github(diagnostics)),
-        OutputFormat::Sarif => Err("--format sarif is not implemented until Phase 5".to_owned()),
+        OutputFormat::Concise => text::render_concise(diagnostics),
+        OutputFormat::Full => text::render_full(diagnostics),
+        OutputFormat::Json => json::render(diagnostics, context),
+        OutputFormat::Github => text::render_github(diagnostics),
+        OutputFormat::Sarif => sarif::render(diagnostics, context),
     }
 }

@@ -139,16 +139,16 @@ pub struct CheckArgs {
     /// Output format (concise|full|json|sarif|github).
     #[arg(long, default_value = "concise")]
     pub format: OutputFormat,
-    /// Apply safe fixes (no Phase 0 rule produces fixes yet).
+    /// Apply safe fixes (no current rule emits fixes yet).
     #[arg(long)]
     pub fix: bool,
     /// Also apply unsafe fixes (requires --fix).
     #[arg(long)]
     pub unsafe_fixes: bool,
-    /// Filter diagnostics through a baseline file (Phase 5).
+    /// Filter out diagnostics recorded in this baseline file.
     #[arg(long)]
     pub baseline: Option<PathBuf>,
-    /// Write the current diagnostics as a baseline (Phase 5).
+    /// Write the current diagnostics to this baseline file.
     #[arg(long)]
     pub write_baseline: Option<PathBuf>,
     /// Disable the analysis cache (no cache exists in Phase 0).
