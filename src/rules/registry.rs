@@ -1,4 +1,5 @@
 use crate::diagnostic::{Confidence, RuleMetadata, Severity};
+use crate::rules::base::Rule;
 
 pub const SYNTAX_ERROR: RuleMetadata = RuleMetadata {
     id: "MLC000",
@@ -12,11 +13,57 @@ pub const SYNTAX_ERROR: RuleMetadata = RuleMetadata {
     supersedes: &[],
 };
 
+/// Metadata for the dedicated warning about an invalid or unknown inline
+/// suppression comment (DESIGN §8.3: an unknown rule ID inside an inline
+/// suppression warns and does not suppress).
+pub const INVALID_SUPPRESSION: RuleMetadata = RuleMetadata {
+    id: "MLC001",
+    summary: "Invalid or unknown inline suppression comment",
+    default_enabled: true,
+    default_severity: Severity::Warning,
+    minimum_confidence: Confidence::Certain,
+    implementation_phase: 0,
+    required_profiles: &[],
+    required_capabilities: &["source"],
+    supersedes: &[],
+};
+
 pub const RULE_PREFIXES: [&str; 4] = ["MLC", "MLR", "MLP", "MLD"];
+
+/// Rule IDs that emit diagnostics in the current build.
+///
+/// Both Phase 0 IDs are emitted by the analysis pipeline itself rather than
+/// by a registered [`Rule`].
+pub const IMPLEMENTED_RULE_IDS: [&str; 2] = ["MLC000", "MLC001"];
+
+/// Every registered [`Rule`] instance.
+///
+/// Empty in Phase 0: `MLC000`/`MLC001` are emitted by the parse and
+/// suppression pipeline, not by rules.
+#[must_use]
+pub fn all_rules() -> Vec<Box<dyn Rule>> {
+    Vec::new()
+}
+
+/// Static metadata for an implemented rule ID.
+#[must_use]
+pub fn metadata_for(rule_id: &str) -> Option<&'static RuleMetadata> {
+    match rule_id {
+        "MLC000" => Some(&SYNTAX_ERROR),
+        "MLC001" => Some(&INVALID_SUPPRESSION),
+        _ => None,
+    }
+}
+
+/// Whether the current build can emit this rule ID.
+#[must_use]
+pub fn is_implemented(rule_id: &str) -> bool {
+    IMPLEMENTED_RULE_IDS.contains(&rule_id)
+}
 
 #[must_use]
 pub fn is_reserved_rule_id(rule_id: &str) -> bool {
-    if rule_id == "MLC000" {
+    if rule_id == "MLC000" || rule_id == "MLC001" {
         return true;
     }
     let Some((prefix, number)) = split_rule_id(rule_id) else {
@@ -43,7 +90,7 @@ pub fn validate_selectors(selectors: &[String], source: &str) -> Result<(), Stri
 
 #[must_use]
 pub fn implementation_phase(rule_id: &str) -> Option<u8> {
-    if rule_id == "MLC000" {
+    if rule_id == "MLC000" || rule_id == "MLC001" {
         return Some(0);
     }
     let (prefix, number) = split_rule_id(rule_id)?;
@@ -52,7 +99,11 @@ pub fn implementation_phase(rule_id: &str) -> Option<u8> {
         "MLD" if (301..=307).contains(&number) => Some(4),
         "MLR" if (101..=127).contains(&number) => {
             let renderer_phase = [107, 108, 109, 111, 112, 118, 119, 120, 121, 122, 123];
-            Some(if renderer_phase.contains(&number) { 4 } else { 1 })
+            Some(if renderer_phase.contains(&number) {
+                4
+            } else {
+                1
+            })
         }
         "MLC" if (101..=129).contains(&number) => {
             let direct_phase = [101, 102, 103, 104, 105, 106, 109, 122, 126, 127];
@@ -64,7 +115,7 @@ pub fn implementation_phase(rule_id: &str) -> Option<u8> {
 
 #[must_use]
 pub fn all_reserved_rule_ids() -> Vec<String> {
-    let mut result = vec!["MLC000".to_owned()];
+    let mut result = vec!["MLC000".to_owned(), "MLC001".to_owned()];
     result.extend((101..=129).map(|number| format!("MLC{number}")));
     result.extend((101..=127).map(|number| format!("MLR{number}")));
     result.extend((201..=227).map(|number| format!("MLP{number}")));

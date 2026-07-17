@@ -193,4 +193,3 @@ pub struct RuleMetadata {
     pub required_capabilities: &'static [&'static str],
     pub supersedes: &'static [&'static str],
 }
-

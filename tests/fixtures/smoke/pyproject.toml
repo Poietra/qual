@@ -1,0 +1,13 @@
+[tool.manim-lint]
+select = ["MLC", "MLR", "MLP", "MLD"]
+min-confidence = "high"
+fail-level = "warning"
+default-profile = "preview"
+
+[[tool.manim-lint.profile]]
+name = "preview"
+renderer = "cairo"
+platform = "linux"
+pixel-width = 854
+pixel-height = 480
+frame-rate = 15
