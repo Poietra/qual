@@ -20,6 +20,10 @@ use crate::source::SourceFile;
 pub(super) const SCENE_PLAY: &str = "manim.scene.scene.Scene.play";
 /// Canonical id of `Scene.wait`.
 pub(super) const SCENE_WAIT: &str = "manim.scene.scene.Scene.wait";
+/// Canonical id of `Scene.pause`.
+pub(super) const SCENE_PAUSE: &str = "manim.scene.scene.Scene.pause";
+/// Canonical id of `Scene.replace`.
+pub(super) const SCENE_REPLACE: &str = "manim.scene.scene.Scene.replace";
 /// Canonical id of `Scene.add_updater`.
 pub(super) const SCENE_ADD_UPDATER: &str = "manim.scene.scene.Scene.add_updater";
 /// Canonical id of `Mobject.add_updater`.
@@ -261,6 +265,23 @@ pub(super) fn build_diagnostic(
         estimated_cost: None,
         applicable_profiles: context.config().active_profile_names(),
         fix: None,
+    }
+}
+
+/// The parser byte range of an interpreter allocation / event site.
+pub(super) fn site_range(site: &crate::semantic::values::AllocationSite) -> TextRange {
+    TextRange::new(site.start.into(), site.end.into())
+}
+
+/// Human-readable label of a write channel for messages and evidence.
+pub(super) const fn channel_label(channel: crate::semantic::state::WriteChannel) -> &'static str {
+    use crate::semantic::state::WriteChannel;
+    match channel {
+        WriteChannel::Points => "points",
+        WriteChannel::Style => "style",
+        WriteChannel::Opacity => "opacity",
+        WriteChannel::Membership => "membership",
+        WriteChannel::CameraState => "camera-state",
     }
 }
 

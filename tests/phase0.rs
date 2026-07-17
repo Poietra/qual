@@ -265,7 +265,7 @@ fn explain_unknown_rule_is_an_error_and_known_rules_print_docs() {
 
     // Reserved rules are presented as reserved, never as checked.
     let execution = application::execute(Command::Explain {
-        rule: "MLC108".to_owned(),
+        rule: "MLC111".to_owned(),
     })
     .unwrap();
     assert!(execution.stdout.contains("reserved"));
@@ -276,7 +276,8 @@ fn rules_command_lists_reserved_ids_without_claiming_them() {
     let execution = application::execute(Command::Rules).unwrap();
     assert!(execution.stdout.contains("MLC000  phase 0  implemented"));
     assert!(execution.stdout.contains("MLC101  phase 1  implemented"));
-    assert!(execution.stdout.contains("MLC107  phase 2  reserved"));
+    assert!(execution.stdout.contains("MLC107  phase 2  implemented"));
+    assert!(execution.stdout.contains("MLC111  phase 2  reserved"));
     assert!(execution.stdout.contains("MLP225  phase 3  reserved"));
     assert!(execution.stdout.contains("MLD307  phase 4  reserved"));
     // Every catalog family appears.

@@ -546,7 +546,7 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 21] = [
+    const DOCS: [(&str, &str); 34] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -555,10 +555,23 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLC104", include_str!("../docs/rules/MLC104.md")),
         ("MLC105", include_str!("../docs/rules/MLC105.md")),
         ("MLC106", include_str!("../docs/rules/MLC106.md")),
+        ("MLC107", include_str!("../docs/rules/MLC107.md")),
+        ("MLC108", include_str!("../docs/rules/MLC108.md")),
         ("MLC109", include_str!("../docs/rules/MLC109.md")),
+        ("MLC110", include_str!("../docs/rules/MLC110.md")),
+        ("MLC113", include_str!("../docs/rules/MLC113.md")),
+        ("MLC115", include_str!("../docs/rules/MLC115.md")),
+        ("MLC117", include_str!("../docs/rules/MLC117.md")),
+        ("MLC119", include_str!("../docs/rules/MLC119.md")),
+        ("MLC120", include_str!("../docs/rules/MLC120.md")),
+        ("MLC121", include_str!("../docs/rules/MLC121.md")),
         ("MLC122", include_str!("../docs/rules/MLC122.md")),
+        ("MLC124", include_str!("../docs/rules/MLC124.md")),
+        ("MLC125", include_str!("../docs/rules/MLC125.md")),
         ("MLC126", include_str!("../docs/rules/MLC126.md")),
         ("MLC127", include_str!("../docs/rules/MLC127.md")),
+        ("MLC128", include_str!("../docs/rules/MLC128.md")),
+        ("MLC129", include_str!("../docs/rules/MLC129.md")),
         ("MLR101", include_str!("../docs/rules/MLR101.md")),
         ("MLR103", include_str!("../docs/rules/MLR103.md")),
         ("MLR104", include_str!("../docs/rules/MLR104.md")),

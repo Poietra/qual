@@ -230,3 +230,238 @@ fn cannot_bind_diagnostic(
         evidence,
     )
 }
+
+// ---------------------------------------------------------------------------
+// MLC121: timeline re-entry from a per-frame callback.
+// ---------------------------------------------------------------------------
+
+/// Metadata for [`TimelineReentry`].
+pub const MLC121: RuleMetadata = RuleMetadata {
+    id: "MLC121",
+    summary: "Scene.play / wait / pause called from a per-frame callback",
+    default_enabled: true,
+    default_severity: Severity::Error,
+    minimum_confidence: Confidence::High,
+    implementation_phase: 2,
+    required_profiles: &[],
+    required_capabilities: &["qualified-calls", "cost-facts"],
+    supersedes: &[],
+};
+
+/// `self.play(...)` / `self.wait(...)` / `self.pause(...)` provably
+/// reachable from a per-frame entry point (DESIGN §7.1 `MLC121`).
+pub struct TimelineReentry;
+
+impl Rule for TimelineReentry {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLC121
+    }
+
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        use super::support::{SCENE_PAUSE, SCENE_PLAY, SCENE_WAIT};
+        let Some(profile) = context.knowledge() else {
+            return Vec::new();
+        };
+        let index = context.project_index();
+        let cost = context.cost_facts();
+        let mut diagnostics = Vec::new();
+        for (call_index, call) in context.qualified_calls().calls.iter().enumerate() {
+            if !bound_receiver(call) {
+                continue;
+            }
+            let Some((canonical, _)) = conclusive_target(profile, index, call) else {
+                continue;
+            };
+            if canonical != SCENE_PLAY && canonical != SCENE_WAIT && canonical != SCENE_PAUSE {
+                continue;
+            }
+            let contexts = cost.hot_contexts_for(call_index);
+            let Some(hot) = contexts.first() else {
+                continue;
+            };
+            let method = canonical.rsplit('.').next().unwrap_or("play");
+            let file = context.sources().file(call.file);
+            let mut evidence = BTreeMap::new();
+            evidence.insert("resolved".to_owned(), Value::String(canonical.clone()));
+            evidence.insert(
+                "hot_entry".to_owned(),
+                Value::String(hot.entry.label().to_owned()),
+            );
+            evidence.insert(
+                "state_path".to_owned(),
+                Value::Array(hot.state_path().into_iter().map(Value::String).collect()),
+            );
+            evidence.insert("cost".to_owned(), cost.evidence_for(call_index));
+            diagnostics.push(build_diagnostic(
+                &MLC121,
+                context,
+                file,
+                call.call_range,
+                format!(
+                    "`Scene.{method}` is called from a per-frame callback \
+                     ({entry}); the render loop cannot be re-entered while a frame \
+                     is being produced. Move timeline control (`play` / `wait` / \
+                     `pause`) into `construct` and let the callback only mutate \
+                     mobject state.",
+                    entry = hot.entry.label(),
+                ),
+                "Updaters, `always_redraw` factories, update-function animations, \
+                 and stop conditions run inside the per-frame sample loop of an \
+                 active play (DESIGN §3.2/§3.3). Calling `Scene.play` / `wait` / \
+                 `pause` there re-enters the renderer's timeline machinery \
+                 mid-frame and breaks rendering."
+                    .to_owned(),
+                evidence,
+            ));
+        }
+        diagnostics
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MLC125: remove_updater with a never-matching callback identity.
+// ---------------------------------------------------------------------------
+
+/// Metadata for [`RemoveUpdaterIdentityMismatch`].
+pub const MLC125: RuleMetadata = RuleMetadata {
+    id: "MLC125",
+    summary: "remove_updater callback identity matches no registered updater",
+    default_enabled: true,
+    default_severity: Severity::Warning,
+    minimum_confidence: Confidence::High,
+    implementation_phase: 2,
+    required_profiles: &[],
+    required_capabilities: &["lifecycle"],
+    supersedes: &[],
+};
+
+/// `remove_updater(...)` whose argument identity definitely matches no
+/// registered updater (DESIGN §7.1 `MLC125`).
+pub struct RemoveUpdaterIdentityMismatch;
+
+impl Rule for RemoveUpdaterIdentityMismatch {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLC125
+    }
+
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        use crate::semantic::interpreter::UpdaterHost;
+        use crate::semantic::state::CallbackRef;
+        use crate::semantic::values::{AllocationSite, Truth};
+        use std::collections::BTreeSet;
+
+        let mut seen: BTreeSet<AllocationSite> = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for scene in &context.lifecycle_facts().scenes {
+            for removal in &scene.updater_removals {
+                if removal.matched != Truth::No || seen.contains(&removal.site) {
+                    continue;
+                }
+                let removal_range = super::support::site_range(&removal.site);
+                // An inline lambda literal is a fresh function object: it can
+                // never be identical to anything registered earlier.
+                let inline_lambda = matches!(
+                    &removal.callback,
+                    CallbackRef::Lambda(site)
+                        if site.file == removal.site.file
+                            && site.start >= removal.site.start
+                            && site.end <= removal.site.end
+                );
+                if !inline_lambda && !named_mismatch_is_reliable(scene, removal) {
+                    continue;
+                }
+                seen.insert(removal.site);
+                let file = context.sources().file(removal.site.file);
+                let text = file.slice(removal_range);
+                let mut evidence = BTreeMap::new();
+                evidence.insert(
+                    "identity".to_owned(),
+                    Value::String(
+                        if inline_lambda {
+                            "fresh-lambda"
+                        } else {
+                            "unmatched-reference"
+                        }
+                        .to_owned(),
+                    ),
+                );
+                evidence.insert(
+                    "scene".to_owned(),
+                    Value::String(scene.qualified_name.clone()),
+                );
+                let host = match &removal.host {
+                    UpdaterHost::Scene => "the scene",
+                    UpdaterHost::Mobject(_) => "this mobject",
+                };
+                diagnostics.push(build_diagnostic(
+                    &MLC125,
+                    context,
+                    file,
+                    removal_range,
+                    format!(
+                        "`{text}` passes a callback whose identity matches no \
+                         updater registered on {host}; Manim removes updaters by \
+                         function identity, so this call removes nothing. Store the \
+                         callback in a variable at registration time and pass the \
+                         same reference here."
+                    ),
+                    "`remove_updater` compares the argument to the registered \
+                     callbacks by object identity (mobject.py \
+                     `Mobject.remove_updater`). A lambda or different function \
+                     object — even with identical code — is a distinct identity and \
+                     silently removes nothing (DESIGN §3.3)."
+                        .to_owned(),
+                    evidence,
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// For a non-lambda mismatch the interpreter's registered-updater set must
+/// be provably complete: no registration on the same host with an unknown
+/// callback identity, and no unresolved call that may have registered one
+/// (an `UnknownMutation` touching the host) before the removal.
+fn named_mismatch_is_reliable(
+    scene: &crate::semantic::interpreter::SceneLifecycle,
+    removal: &crate::semantic::interpreter::UpdaterRemoval,
+) -> bool {
+    use crate::semantic::events::Event;
+    use crate::semantic::interpreter::UpdaterHost;
+    use crate::semantic::state::CallbackRef;
+
+    let same_host = |host: &UpdaterHost| match (host, &removal.host) {
+        (UpdaterHost::Scene, UpdaterHost::Scene) => true,
+        (UpdaterHost::Mobject(a), UpdaterHost::Mobject(b)) => a.definitely_same(b),
+        _ => false,
+    };
+    if scene.updaters.iter().any(|registration| {
+        same_host(&registration.host) && registration.fact.callback == CallbackRef::Unknown
+    }) {
+        return false;
+    }
+    let Some(removal_index) = scene.events.iter().position(|traced| {
+        traced.site == removal.site
+            && matches!(
+                &traced.event,
+                Event::Mutate(mutate)
+                    if mutate.kind == crate::semantic::events::MutationKind::Updaters
+            )
+    }) else {
+        return false;
+    };
+    let host_object = match &removal.host {
+        UpdaterHost::Mobject(id) => Some(id),
+        UpdaterHost::Scene => None,
+    };
+    !scene.events[..removal_index].iter().any(|traced| {
+        matches!(
+            &traced.event,
+            Event::UnknownMutation(unknown)
+                if host_object.is_some_and(|host| {
+                    unknown.values.iter().any(|value| value.definitely_same(host))
+                })
+        )
+    })
+}

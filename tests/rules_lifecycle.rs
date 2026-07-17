@@ -285,6 +285,268 @@ fn unsafe_fixes_rewrite_to_the_suggested_api() {
     assert!(observed(project.path()).is_empty());
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2: state-dependent lifecycle rules over the abstract interpreter.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlc107_missing_generated_target_golden() {
+    assert_golden(
+        "MLC107",
+        &[
+            "alias.py:8:19 MLC107 error high",
+            "invalid.py:8:19 MLC107 error high",
+            "invalid.py:10:19 MLC107 error high",
+        ],
+    );
+}
+
+#[test]
+fn mlc108_conflicting_play_writes_golden() {
+    assert_golden(
+        "MLC108",
+        &[
+            "alias.py:8:48 MLC108 warning high",
+            "invalid.py:8:48 MLC108 warning high",
+            "invalid.py:10:32 MLC108 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc110_self_add_and_parent_cycle_golden() {
+    assert_golden(
+        "MLC110",
+        &[
+            "alias.py:7:9 MLC110 error certain",
+            "invalid.py:7:9 MLC110 error certain",
+            "invalid.py:11:9 MLC110 error certain",
+        ],
+    );
+}
+
+#[test]
+fn mlc113_animate_kwargs_after_method_golden() {
+    assert_golden(
+        "MLC113",
+        &[
+            "alias.py:8:46 MLC113 error certain",
+            "invalid.py:8:46 MLC113 error certain",
+        ],
+    );
+}
+
+#[test]
+fn mlc113_safe_fix_moves_kwargs_and_is_idempotent() {
+    let project = copy_fixture("MLC113");
+    let mut fix_args = args_for(project.path());
+    fix_args.fix = true;
+
+    let report = check(&fix_args).unwrap();
+    let fixes = report.fixes.expect("--fix must produce a report");
+    assert_eq!(fixes.applied, 2, "both kwargs moves are SAFE");
+    assert!(fixes.rolled_back.is_empty(), "fixed text must re-parse");
+
+    let after = observed(project.path());
+    assert_eq!(after, Vec::<String>::new(), "fixed project must be clean");
+
+    // Second pass is a no-op (idempotence, DESIGN §11.2).
+    let second = check(&fix_args).unwrap();
+    assert_eq!(second.fixes.expect("fix report").applied, 0);
+
+    let rewritten = std::fs::read_to_string(project.path().join("invalid.py")).unwrap();
+    assert!(rewritten.contains("self.play(square.animate(run_time=2).shift(RIGHT))"));
+}
+
+#[test]
+fn mlc115_removed_child_reappears_golden() {
+    assert_golden(
+        "MLC115",
+        &[
+            "alias.py:10:9 MLC115 warning high",
+            "invalid.py:10:9 MLC115 warning high",
+            "invalid.py:20:9 MLC115 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc117_stale_or_overwritten_builder_golden() {
+    assert_golden(
+        "MLC117",
+        &[
+            "alias.py:8:16 MLC117 warning high",
+            "invalid.py:8:16 MLC117 warning high",
+            "invalid.py:17:17 MLC117 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc119_replace_missing_old_golden() {
+    assert_golden(
+        "MLC119",
+        &[
+            "alias.py:7:22 MLC119 error high",
+            "invalid.py:8:22 MLC119 error high",
+            "invalid.py:9:22 MLC119 error high",
+        ],
+    );
+}
+
+#[test]
+fn mlc120_missing_saved_state_golden() {
+    assert_golden(
+        "MLC120",
+        &[
+            "alias.py:8:19 MLC120 error high",
+            "invalid.py:8:19 MLC120 error high",
+            "invalid.py:9:9 MLC120 error high",
+        ],
+    );
+}
+
+#[test]
+fn mlc121_timeline_reentry_golden() {
+    assert_golden(
+        "MLC121",
+        &[
+            "alias.py:8:38 MLC121 error high",
+            "invalid.py:8:38 MLC121 error high",
+            "invalid.py:9:37 MLC121 error high",
+        ],
+    );
+}
+
+#[test]
+fn mlc124_non_mutating_animate_method_golden() {
+    assert_golden(
+        "MLC124",
+        &[
+            "alias.py:8:19 MLC124 warning high",
+            "invalid.py:8:19 MLC124 warning high",
+            "invalid.py:11:19 MLC124 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc125_remove_updater_identity_mismatch_golden() {
+    assert_golden(
+        "MLC125",
+        &[
+            "alias.py:13:9 MLC125 warning high",
+            "invalid.py:17:9 MLC125 warning high",
+            "invalid.py:21:9 MLC125 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc128_missing_super_init_golden() {
+    assert_golden(
+        "MLC128",
+        &[
+            "alias.py:5:5 MLC128 error high",
+            "invalid.py:5:5 MLC128 error high",
+        ],
+    );
+}
+
+#[test]
+fn mlc129_play_lag_ratio_stagger_golden() {
+    // The fixture pyproject lowers min-confidence to medium: the builtin
+    // default (high) would filter this medium-confidence rule out.
+    assert_golden(
+        "MLC129",
+        &[
+            "alias.py:8:64 MLC129 warning medium",
+            "invalid.py:8:58 MLC129 warning medium",
+        ],
+    );
+}
+
+#[test]
+fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
+    let expected: [(&str, Severity, Confidence, &[&str]); 13] = [
+        ("MLC107", Severity::Error, Confidence::High, &["lifecycle"]),
+        (
+            "MLC108",
+            Severity::Warning,
+            Confidence::High,
+            &["lifecycle"],
+        ),
+        (
+            "MLC110",
+            Severity::Error,
+            Confidence::Certain,
+            &["lifecycle"],
+        ),
+        (
+            "MLC113",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls", "lifecycle"],
+        ),
+        (
+            "MLC115",
+            Severity::Warning,
+            Confidence::High,
+            &["lifecycle"],
+        ),
+        (
+            "MLC117",
+            Severity::Warning,
+            Confidence::High,
+            &["lifecycle"],
+        ),
+        (
+            "MLC119",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls", "lifecycle"],
+        ),
+        ("MLC120", Severity::Error, Confidence::High, &["lifecycle"]),
+        (
+            "MLC121",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls", "cost-facts"],
+        ),
+        (
+            "MLC124",
+            Severity::Warning,
+            Confidence::High,
+            &["lifecycle"],
+        ),
+        (
+            "MLC125",
+            Severity::Warning,
+            Confidence::High,
+            &["lifecycle"],
+        ),
+        ("MLC128", Severity::Error, Confidence::High, &["lifecycle"]),
+        (
+            "MLC129",
+            Severity::Warning,
+            Confidence::Medium,
+            &["qualified-calls"],
+        ),
+    ];
+    for (rule, severity, confidence, capabilities) in expected {
+        let metadata = registry::metadata_for(rule)
+            .unwrap_or_else(|| panic!("{rule} must be registered as implemented"));
+        assert!(metadata.default_enabled, "{rule} defaults to enabled");
+        assert_eq!(metadata.default_severity, severity, "{rule} severity");
+        assert_eq!(metadata.minimum_confidence, confidence, "{rule} confidence");
+        assert_eq!(metadata.implementation_phase, 2, "{rule} phase");
+        assert_eq!(
+            metadata.required_capabilities, capabilities,
+            "{rule} capabilities"
+        );
+    }
+}
+
 #[test]
 fn lifecycle_rule_metadata_matches_the_design_catalog() {
     let expected: [(&str, Severity, Confidence); 10] = [
