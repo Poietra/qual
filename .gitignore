@@ -1,2 +1,3 @@
 /target
 .manim-lint-cache/
+.claude/

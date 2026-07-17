@@ -25,6 +25,10 @@ pub use model::{
     apply_overlay,
 };
 
+/// Name of the profile used when the configuration does not set
+/// `knowledge-profile`: the shipped upstream Manim Community 0.20 profile.
+pub const DEFAULT_PROFILE: &str = "upstream_0_20";
+
 /// Profile JSON files embedded at compile time: `(file name, content)`.
 const EMBEDDED_PROFILES: &[(&str, &str)] = &[("v0_20.json", include_str!("profiles/v0_20.json"))];
 

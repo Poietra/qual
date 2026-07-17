@@ -11,6 +11,8 @@ use crate::cli::{CheckArgs, Command, ExitStatus};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::diagnostic::Diagnostic;
+use crate::frontend::{self, ManimSurface};
+use crate::knowledge::{self, KnowledgeProfile, SymbolKind};
 use crate::reporting::fixes::FixReport;
 use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
@@ -32,6 +34,10 @@ pub enum ApplicationError {
     /// Fix application failed while writing a fixed file.
     #[error(transparent)]
     Fix(#[from] fixes::FixError),
+    /// The configured knowledge profile is unknown or invalid
+    /// (DESIGN §8.2: configuration-level failure, exit code 2).
+    #[error(transparent)]
+    Knowledge(#[from] knowledge::KnowledgeError),
     /// Unexpected IO failure outside per-file MLC000 handling.
     #[error("io error on {path}: {source}")]
     Io {
@@ -117,6 +123,14 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let project_root = discover_project_root(&paths)?;
     let config = resolve_config(args, &project_root)?;
 
+    // Load the versioned Manim knowledge profile before touching any file:
+    // an unknown `knowledge-profile` is a configuration error (exit 2).
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+
     let files = collect_python_files(&paths, &project_root, &config.exclude)?;
     let mut sources = SourceManager::new(project_root.clone());
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -135,7 +149,9 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         }
     }
 
-    let context = RuleContext::new(&sources, &config);
+    let surface = manim_surface(&profile);
+    let facts = frontend::index::analyze(&sources, &config.source_roots, &surface);
+    let context = RuleContext::new(&sources, &config).with_frontend(facts.index, facts.calls);
     for rule in registry::all_rules() {
         diagnostics.extend(rule.run(&context));
     }
@@ -217,6 +233,40 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         config,
         fixes: fix_report,
     })
+}
+
+/// Derives the frontend's Manim API surface from the loaded knowledge
+/// profile (DESIGN §5.3/§5.4 bridge).
+///
+/// `star_exports` is the profile's export table verbatim. The base sets are
+/// derived from curated symbol kinds — every canonical class of a kind counts
+/// as a base of that kind, so a project class is discovered as e.g. a Scene
+/// only when its resolved base chain reaches one of these ids. `vmobject`
+/// symbols are also Mobject bases (a `VMobject` subclass is a Mobject).
+#[must_use]
+pub fn manim_surface(profile: &KnowledgeProfile) -> ManimSurface {
+    let mut surface = ManimSurface {
+        star_exports: profile.exports.clone(),
+        ..ManimSurface::default()
+    };
+    for (id, entry) in &profile.symbols {
+        match entry.kind {
+            SymbolKind::Scene => {
+                surface.scene_bases.insert(id.clone());
+            }
+            SymbolKind::Mobject | SymbolKind::Vmobject => {
+                surface.mobject_bases.insert(id.clone());
+            }
+            SymbolKind::Animation => {
+                surface.animation_bases.insert(id.clone());
+            }
+            SymbolKind::Camera
+            | SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Constant => {}
+        }
+    }
+    surface
 }
 
 fn validate_flag_combinations(args: &CheckArgs) -> Result<(), ApplicationError> {
