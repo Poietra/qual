@@ -1,0 +1,880 @@
+{
+  "schema_version": 1,
+  "name": "upstream_0_20",
+  "manim_version": ">=0.20,<0.21",
+  "source_digest": "sha256:f63cacd18c10daa9cca534a0b348c169bb7a0ade65d41ad4f6671afb4d38a99e",
+  "base_profile": null,
+  "symbols": {
+    "manim.animation.animation.Animation": {
+      "kind": "animation",
+      "accepted_target": "Mobject",
+      "effects": {
+        "introducer": false,
+        "remover": false,
+        "suspends_updaters": true
+      },
+      "note": "Base Animation defaults: introducer=False, remover=False, suspend_mobject_updating=True; begin() copies the starting mobject, clean_up_from_scene removes the target only when remover (animation.py Animation.__init__/begin/clean_up_from_scene)."
+    },
+    "manim.animation.animation.Wait": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "effects": {
+        "introducer": false,
+        "remover": false
+      },
+      "signature": {
+        "params": [
+          {"name": "run_time"},
+          {"name": "stop_condition"},
+          {"name": "frozen_frame"}
+        ]
+      },
+      "note": "stop_condition together with frozen_frame=True raises at construction; frozen_frame=None lets the Scene decide static vs dynamic (animation.py Wait.__init__, scene.py should_update_mobjects)."
+    },
+    "manim.animation.changing.TracedPath": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "effects": {
+        "per_frame_callback": true,
+        "registers_updater": true
+      },
+      "note": "Registers an updater on itself that calls traced_point_func every frame; with dissipating_time=None the path grows O(frames) (changing.py TracedPath)."
+    },
+    "manim.animation.composition.AnimationGroup": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "note": "Plays member animations together; group-level introducer/remover facts depend on the members. An empty group is a runtime error (MLC109)."
+    },
+    "manim.animation.composition.LaggedStart": {
+      "kind": "animation",
+      "bases": ["manim.animation.composition.AnimationGroup"],
+      "note": "AnimationGroup whose members start staggered by lag_ratio; stagger belongs to the group constructor, not to play kwargs (composition.py LaggedStart)."
+    },
+    "manim.animation.composition.Succession": {
+      "kind": "animation",
+      "bases": ["manim.animation.composition.AnimationGroup"],
+      "note": "Plays member animations strictly one after another (composition.py Succession)."
+    },
+    "manim.animation.creation.Create": {
+      "kind": "animation",
+      "bases": ["manim.animation.creation.ShowPartial"],
+      "accepted_target": "VMobject",
+      "effects": {
+        "introducer": true,
+        "remover": false,
+        "suspends_updaters": true
+      },
+      "note": "Incrementally shows a VMobject; constructor default introducer=True adds the target during play setup (creation.py Create.__init__)."
+    },
+    "manim.animation.creation.DrawBorderThenFill": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "accepted_target": "VMobject",
+      "effects": {
+        "introducer": true,
+        "remover": false
+      },
+      "note": "TypeErrors on non-vectorized mobjects; default introducer=True (creation.py DrawBorderThenFill.__init__/_typecheck_input)."
+    },
+    "manim.animation.creation.ShowPartial": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "accepted_target": "VMobject",
+      "note": "Abstract base for partial-show animations; raises TypeError unless the target has pointwise_become_partial (creation.py ShowPartial.__init__)."
+    },
+    "manim.animation.creation.Uncreate": {
+      "kind": "animation",
+      "bases": ["manim.animation.creation.Create"],
+      "accepted_target": "VMobject",
+      "effects": {
+        "introducer": false,
+        "remover": true,
+        "suspends_updaters": true
+      },
+      "note": "Create in reverse; default remover=True removes the target during play cleanup (creation.py Uncreate.__init__)."
+    },
+    "manim.animation.creation.Unwrite": {
+      "kind": "animation",
+      "bases": ["manim.animation.creation.Write"],
+      "accepted_target": "VMobject",
+      "effects": {
+        "introducer": false,
+        "remover": true
+      },
+      "note": "Write with reverse=True by default, which makes it a remover and not an introducer (creation.py Unwrite.__init__, Write.__init__)."
+    },
+    "manim.animation.creation.Write": {
+      "kind": "animation",
+      "bases": ["manim.animation.creation.DrawBorderThenFill"],
+      "accepted_target": "VMobject",
+      "effects": {
+        "introducer": true,
+        "remover": false
+      },
+      "note": "Defaults shown are for reverse=False; Write(..., reverse=True) becomes remover=True and introducer=False (creation.py Write.__init__)."
+    },
+    "manim.animation.fading.FadeIn": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "introducer": true,
+        "remover": false
+      },
+      "note": "Passes introducer=True; the target is added during play setup, not at construction (fading.py FadeIn.__init__)."
+    },
+    "manim.animation.fading.FadeOut": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "introducer": false,
+        "remover": true
+      },
+      "note": "Passes remover=True; a target not yet in the Scene is still auto-added at play begin and removed at cleanup (fading.py FadeOut.__init__, scene.py add_mobjects_from_animations)."
+    },
+    "manim.animation.growing.GrowFromCenter": {
+      "kind": "animation",
+      "bases": ["manim.animation.growing.GrowFromPoint"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "introducer": true,
+        "remover": false
+      },
+      "note": "GrowFromPoint with the target's center as the growth point (growing.py GrowFromCenter)."
+    },
+    "manim.animation.growing.GrowFromPoint": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "introducer": true,
+        "remover": false
+      },
+      "note": "Passes introducer=True (growing.py GrowFromPoint.__init__)."
+    },
+    "manim.animation.rotation.Rotate": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "note": "Transform that rotates the live mobject about a point or edge (rotation.py Rotate)."
+    },
+    "manim.animation.transform.ApplyFunction": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "note": "create_target() calls function(mobject.copy()) and raises TypeError unless the function returns a Mobject (transform.py ApplyFunction.create_target)."
+    },
+    "manim.animation.transform.ApplyMethod": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "note": "Takes an un-called bound mobject method plus its arguments; passing the result of calling the method is a runtime error (transform.py ApplyMethod)."
+    },
+    "manim.animation.transform.MoveToTarget": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "requires_target": true
+      },
+      "note": "Raises ValueError unless mobject.generate_target() populated mobject.target first (transform.py MoveToTarget.check_validity_of_input)."
+    },
+    "manim.animation.transform.ReplacementTransform": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "replacement": true,
+        "suspends_updaters": true
+      },
+      "note": "Transform with replace_mobject_with_target_in_scene=True: cleanup swaps the source for the target in the Scene root list (transform.py ReplacementTransform.__init__, Transform.clean_up_from_scene)."
+    },
+    "manim.animation.transform.Restore": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyMethod"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "requires_saved_state": true
+      },
+      "note": "ApplyMethod over mobject.restore; requires a prior save_state() on every path (transform.py Restore, mobject.py Mobject.restore)."
+    },
+    "manim.animation.transform.Transform": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "replacement": false,
+        "suspends_updaters": true
+      },
+      "note": "The live source mobject takes the target's shape; the target copy is not added to the Scene (transform.py Transform.begin/clean_up_from_scene, DESIGN 3.2)."
+    },
+    "manim.animation.transform_matching_parts.TransformMatchingAbstractBase": {
+      "kind": "animation",
+      "bases": ["manim.animation.composition.AnimationGroup"],
+      "effects": {
+        "replacement": true
+      },
+      "note": "clean_up_from_scene removes the source mobject and internal fade copies, then adds the target (transform_matching_parts.py clean_up_from_scene)."
+    },
+    "manim.animation.transform_matching_parts.TransformMatchingShapes": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform_matching_parts.TransformMatchingAbstractBase"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "replacement": true
+      },
+      "note": "Matches submobject shapes by normalized point hash; net Scene effect replaces the source with the target (transform_matching_parts.py TransformMatchingShapes)."
+    },
+    "manim.animation.transform_matching_parts.TransformMatchingTex": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform_matching_parts.TransformMatchingAbstractBase"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "replacement": true
+      },
+      "note": "Matches submobjects by tex_string; net Scene effect replaces the source with the target (transform_matching_parts.py TransformMatchingTex)."
+    },
+    "manim.animation.updaters.mobject_update_utils.always_redraw": {
+      "kind": "function",
+      "effects": {
+        "per_frame_callback": true,
+        "registers_updater": true
+      },
+      "note": "Calls the factory once immediately and re-runs it every frame via an attached updater; the factory body is a hot context (mobject_update_utils.py always_redraw)."
+    },
+    "manim.animation.updaters.update.UpdateFromAlphaFunc": {
+      "kind": "animation",
+      "bases": ["manim.animation.updaters.update.UpdateFromFunc"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "per_frame_callback": true,
+        "suspends_updaters": false
+      },
+      "note": "Calls update_function(mobject, rate_func(alpha)) every frame (update.py UpdateFromAlphaFunc.interpolate_mobject)."
+    },
+    "manim.animation.updaters.update.UpdateFromFunc": {
+      "kind": "animation",
+      "bases": ["manim.animation.animation.Animation"],
+      "accepted_target": "Mobject",
+      "effects": {
+        "per_frame_callback": true,
+        "suspends_updaters": false
+      },
+      "note": "Calls update_function(mobject) every frame; suspend_mobject_updating defaults to False here (update.py UpdateFromFunc.__init__)."
+    },
+    "manim.camera.moving_camera.MovingCamera": {
+      "kind": "camera",
+      "note": "Camera with an animatable frame used by MovingCameraScene (moving_camera.py MovingCamera)."
+    },
+    "manim.camera.three_d_camera.ThreeDCamera": {
+      "kind": "camera",
+      "note": "Cairo 3D camera holding phi/theta/zoom trackers and fixed-object registries (three_d_camera.py ThreeDCamera)."
+    },
+    "manim.constants.DEGREES": {
+      "kind": "constant",
+      "note": "TAU / 360; multiply degree literals by this scalar."
+    },
+    "manim.constants.DOWN": {
+      "kind": "constant",
+      "note": "Unit vector (0, -1, 0)."
+    },
+    "manim.constants.IN": {
+      "kind": "constant",
+      "note": "Unit vector (0, 0, -1)."
+    },
+    "manim.constants.LEFT": {
+      "kind": "constant",
+      "note": "Unit vector (-1, 0, 0)."
+    },
+    "manim.constants.ORIGIN": {
+      "kind": "constant",
+      "note": "Vector (0, 0, 0)."
+    },
+    "manim.constants.OUT": {
+      "kind": "constant",
+      "note": "Unit vector (0, 0, 1)."
+    },
+    "manim.constants.PI": {
+      "kind": "constant",
+      "note": "np.pi scalar."
+    },
+    "manim.constants.RIGHT": {
+      "kind": "constant",
+      "note": "Unit vector (1, 0, 0)."
+    },
+    "manim.constants.TAU": {
+      "kind": "constant",
+      "note": "2 * PI scalar."
+    },
+    "manim.constants.UP": {
+      "kind": "constant",
+      "note": "Unit vector (0, 1, 0)."
+    },
+    "manim.mobject.geometry.arc.Arc": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.arc.TipableVMobject"]
+    },
+    "manim.mobject.geometry.arc.Circle": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.arc.Arc"]
+    },
+    "manim.mobject.geometry.arc.Dot": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.arc.Circle"]
+    },
+    "manim.mobject.geometry.arc.TipableVMobject": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "note": "Structural ancestor for arcs and lines that can carry tips."
+    },
+    "manim.mobject.geometry.line.Arrow": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.line.Line"]
+    },
+    "manim.mobject.geometry.line.Line": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.arc.TipableVMobject"]
+    },
+    "manim.mobject.geometry.polygram.Polygon": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.polygram.Polygram"]
+    },
+    "manim.mobject.geometry.polygram.Polygram": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"]
+    },
+    "manim.mobject.geometry.polygram.Rectangle": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.polygram.Polygon"]
+    },
+    "manim.mobject.geometry.polygram.Square": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.polygram.Rectangle"]
+    },
+    "manim.mobject.graphing.coordinate_systems.Axes": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VGroup"],
+      "note": "VGroup + CoordinateSystem; plot/axis helpers construct new VMobjects (coordinate_systems.py Axes)."
+    },
+    "manim.mobject.graphing.coordinate_systems.NumberPlane": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.graphing.coordinate_systems.Axes"]
+    },
+    "manim.mobject.mobject.Group": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.mobject.Mobject"],
+      "note": "Container that accepts heterogeneous Mobject children; use it instead of VGroup when mixing non-vectorized members (mobject.py Group)."
+    },
+    "manim.mobject.mobject.Mobject": {
+      "kind": "mobject",
+      "note": "Root display object. A bare Mobject() has no drawable points; adding one as a visible leaf shows nothing (MLR125)."
+    },
+    "manim.mobject.mobject.Mobject.add": {
+      "kind": "method",
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Ignores duplicate children with a warning and rejects direct self-addition (mobject.py Mobject.add)."
+    },
+    "manim.mobject.mobject.Mobject.add_updater": {
+      "kind": "method",
+      "effects": {
+        "per_frame_callback": true,
+        "registers_updater": true
+      },
+      "returns_self": true,
+      "signature": {
+        "params": [
+          {"name": "update_function", "required": true},
+          {"name": "index"},
+          {"name": "call_updater"}
+        ]
+      },
+      "note": "Manim calls the callback as (mobject, dt) only when a parameter literally named dt exists; otherwise as (mobject). A dt parameter also makes plain wait() dynamic (mobject.py Mobject.add_updater, DESIGN 3.3)."
+    },
+    "manim.mobject.mobject.Mobject.become": {
+      "kind": "method",
+      "returns_self": true,
+      "note": "Rewrites points, style, and submobjects in place to match another mobject; identity is preserved (mobject.py Mobject.become)."
+    },
+    "manim.mobject.mobject.Mobject.clear_updaters": {
+      "kind": "method",
+      "effects": {
+        "removes_updater": true
+      },
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.copy": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Returns a new deepcopy with a fresh identity; the clone is not in the Scene even if the original was (mobject.py Mobject.copy)."
+    },
+    "manim.mobject.mobject.Mobject.generate_target": {
+      "kind": "method",
+      "effects": {
+        "generates_target": true
+      },
+      "returns_self": false,
+      "note": "Stores a copy in mobject.target and returns that copy, not self (mobject.py Mobject.generate_target)."
+    },
+    "manim.mobject.mobject.Mobject.move_to": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.next_to": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.remove": {
+      "kind": "method",
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Structural removal from this mobject's submobjects (contrast Scene.remove, which edits only the Scene root list)."
+    },
+    "manim.mobject.mobject.Mobject.remove_updater": {
+      "kind": "method",
+      "effects": {
+        "removes_updater": true
+      },
+      "returns_self": true,
+      "note": "Matches the callback by function identity; passing a fresh lambda removes nothing (mobject.py Mobject.remove_updater, MLC125)."
+    },
+    "manim.mobject.mobject.Mobject.restore": {
+      "kind": "method",
+      "effects": {
+        "requires_saved_state": true
+      },
+      "returns_self": true,
+      "note": "Raises unless save_state() ran first; becomes the saved copy in place (mobject.py Mobject.restore)."
+    },
+    "manim.mobject.mobject.Mobject.rotate": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.save_state": {
+      "kind": "method",
+      "effects": {
+        "saves_state": true
+      },
+      "returns_self": true,
+      "note": "Stores a copy in mobject.saved_state and returns self (mobject.py Mobject.save_state)."
+    },
+    "manim.mobject.mobject.Mobject.scale": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.set_color": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.set_z_index": {
+      "kind": "method",
+      "returns_self": true,
+      "note": "Preferred over shift(OUT)/set_z for 2D Cairo stacking order (MLR121)."
+    },
+    "manim.mobject.mobject.Mobject.shift": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.mobject.Mobject.to_edge": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.svg.svg_mobject.SVGMobject": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "note": "Construction parses the SVG XML and builds the point family; it is not a plain file read (svg_mobject.py, DESIGN 4.3)."
+    },
+    "manim.mobject.text.numbers.DecimalNumber": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "note": "Construct once and drive with set_value in an updater instead of rebuilding Text/MathTex per frame (MLP201 guidance)."
+    },
+    "manim.mobject.text.tex_mobject.MathTex": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.text.tex_mobject.SingleStringMathTex"],
+      "note": "Cache miss runs an external TeX compiler and dvisvgm; distinct formulas are distinct compile jobs (tex_mobject.py, utils/tex_file_writing.py)."
+    },
+    "manim.mobject.text.tex_mobject.SingleStringMathTex": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.svg.svg_mobject.SVGMobject"],
+      "note": "Structural ancestor of MathTex."
+    },
+    "manim.mobject.text.tex_mobject.Tex": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.text.tex_mobject.MathTex"]
+    },
+    "manim.mobject.text.text_mobject.MarkupText": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.svg.svg_mobject.SVGMobject"],
+      "note": "Interprets Pango markup; construction includes shaping and SVG generation (text_mobject.py MarkupText)."
+    },
+    "manim.mobject.text.text_mobject.Text": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.svg.svg_mobject.SVGMobject"],
+      "note": "Construction includes shaping, SVG generation/parsing, and glyph family build; markup tags are not interpreted (text_mobject.py Text, MLR124)."
+    },
+    "manim.mobject.three_d.three_dimensions.Surface": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VGroup"],
+      "note": "Face count drives per-frame sort/projection/raster cost under Cairo (three_dimensions.py Surface, DESIGN 4.3)."
+    },
+    "manim.mobject.types.image_mobject.AbstractImageMobject": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.mobject.Mobject"],
+      "note": "Structural ancestor of ImageMobject; not vectorized."
+    },
+    "manim.mobject.types.image_mobject.ImageMobject": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.types.image_mobject.AbstractImageMobject"],
+      "note": "Raster image; not a VMobject, so Create/Write reject it and VGroup membership is invalid (image_mobject.py ImageMobject)."
+    },
+    "manim.mobject.types.vectorized_mobject.VGroup": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "note": "Accepts only vectorized children; mixing in a plain Mobject (e.g. ImageMobject) is a runtime error — use Group (vectorized_mobject.py VGroup, MLC126)."
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.mobject.Mobject"],
+      "renderer": {
+        "note": "Point storage is renderer-specific: Cairo stores cubic Bezier curves as 4 points per curve, OpenGL quadratic as 3 points per curve; raw .points access that assumes one layout is not portable (DESIGN 3.6)."
+      }
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject.set_fill": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject.set_opacity": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject.set_stroke": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.value_tracker.ValueTracker": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.mobject.Mobject"],
+      "note": "Invisible value holder; animate it or read it from updaters (value_tracker.py ValueTracker)."
+    },
+    "manim.mobject.value_tracker.ValueTracker.get_value": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Returns the tracked float, not the mobject."
+    },
+    "manim.mobject.value_tracker.ValueTracker.increment_value": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.mobject.value_tracker.ValueTracker.set_value": {
+      "kind": "method",
+      "returns_self": true
+    },
+    "manim.scene.moving_camera_scene.MovingCameraScene": {
+      "kind": "scene",
+      "bases": ["manim.scene.scene.Scene"],
+      "renderer": {
+        "cairo": true,
+        "opengl": false,
+        "note": "The MovingCamera frame contract targets the Cairo renderer in 0.20; OpenGL paths through self.camera.frame are incompatible (moving_camera_scene.py, MLR119)."
+      }
+    },
+    "manim.scene.scene.Scene": {
+      "kind": "scene",
+      "note": "render() runs setup -> construct -> tear_down in order; base setup/tear_down are empty (scene.py Scene.render, DESIGN 3.1)."
+    },
+    "manim.scene.scene.Scene.add": {
+      "kind": "method",
+      "effects": {
+        "reorders_existing_to_front": true,
+        "scene_membership": "add"
+      },
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Not a set insert: an already-present mobject is removed and re-appended, changing draw order; submobjects display via the family (scene.py Scene.add, DESIGN 3.4)."
+    },
+    "manim.scene.scene.Scene.add_foreground_mobject": {
+      "kind": "method",
+      "effects": {
+        "auto_adds": true,
+        "scene_membership": "add_foreground"
+      },
+      "returns_self": true,
+      "note": "Also calls Scene.add; foreground objects widen the Cairo moving scope (scene.py Scene.add_foreground_mobject)."
+    },
+    "manim.scene.scene.Scene.add_foreground_mobjects": {
+      "kind": "method",
+      "effects": {
+        "auto_adds": true,
+        "scene_membership": "add_foreground"
+      },
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Also calls Scene.add (scene.py Scene.add_foreground_mobjects)."
+    },
+    "manim.scene.scene.Scene.add_updater": {
+      "kind": "method",
+      "effects": {
+        "per_frame_callback": true,
+        "registers_updater": true,
+        "scene_membership": "register_scene_updater"
+      },
+      "returns_self": false,
+      "signature": {
+        "params": [
+          {"name": "func", "required": true}
+        ]
+      },
+      "note": "Scene updaters always receive exactly (dt), run last each frame, and make plain wait() dynamic; under Cairo they do not mark the mobjects they mutate as moving (scene.py Scene.add_updater, MLR111)."
+    },
+    "manim.scene.scene.Scene.bring_to_back": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "reorder_to_back"
+      },
+      "returns_self": true
+    },
+    "manim.scene.scene.Scene.bring_to_front": {
+      "kind": "method",
+      "effects": {
+        "reorders_existing_to_front": true,
+        "scene_membership": "reorder_to_front"
+      },
+      "returns_self": true,
+      "note": "Re-adds at the end of the root list; a lower z_index still sorts the mobject behind others in the effective display order (scene.py Scene.bring_to_front, MLR122)."
+    },
+    "manim.scene.scene.Scene.clear": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "clear"
+      },
+      "returns_self": true,
+      "note": "Empties both mobjects and foreground_mobjects (scene.py Scene.clear)."
+    },
+    "manim.scene.scene.Scene.pause": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "wait"
+      },
+      "returns_self": false,
+      "note": "Alias for wait(frozen_frame=True) (scene.py Scene.pause)."
+    },
+    "manim.scene.scene.Scene.play": {
+      "kind": "method",
+      "effects": {
+        "auto_adds": true,
+        "scene_membership": "play"
+      },
+      "returns_self": false,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Compiles arguments to Animations (mob.animate builders included; other values TypeError), auto-adds non-introducer targets before begin, and applies introducer/remover/replacement effects at setup/cleanup (scene.py Scene.play/play_internal, DESIGN 3.2)."
+    },
+    "manim.scene.scene.Scene.remove": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "remove"
+      },
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Restructures the Scene root list only; parents' submobjects are untouched, so re-adding or animating the old parent makes the child reappear (scene.py Scene.remove/restructure_mobjects, MLC115)."
+    },
+    "manim.scene.scene.Scene.remove_foreground_mobject": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "remove_foreground"
+      },
+      "returns_self": true,
+      "note": "Only unregisters foreground status; the mobject stays in the Scene (scene.py Scene.remove_foreground_mobject)."
+    },
+    "manim.scene.scene.Scene.remove_foreground_mobjects": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "remove_foreground"
+      },
+      "returns_self": true,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Only unregisters foreground status; the mobjects stay in the Scene (scene.py Scene.remove_foreground_mobjects)."
+    },
+    "manim.scene.scene.Scene.remove_updater": {
+      "kind": "method",
+      "effects": {
+        "removes_updater": true,
+        "scene_membership": "remove_scene_updater"
+      },
+      "returns_self": false,
+      "note": "Matches the callback by function identity (scene.py Scene.remove_updater)."
+    },
+    "manim.scene.scene.Scene.replace": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "replace"
+      },
+      "returns_self": false,
+      "note": "old_mobject must be present (directly or inside a parent) and new_mobject must not already be in the Scene; draw order is preserved (scene.py Scene.replace, MLC119)."
+    },
+    "manim.scene.scene.Scene.wait": {
+      "kind": "method",
+      "effects": {
+        "scene_membership": "wait"
+      },
+      "returns_self": false,
+      "signature": {
+        "params": [
+          {"name": "duration"},
+          {"name": "stop_condition"},
+          {"name": "frozen_frame"}
+        ]
+      },
+      "note": "Plays Wait; with frozen_frame=None the frame freezes unless always_update_mobjects, a Scene updater, a stop_condition, or a time-based family updater exists (scene.py Scene.wait/should_update_mobjects, DESIGN 3.3)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene": {
+      "kind": "scene",
+      "bases": ["manim.scene.scene.Scene"]
+    },
+    "manim.scene.three_d_scene.ThreeDScene.add_fixed_in_frame_mobjects": {
+      "kind": "method",
+      "effects": {
+        "auto_adds": true,
+        "scene_membership": "add_fixed_in_frame"
+      },
+      "returns_self": false,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Automatically adds the mobjects to the Scene and registers them as fixed-in-frame overlays (three_d_scene.py add_fixed_in_frame_mobjects)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.add_fixed_orientation_mobjects": {
+      "kind": "method",
+      "effects": {
+        "auto_adds": true,
+        "scene_membership": "add_fixed_orientation"
+      },
+      "returns_self": false,
+      "signature": {
+        "accepts_var_args": true
+      },
+      "note": "Automatically adds the mobjects to the Scene and fixes their orientation relative to the camera (three_d_scene.py add_fixed_orientation_mobjects)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.begin_ambient_camera_rotation": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Registers an ambient camera updater; camera motion can make the whole Scene moving (three_d_scene.py begin_ambient_camera_rotation)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.move_camera": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Animates camera value trackers over a play (three_d_scene.py move_camera)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.remove_fixed_in_frame_mobjects": {
+      "kind": "method",
+      "effects": {
+        "renderer_divergent_membership": true,
+        "scene_membership": "remove_fixed_in_frame"
+      },
+      "returns_self": false,
+      "note": "Cairo only unregisters the camera fixation and the mobject stays displayed; the OpenGL branch also calls Scene.remove (three_d_scene.py remove_fixed_in_frame_mobjects, MLR108)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.remove_fixed_orientation_mobjects": {
+      "kind": "method",
+      "effects": {
+        "renderer_divergent_membership": true,
+        "scene_membership": "remove_fixed_orientation"
+      },
+      "returns_self": false,
+      "note": "Cairo only unregisters the camera fixation; the OpenGL branch also calls Scene.remove (three_d_scene.py remove_fixed_orientation_mobjects, MLR108)."
+    },
+    "manim.scene.three_d_scene.ThreeDScene.set_camera_orientation": {
+      "kind": "method",
+      "returns_self": false
+    },
+    "manim.scene.three_d_scene.ThreeDScene.stop_ambient_camera_rotation": {
+      "kind": "method",
+      "returns_self": false
+    }
+  },
+  "deleted_symbols": [],
+  "exports": {
+    "Animation": "manim.animation.animation.Animation",
+    "AnimationGroup": "manim.animation.composition.AnimationGroup",
+    "ApplyFunction": "manim.animation.transform.ApplyFunction",
+    "ApplyMethod": "manim.animation.transform.ApplyMethod",
+    "Arc": "manim.mobject.geometry.arc.Arc",
+    "Arrow": "manim.mobject.geometry.line.Arrow",
+    "Axes": "manim.mobject.graphing.coordinate_systems.Axes",
+    "Circle": "manim.mobject.geometry.arc.Circle",
+    "Create": "manim.animation.creation.Create",
+    "DEGREES": "manim.constants.DEGREES",
+    "DOWN": "manim.constants.DOWN",
+    "DecimalNumber": "manim.mobject.text.numbers.DecimalNumber",
+    "Dot": "manim.mobject.geometry.arc.Dot",
+    "DrawBorderThenFill": "manim.animation.creation.DrawBorderThenFill",
+    "FadeIn": "manim.animation.fading.FadeIn",
+    "FadeOut": "manim.animation.fading.FadeOut",
+    "GrowFromCenter": "manim.animation.growing.GrowFromCenter",
+    "GrowFromPoint": "manim.animation.growing.GrowFromPoint",
+    "Group": "manim.mobject.mobject.Group",
+    "IN": "manim.constants.IN",
+    "ImageMobject": "manim.mobject.types.image_mobject.ImageMobject",
+    "LEFT": "manim.constants.LEFT",
+    "LaggedStart": "manim.animation.composition.LaggedStart",
+    "Line": "manim.mobject.geometry.line.Line",
+    "MarkupText": "manim.mobject.text.text_mobject.MarkupText",
+    "MathTex": "manim.mobject.text.tex_mobject.MathTex",
+    "Mobject": "manim.mobject.mobject.Mobject",
+    "MoveToTarget": "manim.animation.transform.MoveToTarget",
+    "MovingCamera": "manim.camera.moving_camera.MovingCamera",
+    "MovingCameraScene": "manim.scene.moving_camera_scene.MovingCameraScene",
+    "NumberPlane": "manim.mobject.graphing.coordinate_systems.NumberPlane",
+    "ORIGIN": "manim.constants.ORIGIN",
+    "OUT": "manim.constants.OUT",
+    "PI": "manim.constants.PI",
+    "Polygon": "manim.mobject.geometry.polygram.Polygon",
+    "Polygram": "manim.mobject.geometry.polygram.Polygram",
+    "RIGHT": "manim.constants.RIGHT",
+    "Rectangle": "manim.mobject.geometry.polygram.Rectangle",
+    "ReplacementTransform": "manim.animation.transform.ReplacementTransform",
+    "Restore": "manim.animation.transform.Restore",
+    "Rotate": "manim.animation.rotation.Rotate",
+    "SVGMobject": "manim.mobject.svg.svg_mobject.SVGMobject",
+    "Scene": "manim.scene.scene.Scene",
+    "ShowPartial": "manim.animation.creation.ShowPartial",
+    "Square": "manim.mobject.geometry.polygram.Square",
+    "Succession": "manim.animation.composition.Succession",
+    "Surface": "manim.mobject.three_d.three_dimensions.Surface",
+    "TAU": "manim.constants.TAU",
+    "Tex": "manim.mobject.text.tex_mobject.Tex",
+    "Text": "manim.mobject.text.text_mobject.Text",
+    "ThreeDCamera": "manim.camera.three_d_camera.ThreeDCamera",
+    "ThreeDScene": "manim.scene.three_d_scene.ThreeDScene",
+    "TipableVMobject": "manim.mobject.geometry.arc.TipableVMobject",
+    "TracedPath": "manim.animation.changing.TracedPath",
+    "Transform": "manim.animation.transform.Transform",
+    "TransformMatchingShapes": "manim.animation.transform_matching_parts.TransformMatchingShapes",
+    "TransformMatchingTex": "manim.animation.transform_matching_parts.TransformMatchingTex",
+    "UP": "manim.constants.UP",
+    "Uncreate": "manim.animation.creation.Uncreate",
+    "Unwrite": "manim.animation.creation.Unwrite",
+    "UpdateFromAlphaFunc": "manim.animation.updaters.update.UpdateFromAlphaFunc",
+    "UpdateFromFunc": "manim.animation.updaters.update.UpdateFromFunc",
+    "VGroup": "manim.mobject.types.vectorized_mobject.VGroup",
+    "VMobject": "manim.mobject.types.vectorized_mobject.VMobject",
+    "ValueTracker": "manim.mobject.value_tracker.ValueTracker",
+    "Wait": "manim.animation.animation.Wait",
+    "Write": "manim.animation.creation.Write",
+    "always_redraw": "manim.animation.updaters.mobject_update_utils.always_redraw"
+  }
+}
