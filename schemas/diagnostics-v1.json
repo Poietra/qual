@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/diagnostics-v1.json",
+  "title": "manim-lint diagnostic output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "project_root",
+    "profiles",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool_version": { "type": "string" },
+    "project_root": { "type": "string" },
+    "profiles": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "relatedLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "span", "message"],
+      "properties": {
+        "path": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "message": { "type": "string" }
+      }
+    },
+    "textEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "span", "replacement"],
+      "properties": {
+        "path": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "replacement": { "type": "string" }
+      }
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applicability", "message", "edits"],
+      "properties": {
+        "applicability": { "enum": ["safe", "unsafe"] },
+        "message": { "type": "string" },
+        "edits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/textEdit" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "severity",
+        "confidence",
+        "path",
+        "span",
+        "message",
+        "applicable_profiles",
+        "evidence",
+        "fix"
+      ],
+      "properties": {
+        "rule_id": { "type": "string", "pattern": "^ML[CRPD][0-9]{3}$" },
+        "severity": { "enum": ["error", "warning", "info"] },
+        "confidence": { "enum": ["certain", "high", "medium", "low"] },
+        "path": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "message": { "type": "string" },
+        "explanation": { "type": "string" },
+        "related_locations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/relatedLocation" }
+        },
+        "evidence": { "type": "object" },
+        "estimated_cost": { "type": ["object", "null"] },
+        "applicable_profiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "fix": {
+          "oneOf": [
+            { "$ref": "#/$defs/fix" },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}
+
