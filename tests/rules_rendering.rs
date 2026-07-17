@@ -340,7 +340,22 @@ fn mlr104_resolves_assets_exactly_like_manim() {
             error("MLR104", "\"Picture.png\"", 1, 0),
         ],
     );
-    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // MLR104 itself is silent on valid.py; the deliberately foreign
+    // Windows path is unverifiable here (MLR104's near-miss) and instead
+    // belongs to the platform-syntax rule MLD303 (Phase 4).
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "valid.py",
+        &[Expected::new(
+            "MLD303",
+            "\"C:\\\\art\\\\logo.svg\"",
+            1,
+            0,
+            Severity::Warning,
+            Confidence::High,
+        )],
+    );
     assert_file_diagnostics(
         project.path(),
         &diagnostics,
