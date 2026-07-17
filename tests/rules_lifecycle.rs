@@ -415,8 +415,13 @@ fn mlc121_timeline_reentry_golden() {
             "invalid.py:8:38 MLC121 error high",
             "invalid.py:9:37 MLC121 error high",
             // Cross-rule interaction: the frame-stepped no-dt updater in
-            // valid.py is a true MLD301 finding (fixed-step shift without
-            // dt); it is not an MLC121 false positive.
+            // valid.py is a true MLD301 finding, verified against upstream
+            // Manim: `Mobject.update` calls an updater without a `dt`
+            // parameter as `updater(self)` once per rendered frame
+            // (manim/mobject/mobject.py, `_updater_accepts_dt`), so
+            // `m.shift(RIGHT)` advances one unit per FRAME — the motion
+            // speed tracks the profile frame rate. It is not an MLC121
+            // false positive.
             "valid.py:12:38 MLD301 warning high",
         ],
     );

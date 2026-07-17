@@ -212,7 +212,17 @@ pub(super) const MLD305: RuleMetadata = RuleMetadata {
     implementation_phase: 4,
     required_profiles: &[],
     required_capabilities: &["qualified-calls"],
-    supersedes: &[],
+    // One scenario CAN put both rules on the same literal span: an
+    // extension-augmented case-only mismatch (`SVGMobject("Logo")` with
+    // `assets/logo.svg` on disk) is `NotFound` to `MLR104`'s exact +
+    // literal-level scan while this rule identifies the case-only cause.
+    // Both rest on the same grounds — the same literal resolved through
+    // the same search path — so per DESIGN §7.3 only the most specific
+    // fires: this rule names the failure cause and the on-disk spelling,
+    // `MLR104` can only report an unresolved path. (`MLR104`'s own
+    // CaseOnlyMismatch branch is provably disjoint: `case_only_correction`
+    // returns None exactly when the literal-level match exists.)
+    supersedes: &["MLR104"],
 };
 
 pub(super) struct CaseOnlyAssetMismatch;

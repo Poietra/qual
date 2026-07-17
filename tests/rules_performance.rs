@@ -186,6 +186,43 @@ fn mlp226_quantifies_keys_only_from_literal_durations() {
     assert_eq!(keys["upper"], serde_json::json!(480));
 }
 
+/// `MLP220` anchors on the `TracedPath` constructor (the path's internal
+/// point history grows per frame); `MLP204` anchors on a per-frame
+/// `Scene.add` of a fresh mobject (the user's scene graph grows per
+/// frame). The declared `MLP220 supersedes MLP204` edge only collapses
+/// SAME-span duplicates (DESIGN §7.3) and these anchors never coincide,
+/// so one scenario containing both patterns reports both defects, each at
+/// its own span — this is not a double report of one defect.
+#[test]
+fn mlp220_and_mlp204_are_distinct_defects_that_co_report() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("scene.py"),
+        "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        dot = Dot()
+        trace = TracedPath(dot.get_center)
+        marker = Square()
+        self.add(dot, trace, marker)
+        marker.add_updater(lambda m: self.add(Square()))
+        self.play(dot.animate.shift(RIGHT), run_time=4)
+        self.play(dot.animate.shift(UP), run_time=3)
+",
+    )
+    .unwrap();
+    assert_eq!(
+        observed(project.path()),
+        [
+            "scene.py:7:17 MLP220 warning high",
+            "scene.py:10:38 MLP204 warning high",
+        ]
+    );
+}
+
 #[test]
 fn mlp220_evidence_quantifies_span_and_points() {
     let project = copy_fixture("MLP220");

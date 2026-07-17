@@ -440,6 +440,76 @@ fn mld305_stays_silent_for_case_insensitive_target_platforms() {
     );
 }
 
+const MLD305_WITH_MLR104_PYPROJECT: &str = "\
+[tool.manim-lint]
+select = [\"MLD305\", \"MLR104\"]
+default-profile = \"render\"
+
+[[tool.manim-lint.profile]]
+name = \"render\"
+assets-dir = \"assets\"
+";
+
+/// The extension-augmented case-only mismatch scenario produces BOTH rules
+/// on the same literal span before dedup (`MLR104` sees an unresolved
+/// path, `MLD305` identifies its case-only cause); the declared
+/// `MLD305 supersedes MLR104` edge keeps only the specific finding, while
+/// `MLR104` keeps its own territory (a literal-level case rewrite and a
+/// genuinely missing file) untouched.
+#[test]
+fn mld305_supersedes_mlr104_on_the_shared_span() {
+    let (project, diagnostics) = run_fixture("MLD305", MLD305_WITH_MLR104_PYPROJECT);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning_high("MLD305", "\"ICON\""),
+            warning_high("MLD305", "\"Picture\""),
+        ],
+    );
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "valid.py",
+        &[
+            Expected::new(
+                "MLR104",
+                "\"Logo.svg\"",
+                1,
+                0,
+                Severity::Error,
+                Confidence::High,
+            ),
+            Expected::new(
+                "MLR104",
+                "\"absent.svg\"",
+                1,
+                0,
+                Severity::Error,
+                Confidence::High,
+            ),
+        ],
+    );
+}
+
+/// Supersession is part of diagnostic production and runs before inline
+/// suppression (see `application::check`): suppressing the specific
+/// `MLD305` silences the finding entirely — the superseded generic
+/// `MLR104` does NOT resurface at that span.
+#[test]
+fn suppressing_the_specific_rule_does_not_resurrect_the_superseded_generic() {
+    let (_project, diagnostics) = run_fixture("MLD305", MLD305_WITH_MLR104_PYPROJECT);
+    let suppressed: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path == "suppressed.py")
+        .collect();
+    assert!(
+        suppressed.is_empty(),
+        "ignore[MLD305] must silence the whole finding: {suppressed:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // MLD306
 // ---------------------------------------------------------------------------

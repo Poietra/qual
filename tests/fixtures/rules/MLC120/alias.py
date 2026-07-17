@@ -1,8 +1,8 @@
-from manim import Restore as Rewind, Scene as Sc, Square as Sq
+import manim as mn
 
 
-class Demo(Sc):
+class Demo(mn.Scene):
     def construct(self):
-        sq = Sq()
+        sq = mn.Square()
         self.add(sq)
-        self.play(Rewind(sq))
+        self.play(mn.Restore(sq))

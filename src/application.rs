@@ -160,6 +160,15 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         diagnostics.extend(rule.run(&context));
     }
 
+    // Supersession runs BEFORE suppression filtering, deliberately: the
+    // specificity dedup (DESIGN §7.3) is part of diagnostic *production* —
+    // the specific diagnostic permanently replaces the generic one as the
+    // single report of the finding. Inline-suppressing the specific rule
+    // therefore silences the finding entirely instead of resurrecting a
+    // generic duplicate the user never saw (which would demand stacked
+    // ignores for one defect). This also keeps the shared pass consistent
+    // with rule-internal pre-filters (e.g. MLP201 excluding MLP226's
+    // frame-varying calls), which never resurrect either.
     diagnostics = apply_supersedes(diagnostics);
 
     diagnostics.retain(|diagnostic| {
@@ -784,29 +793,58 @@ fn is_selected(diagnostic: &Diagnostic, select: &[String], ignore: &[String]) ->
     selected && !ignored
 }
 
+/// Sortable bucket key of a diagnostic's primary location: supersession
+/// only ever collapses diagnostics with the same path AND the same span.
+fn supersedes_bucket_key(diagnostic: &Diagnostic) -> (&str, usize, usize, usize, usize) {
+    (
+        diagnostic.path.as_str(),
+        diagnostic.primary_span.start.line,
+        diagnostic.primary_span.start.column,
+        diagnostic.primary_span.end.line,
+        diagnostic.primary_span.end.column,
+    )
+}
+
 /// Specificity dedup (DESIGN §7.3 end): when two diagnostics share a
 /// primary span and the rule of one declares `supersedes` over the rule of
 /// the other, only the more specific one is reported. Individual rules may
 /// additionally pre-filter (MLP201 excludes MLP226's frame-varying calls
 /// where the facts are computed); this shared pass makes the guarantee
 /// uniform for every declared pair regardless of where each rule anchors.
+///
+/// Diagnostics are bucketed by `(path, primary span)` first, so each
+/// diagnostic only consults the rules reported at its own location
+/// instead of scanning all n diagnostics (the pass is O(n log n), not
+/// O(n²)).
 fn apply_supersedes(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    let superseded: Vec<bool> = diagnostics
+    let mut superseded_ids_by_bucket: BTreeMap<
+        (&str, usize, usize, usize, usize),
+        Vec<&'static str>,
+    > = BTreeMap::new();
+    for diagnostic in &diagnostics {
+        let Some(metadata) = registry::metadata_for(&diagnostic.rule_id) else {
+            continue;
+        };
+        if metadata.supersedes.is_empty() {
+            continue;
+        }
+        superseded_ids_by_bucket
+            .entry(supersedes_bucket_key(diagnostic))
+            .or_default()
+            .extend(metadata.supersedes);
+    }
+    let keep: Vec<bool> = diagnostics
         .iter()
         .map(|diagnostic| {
-            diagnostics.iter().any(|other| {
-                other.path == diagnostic.path
-                    && other.primary_span == diagnostic.primary_span
-                    && registry::metadata_for(&other.rule_id).is_some_and(|metadata| {
-                        metadata.supersedes.contains(&diagnostic.rule_id.as_str())
-                    })
-            })
+            superseded_ids_by_bucket
+                .get(&supersedes_bucket_key(diagnostic))
+                .is_none_or(|ids| !ids.contains(&diagnostic.rule_id.as_str()))
         })
         .collect();
     diagnostics
         .into_iter()
-        .zip(superseded)
-        .filter_map(|(diagnostic, is_superseded)| (!is_superseded).then_some(diagnostic))
+        .zip(keep)
+        .filter_map(|(diagnostic, kept)| kept.then_some(diagnostic))
         .collect()
 }
 
@@ -925,4 +963,94 @@ fn run_config() -> Result<Execution, ApplicationError> {
         .map_err(|error| ApplicationError::Cli(error.to_string()))?;
     output.push('\n');
     Ok(Execution::success(output))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::{Confidence, Severity, SourcePosition, SourceSpan};
+
+    fn span(line: usize, column: usize) -> SourceSpan {
+        SourceSpan {
+            start: SourcePosition { line, column },
+            end: SourcePosition {
+                line,
+                column: column + 4,
+            },
+        }
+    }
+
+    fn diagnostic(rule_id: &str, path: &str, at: SourceSpan) -> Diagnostic {
+        Diagnostic {
+            rule_id: rule_id.to_owned(),
+            severity: Severity::Warning,
+            confidence: Confidence::High,
+            path: path.to_owned(),
+            primary_span: at,
+            message: String::new(),
+            explanation: None,
+            related_locations: Vec::new(),
+            evidence: BTreeMap::new(),
+            estimated_cost: None,
+            applicable_profiles: Vec::new(),
+            fix: None,
+        }
+    }
+
+    fn ids(diagnostics: &[Diagnostic]) -> Vec<&str> {
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.rule_id.as_str())
+            .collect()
+    }
+
+    /// Same path, same primary span: the declared specific rule (MLP226
+    /// supersedes MLP201) is the only survivor, in either input order.
+    #[test]
+    fn apply_supersedes_collapses_declared_pairs_on_one_span() {
+        let here = span(7, 39);
+        let collapsed = apply_supersedes(vec![
+            diagnostic("MLP201", "scene.py", here),
+            diagnostic("MLP226", "scene.py", here),
+        ]);
+        assert_eq!(ids(&collapsed), ["MLP226"]);
+        let collapsed = apply_supersedes(vec![
+            diagnostic("MLP226", "scene.py", here),
+            diagnostic("MLP201", "scene.py", here),
+        ]);
+        assert_eq!(ids(&collapsed), ["MLP226"]);
+    }
+
+    /// A different span or a different file is never collapsed: the
+    /// supersedes relation only holds for one primary location (DESIGN
+    /// §7.3 "same primary span, same evidence").
+    #[test]
+    fn apply_supersedes_keeps_distinct_locations() {
+        let kept = apply_supersedes(vec![
+            diagnostic("MLP226", "scene.py", span(7, 39)),
+            diagnostic("MLP201", "scene.py", span(9, 39)),
+            diagnostic("MLP201", "other.py", span(7, 39)),
+            // MLP220 supersedes MLP204, but only ever on a shared span;
+            // anchored apart they are two distinct defects (see
+            // rules::performance::traced_path).
+            diagnostic("MLP220", "scene.py", span(11, 17)),
+            diagnostic("MLP204", "scene.py", span(12, 37)),
+        ]);
+        assert_eq!(
+            ids(&kept),
+            ["MLP226", "MLP201", "MLP201", "MLP220", "MLP204"]
+        );
+    }
+
+    /// Rules with no metadata (never produced by the registry) and rules
+    /// with an empty supersedes list pass through untouched.
+    #[test]
+    fn apply_supersedes_ignores_undeclared_rules() {
+        let here = span(3, 1);
+        let kept = apply_supersedes(vec![
+            diagnostic("MLC101", "scene.py", here),
+            diagnostic("MLR104", "scene.py", here),
+        ]);
+        assert_eq!(ids(&kept), ["MLC101", "MLR104"]);
+    }
 }

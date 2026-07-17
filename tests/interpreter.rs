@@ -625,3 +625,36 @@ fn target_requirements_track_all_paths() {
     assert_eq!(maybe.target_requirements.len(), 1);
     assert_eq!(maybe.target_requirements[0].presence, Presence::Maybe);
 }
+
+// ---------------------------------------------------------------------------
+// Module-alias constructors resolve through the qualified-call facts.
+// ---------------------------------------------------------------------------
+
+/// `import manim as mn; mn.Square()` must allocate a tracked object and
+/// `mn.FadeOut(sq)` must resolve to the curated remover animation — the
+/// interpreter bridges attribute callees whose receiver the frontend
+/// classified as `ModuleAlias` into the same candidate machinery as
+/// direct names instead of widening them to Unknown (which silenced the
+/// state rules under module-alias import style).
+#[test]
+fn module_alias_constructor_allocates_tracked_object() {
+    let (sources, _facts, lifecycle) = analyze(&["module_alias.py"]);
+    let alias = scene(&lifecycle, "module_alias.AliasScene");
+    let sq = alloc_id(alias, &sources, "mn.Square()");
+    assert_eq!(sq.cardinality, Cardinality::Singleton);
+
+    // Membership just before the play: present (self.add tracked it).
+    let at_play = offset_of(&sources, alias.file, "self.play");
+    assert_eq!(
+        alias.membership_at(&sq, alias.file, at_play),
+        Some((Presence::Present, Presence::Present))
+    );
+
+    // `mn.FadeOut` resolved to the curated remover: cleanup removes sq.
+    assert_eq!(alias.plays.len(), 1);
+    assert_eq!(alias.plays[0].kind, PlayKind::Play);
+    assert_eq!(
+        alias.final_membership(&sq),
+        Some((Presence::Absent, Presence::Absent))
+    );
+}

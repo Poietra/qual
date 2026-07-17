@@ -40,7 +40,7 @@ use rustpython_parser::text_size::TextRange;
 use crate::frontend::cfg::{BasicBlock, CfgStmt, ControlFlowGraph, Terminator};
 use crate::frontend::index::{
     CallableSignature, ClassRecord, LiteralFact, ParamKind, ProjectIndex, QualifiedCall,
-    QualifiedCallFacts,
+    QualifiedCallFacts, ReceiverKind,
 };
 use crate::knowledge::{KnowledgeProfile, SceneMembershipEffect, SymbolEntry, SymbolKind};
 use crate::semantic::events::{self, CleanupEffect, Event, InvocationContext, MutationKind};
@@ -2565,6 +2565,18 @@ impl<'a> Machine<'a, '_> {
             return self.dispatch_super(&method, call, fact, state);
         }
         if let ast::Expr::Attribute(attribute) = call.func.as_ref() {
+            // Module-alias callees (`import manim as mn; mn.Square()`):
+            // the frontend classified the receiver as an imported module
+            // binding (branch-aware — a name rebound on any path is not
+            // `ModuleAlias`) and resolved the canonical candidates, so
+            // such a call goes through the same candidate machinery as a
+            // direct name. A module attribute can never be a tracked
+            // object / builder / scene value, so no method dispatch is
+            // lost; without this bridge the call would widen to Unknown
+            // and silence every state rule under module-alias imports.
+            if fact.is_some_and(|fact| fact.receiver == ReceiverKind::ModuleAlias) {
+                return self.dispatch_direct(call, fact, state);
+            }
             let base = self.eval_expr(&attribute.value, state);
             let method = attribute.attr.to_string();
             return match base {

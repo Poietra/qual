@@ -28,6 +28,17 @@ pub const MLP220: RuleMetadata = RuleMetadata {
     implementation_phase: 3,
     required_profiles: &[],
     required_capabilities: &["qualified-calls", "lifecycle", "cost-facts"],
+    // DESIGN §7.3 declares this specificity edge for the catalog, but the
+    // shared dedup only collapses diagnostics on the SAME primary span.
+    // This rule anchors on the `TracedPath` constructor while `MLP204`
+    // anchors on a per-frame `Scene.add` call, and the two describe
+    // genuinely different defects: the path's *internal* point history
+    // growing frame by frame versus the *user's* scene graph gaining a
+    // fresh mobject per frame. `MLP204` can never fire on a `TracedPath`
+    // construction (it requires an add-effect call in a hot context), so
+    // one defect is never double-reported; a scenario containing both
+    // patterns intentionally reports both, each at its own span (pinned
+    // by `mlp220_and_mlp204_are_distinct_defects_that_co_report`).
     supersedes: &["MLP204", "MLP211"],
 };
 

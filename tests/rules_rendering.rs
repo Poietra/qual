@@ -248,8 +248,14 @@ fn mlr102_flags_played_bare_animate_with_unchanged_displayed_target() {
         ],
     );
     // valid.py's stale-builder near miss is deliberately real MLC117
-    // territory (see the fixture comment): the mutation between builder
-    // creation and play is a true MLC117 finding, while MLR102 stays silent.
+    // territory (see the fixture comment), verified against upstream
+    // Manim: `_AnimationBuilder.__init__` runs `mobject.generate_target()`
+    // the moment `.animate` is read, and `build()` produces a
+    // `_MethodAnimation` (a `MoveToTarget`) toward that snapshot
+    // (manim/mobject/mobject.py, manim/animation/transform.py). Mutating
+    // the live mobject between builder creation and play therefore snaps
+    // it back to the stale target — a true MLC117 finding, while MLR102
+    // (a visual no-op) stays silent.
     assert_file_diagnostics(
         project.path(),
         &diagnostics,
