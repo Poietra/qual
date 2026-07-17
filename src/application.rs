@@ -10,6 +10,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use crate::cli::{CheckArgs, Command, ExitStatus};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
+use crate::cost;
 use crate::diagnostic::Diagnostic;
 use crate::frontend::{self, ManimSurface};
 use crate::knowledge::{self, KnowledgeProfile, SymbolKind};
@@ -17,6 +18,7 @@ use crate::reporting::fixes::FixReport;
 use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
 use crate::rules::registry;
+use crate::semantic;
 use crate::source::SourceManager;
 
 /// Errors that abort a command; all map to exit code 2.
@@ -149,11 +151,12 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         }
     }
 
-    let surface = manim_surface(&profile);
-    let facts = frontend::index::analyze(&sources, &config.source_roots, &surface);
+    let facts = compute_facts(&sources, &config, &profile);
     let context = RuleContext::new(&sources, &config)
         .with_knowledge(&profile)
-        .with_frontend(facts.index, facts.calls);
+        .with_frontend(facts.index, facts.calls)
+        .with_lifecycle(facts.lifecycle)
+        .with_cost(facts.cost);
     for rule in registry::all_rules() {
         diagnostics.extend(rule.run(&context));
     }
@@ -269,6 +272,41 @@ pub fn manim_surface(profile: &KnowledgeProfile) -> ManimSurface {
         }
     }
     surface
+}
+
+/// The full fact stack a `check` run feeds to the rules.
+struct ProjectFacts {
+    index: frontend::index::ProjectIndex,
+    calls: frontend::index::QualifiedCallFacts,
+    lifecycle: semantic::interpreter::LifecycleFacts,
+    cost: cost::CostFacts,
+}
+
+/// Runs the fixed fact-layer pipeline (DESIGN §5.1): frontend facts, then
+/// the lifecycle abstract interpreter over the discovered scenes, then the
+/// symbolic cost model. Rules only ever see the result.
+fn compute_facts(
+    sources: &SourceManager,
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+) -> ProjectFacts {
+    let surface = manim_surface(profile);
+    let facts = frontend::index::analyze(sources, &config.source_roots, &surface);
+    let lifecycle =
+        semantic::interpreter::analyze(sources, &facts.index, &facts.calls, Some(profile));
+    let cost = cost::CostFacts::compute(
+        sources,
+        &facts.index,
+        &facts.calls,
+        Some(profile),
+        &config.active_profiles,
+    );
+    ProjectFacts {
+        index: facts.index,
+        calls: facts.calls,
+        lifecycle,
+        cost,
+    }
 }
 
 fn validate_flag_combinations(args: &CheckArgs) -> Result<(), ApplicationError> {
@@ -508,9 +546,28 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 2] = [
+    const DOCS: [(&str, &str); 21] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
+        ("MLC101", include_str!("../docs/rules/MLC101.md")),
+        ("MLC102", include_str!("../docs/rules/MLC102.md")),
+        ("MLC103", include_str!("../docs/rules/MLC103.md")),
+        ("MLC104", include_str!("../docs/rules/MLC104.md")),
+        ("MLC105", include_str!("../docs/rules/MLC105.md")),
+        ("MLC106", include_str!("../docs/rules/MLC106.md")),
+        ("MLC109", include_str!("../docs/rules/MLC109.md")),
+        ("MLC122", include_str!("../docs/rules/MLC122.md")),
+        ("MLC126", include_str!("../docs/rules/MLC126.md")),
+        ("MLC127", include_str!("../docs/rules/MLC127.md")),
+        ("MLR101", include_str!("../docs/rules/MLR101.md")),
+        ("MLR103", include_str!("../docs/rules/MLR103.md")),
+        ("MLR104", include_str!("../docs/rules/MLR104.md")),
+        ("MLR105", include_str!("../docs/rules/MLR105.md")),
+        ("MLR106", include_str!("../docs/rules/MLR106.md")),
+        ("MLR115", include_str!("../docs/rules/MLR115.md")),
+        ("MLR117", include_str!("../docs/rules/MLR117.md")),
+        ("MLR124", include_str!("../docs/rules/MLR124.md")),
+        ("MLR126", include_str!("../docs/rules/MLR126.md")),
     ];
     let normalized = rule.to_ascii_uppercase();
     if let Some((_, text)) = DOCS.iter().find(|(id, _)| *id == normalized) {

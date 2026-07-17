@@ -41,13 +41,10 @@ pub use crate::frontend::index::ProjectIndex as ProjectIndexFacts;
 /// Phase-2 rule should read).
 pub use crate::semantic::interpreter::LifecycleFacts;
 
-/// Symbolic cost facts (invocation contexts and multiplicities).
-///
-/// TODO(phase-3): populated by `cost::estimator` with per-operation
-/// `Cost(operation, dimensions, invocation_context, multiplicity)` facts.
-#[derive(Debug, Default)]
-#[non_exhaustive]
-pub struct CostFacts {}
+/// Symbolic cost facts (hot contexts, multiplicities, frame estimates, and
+/// per-operation cost facts) produced by [`crate::cost::CostFacts::compute`]
+/// (DESIGN §4).
+pub use crate::cost::CostFacts;
 
 /// Everything a rule may query about the analyzed project.
 ///
@@ -109,6 +106,16 @@ impl<'a> RuleContext<'a> {
         self
     }
 
+    /// Attaches symbolic cost facts (`cost::CostFacts::compute`).
+    ///
+    /// Without this call the context keeps an empty default — no cost
+    /// analysis ran — and cost-driven rules must stay silent.
+    #[must_use]
+    pub fn with_cost(mut self, cost: CostFacts) -> Self {
+        self.cost_facts = cost;
+        self
+    }
+
     /// Parsed files, tokens, comments, and span conversions.
     #[must_use]
     pub const fn sources(&self) -> &'a SourceManager {
@@ -161,9 +168,10 @@ impl<'a> RuleContext<'a> {
         &self.lifecycle_facts
     }
 
-    /// Symbolic cost facts.
+    /// Symbolic cost facts (hot contexts, frame estimates, evidence).
     ///
-    /// TODO(phase-3): currently empty.
+    /// Empty unless attached via [`RuleContext::with_cost`]; an empty fact
+    /// set means "not analyzed", never "provably cold".
     #[must_use]
     pub const fn cost_facts(&self) -> &CostFacts {
         &self.cost_facts
