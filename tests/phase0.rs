@@ -3,7 +3,7 @@
 //! a syntax error in one file never stops the others, and the JSON output
 //! matches the v1 schema requirements.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use manim_lint::application::{self, check};
 use manim_lint::cli::{CheckArgs, Command, ExitStatus};
@@ -238,13 +238,22 @@ fn unknown_selector_on_cli_is_a_config_error() {
 }
 
 #[test]
-fn cost_command_is_a_phase3_error() {
-    let result = application::execute(Command::Cost {
-        path: PathBuf::from("."),
+fn cost_command_reports_a_scene_breakdown() {
+    // Phase 3 delivered `manim-lint cost`; detailed golden coverage lives
+    // in `tests/cost_command.rs`.
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("demo.py"),
+        "from manim import *\n\n\nclass Demo(Scene):\n    def construct(self):\n        self.wait(2)\n",
+    )
+    .unwrap();
+    let execution = application::execute(Command::Cost {
+        path: project.path().to_path_buf(),
         scene: None,
-    });
-    let error = result.expect_err("cost must fail");
-    assert!(error.to_string().contains("Phase 3"));
+    })
+    .expect("cost runs in Phase 3");
+    assert!(execution.stdout.contains("scene demo.Demo"));
+    assert!(execution.stdout.contains("wait duration 2 s"));
 }
 
 #[test]

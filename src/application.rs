@@ -19,6 +19,7 @@ use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
 use crate::rules::registry;
 use crate::semantic;
+use crate::semantic::interpreter::SceneLifecycle;
 use crate::source::SourceManager;
 
 /// Errors that abort a command; all map to exit code 2.
@@ -78,9 +79,7 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
         Command::Explain { rule } => run_explain(&rule),
         Command::Rules => Ok(Execution::success(render_rules())),
         Command::Config => run_config(),
-        Command::Cost { .. } => Err(ApplicationError::Unimplemented(
-            "`manim-lint cost` is not implemented until Phase 3".to_owned(),
-        )),
+        Command::Cost { path, scene } => run_cost(&path, scene.as_deref()),
     }
 }
 
@@ -307,6 +306,258 @@ fn compute_facts(
         lifecycle,
         cost,
     }
+}
+
+/// Runs `manim-lint cost PATH [--scene NAME]` (DESIGN §8.1, §4.1): a
+/// per-scene symbolic cost breakdown over the lifecycle and cost facts.
+///
+/// Unknown quantities are printed as "unknown" / "per-frame", never as a
+/// number (DESIGN §15 invariant 9); an unknown `--scene` name is a CLI
+/// error (exit code 2).
+pub fn run_cost(path: &Path, scene_filter: Option<&str>) -> Result<Execution, ApplicationError> {
+    let args = CheckArgs {
+        paths: vec![path.to_path_buf()],
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+    let mut sources = SourceManager::new(project_root);
+    for file in &files {
+        sources.load_file(file);
+    }
+    let facts = compute_facts(&sources, &config, &profile);
+    let output = render_cost_report(&sources, &config, &facts, scene_filter)?;
+    Ok(Execution::success(output))
+}
+
+/// Renders the per-scene cost report over the computed fact stack.
+fn render_cost_report(
+    sources: &SourceManager,
+    config: &ResolvedConfig,
+    facts: &ProjectFacts,
+    scene_filter: Option<&str>,
+) -> Result<String, ApplicationError> {
+    let scenes: Vec<&SceneLifecycle> = facts
+        .lifecycle
+        .scenes
+        .iter()
+        .filter(|scene| {
+            scene_filter.is_none_or(|name| {
+                scene.qualified_name == name
+                    || scene.qualified_name.rsplit('.').next() == Some(name)
+            })
+        })
+        .collect();
+    if let Some(name) = scene_filter {
+        if scenes.is_empty() {
+            let known: Vec<&str> = facts
+                .lifecycle
+                .scenes
+                .iter()
+                .map(|scene| scene.qualified_name.as_str())
+                .collect();
+            return Err(ApplicationError::Cli(if known.is_empty() {
+                format!("unknown scene: {name} (no scenes were discovered)")
+            } else {
+                format!(
+                    "unknown scene: {name} (discovered scenes: {})",
+                    known.join(", ")
+                )
+            }));
+        }
+    }
+
+    let mut output = String::new();
+    let profile_list = config
+        .active_profiles
+        .iter()
+        .map(|profile| {
+            format!(
+                "{name} ({renderer}, {width}x{height}, {fps} fps)",
+                name = profile.name,
+                renderer = profile.renderer,
+                width = profile.pixel_width,
+                height = profile.pixel_height,
+                fps = profile.frame_rate,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(output, "profiles: {profile_list}");
+    if scenes.is_empty() {
+        let _ = writeln!(output, "no scenes discovered");
+        return Ok(output);
+    }
+    for scene in scenes {
+        render_scene_cost(&mut output, sources, config, facts, scene);
+    }
+    Ok(output)
+}
+
+/// Renders one scene section of the cost report.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear block per report section; splitting adds no clarity"
+)]
+fn render_scene_cost(
+    output: &mut String,
+    sources: &SourceManager,
+    config: &ResolvedConfig,
+    facts: &ProjectFacts,
+    scene: &SceneLifecycle,
+) {
+    use crate::rules::performance::support::{display_frames, display_seconds, scene_frames_after};
+    use crate::semantic::interpreter::PlayKind;
+
+    let profiles = &config.active_profiles;
+    let scene_file = sources.file(scene.file);
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "scene {name} ({path})",
+        name = scene.qualified_name,
+        path = scene_file.relative_path(),
+    );
+
+    // Play list: one row per direct lifecycle play, with the frame estimate
+    // joined across the analyzed profiles.
+    let _ = writeln!(output, "  plays:");
+    if scene.plays.is_empty() {
+        let _ = writeln!(output, "    (none)");
+    }
+    for play in &scene.plays {
+        let kind = match play.kind {
+            PlayKind::Play => "play",
+            PlayKind::Wait => "wait",
+        };
+        let frames = cost::estimator::frames_across_profiles(&play.duration, profiles);
+        let _ = writeln!(
+            output,
+            "    {location} {kind} duration {duration} -> frames {frames}",
+            location = cost_location(sources, play.site.file, play.site.start),
+            duration = display_seconds(&play.duration),
+            frames = display_frames(&frames),
+        );
+    }
+
+    // Hot contexts entered from this scene class: entry kind, provenance
+    // chain, and non-neutral multiplicity factors.
+    let _ = writeln!(output, "  hot contexts:");
+    let mut context_lines: Vec<String> = Vec::new();
+    for (call_index, contexts) in &facts.cost.hot.call_contexts {
+        let call = &facts.calls.calls[*call_index];
+        if call.context.class_name.as_deref() != Some(scene.qualified_name.as_str()) {
+            continue;
+        }
+        for context in contexts {
+            let Some(entry_step) = context.chain.first() else {
+                continue;
+            };
+            let factors = cost::estimator::multiplicity_factor_names(&context.multiplicity);
+            let line = format!(
+                "    {location} entry {entry}; path {path}; factors {factors}",
+                location = cost_location(
+                    sources,
+                    entry_step.file,
+                    u32::from(entry_step.range.start())
+                ),
+                entry = context.entry.label(),
+                path = context.state_path().join(" -> "),
+                factors = if factors.is_empty() {
+                    "none".to_owned()
+                } else {
+                    factors.join(" x ")
+                },
+            );
+            if !context_lines.contains(&line) {
+                context_lines.push(line);
+            }
+        }
+    }
+    if context_lines.is_empty() {
+        let _ = writeln!(output, "    (none)");
+    }
+    for line in &context_lines {
+        let _ = writeln!(output, "{line}");
+    }
+
+    // Per-frame constructions reachable from those contexts.
+    let _ = writeln!(output, "  per-frame constructions:");
+    let mut construction_rows = 0_usize;
+    for construction in facts.cost.constructions_in_hot_contexts() {
+        let call = &facts.calls.calls[construction.call_index];
+        if call.context.class_name.as_deref() != Some(scene.qualified_name.as_str()) {
+            continue;
+        }
+        construction_rows += 1;
+        let invocations = scene_frames_after(scene, call, profiles).map_or_else(
+            || "per-frame".to_owned(),
+            |frames| {
+                format!(
+                    "{} invocations across literal plays",
+                    display_frames(&frames)
+                )
+            },
+        );
+        let _ = writeln!(
+            output,
+            "    {location} {class} construction x {invocations}",
+            location = cost_location(sources, call.file, u32::from(call.call_range.start())),
+            class = short_class_name(&construction.symbol),
+        );
+    }
+    if construction_rows == 0 {
+        let _ = writeln!(output, "    (none)");
+    }
+
+    // Frame-varying resource keys: distinct Text/TeX/SVG cache keys grow
+    // with the frame count (`K_resource ≈ F`).
+    let _ = writeln!(output, "  resource-key growth:");
+    let mut resource_rows = 0_usize;
+    for fact in facts.cost.frame_varying_resource_keys() {
+        let call = &facts.calls.calls[fact.call_index];
+        if call.context.class_name.as_deref() != Some(scene.qualified_name.as_str()) {
+            continue;
+        }
+        resource_rows += 1;
+        let keys = scene_frames_after(scene, call, profiles).map_or_else(
+            || "one per rendered frame".to_owned(),
+            |frames| format!("{} across literal plays", display_frames(&frames)),
+        );
+        let _ = writeln!(
+            output,
+            "    {location} {class} distinct cache keys: {keys} (f-string key varies per frame)",
+            location = cost_location(sources, call.file, u32::from(call.call_range.start())),
+            class = short_class_name(&fact.symbol),
+        );
+    }
+    if resource_rows == 0 {
+        let _ = writeln!(output, "    (none)");
+    }
+}
+
+/// `path:line:column` of a byte offset, for cost-report rows.
+fn cost_location(sources: &SourceManager, file: crate::source::FileId, byte: u32) -> String {
+    let source_file = sources.file(file);
+    let position = source_file.position_of_byte(byte as usize);
+    format!(
+        "{path}:{line}:{column}",
+        path = source_file.relative_path(),
+        line = position.line,
+        column = position.column,
+    )
+}
+
+/// The unqualified class name of a canonical id.
+fn short_class_name(canonical: &str) -> &str {
+    canonical.rsplit('.').next().unwrap_or(canonical)
 }
 
 fn validate_flag_combinations(args: &CheckArgs) -> Result<(), ApplicationError> {
@@ -546,7 +797,7 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 34] = [
+    const DOCS: [(&str, &str); 52] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -573,14 +824,32 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLC128", include_str!("../docs/rules/MLC128.md")),
         ("MLC129", include_str!("../docs/rules/MLC129.md")),
         ("MLR101", include_str!("../docs/rules/MLR101.md")),
+        ("MLR102", include_str!("../docs/rules/MLR102.md")),
         ("MLR103", include_str!("../docs/rules/MLR103.md")),
         ("MLR104", include_str!("../docs/rules/MLR104.md")),
         ("MLR105", include_str!("../docs/rules/MLR105.md")),
         ("MLR106", include_str!("../docs/rules/MLR106.md")),
+        ("MLR113", include_str!("../docs/rules/MLR113.md")),
+        ("MLR114", include_str!("../docs/rules/MLR114.md")),
         ("MLR115", include_str!("../docs/rules/MLR115.md")),
         ("MLR117", include_str!("../docs/rules/MLR117.md")),
         ("MLR124", include_str!("../docs/rules/MLR124.md")),
+        ("MLR125", include_str!("../docs/rules/MLR125.md")),
         ("MLR126", include_str!("../docs/rules/MLR126.md")),
+        ("MLR127", include_str!("../docs/rules/MLR127.md")),
+        ("MLD301", include_str!("../docs/rules/MLD301.md")),
+        ("MLD302", include_str!("../docs/rules/MLD302.md")),
+        ("MLD303", include_str!("../docs/rules/MLD303.md")),
+        ("MLD304", include_str!("../docs/rules/MLD304.md")),
+        ("MLD305", include_str!("../docs/rules/MLD305.md")),
+        ("MLD306", include_str!("../docs/rules/MLD306.md")),
+        ("MLD307", include_str!("../docs/rules/MLD307.md")),
+        ("MLP201", include_str!("../docs/rules/MLP201.md")),
+        ("MLP204", include_str!("../docs/rules/MLP204.md")),
+        ("MLP205", include_str!("../docs/rules/MLP205.md")),
+        ("MLP206", include_str!("../docs/rules/MLP206.md")),
+        ("MLP220", include_str!("../docs/rules/MLP220.md")),
+        ("MLP226", include_str!("../docs/rules/MLP226.md")),
     ];
     let normalized = rule.to_ascii_uppercase();
     if let Some((_, text)) = DOCS.iter().find(|(id, _)| *id == normalized) {
