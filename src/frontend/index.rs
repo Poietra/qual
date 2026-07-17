@@ -12,8 +12,10 @@
 //!   fully qualified targets plus receiver classification, argument summary,
 //!   and enclosing context.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
+use rustpython_parser::Tok;
 use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 
@@ -118,6 +120,11 @@ pub struct ProjectIndex {
     pub mobject_classes: BTreeSet<String>,
     /// Qualified names of discovered Manim Animation subclasses.
     pub animation_classes: BTreeSet<String>,
+    /// Declared signatures of module-level functions and directly defined
+    /// methods, keyed by qualified name (`pkg.mod.helper`,
+    /// `pkg.mod.Class.method`). Names redefined with conflicting signatures
+    /// are absent; lookups never guess.
+    pub function_signatures: BTreeMap<String, CallableSignature>,
 }
 
 impl ProjectIndex {
@@ -135,6 +142,17 @@ impl ProjectIndex {
     #[must_use]
     pub fn is_scene_class(&self, qualified_name: &str) -> bool {
         self.scene_classes.contains(qualified_name)
+    }
+
+    /// Declared signature of a module- or class-level project function by
+    /// qualified name (`pkg.mod.helper`, `pkg.mod.Class.method`).
+    ///
+    /// `None` for unknown names, nested (closure) defs, and names redefined
+    /// with conflicting signatures. Method signatures include the written
+    /// `self` parameter.
+    #[must_use]
+    pub fn function_signature(&self, qualified_name: &str) -> Option<&CallableSignature> {
+        self.function_signatures.get(qualified_name)
     }
 
     /// Candidate qualified targets for calling `method` on an instance of
@@ -198,20 +216,123 @@ pub enum ReceiverKind {
     Unknown,
 }
 
+/// A bare (uncalled) attribute reference passed as an argument,
+/// e.g. `mob.shift` in `self.play(mob.shift, RIGHT)`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AttributeRef {
+    /// Final attribute name (`shift` in `mob.shift`).
+    pub name: String,
+    /// Classification of the base expression, produced by the same
+    /// resolution machinery as callee receivers.
+    pub receiver: ReceiverKind,
+    /// Candidate qualified ids for the attribute (e.g.
+    /// `manim.mobject.geometry.polygram.Square.shift`). Empty when the base
+    /// cannot be classified; resolution never guesses.
+    pub candidates: BTreeSet<String>,
+}
+
 /// Shape of one call argument.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArgShape {
     /// The argument is itself a call; carries the index of its own
     /// [`QualifiedCall`] fact inside [`QualifiedCallFacts::calls`].
     Call(usize),
-    /// A literal constant (including f-strings).
+    /// A literal constant (including f-strings and numbers with a folded
+    /// leading unary minus).
     Literal,
     /// A plain name.
     Name,
     /// A lambda expression.
     Lambda,
-    /// Anything else (attribute chains, starred args, comprehensions, ...).
+    /// A bare attribute reference (`mob.shift` without a call).
+    Attribute(AttributeRef),
+    /// Anything else (starred args, comprehensions, arithmetic, ...).
     Other,
+}
+
+/// Prefix summary of a string literal (covering every implicit
+/// concatenation part).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StrPrefix {
+    /// Every string part carries a raw prefix (`r"..."` / `rb"..."`).
+    /// False when any part is non-raw (mixed concatenations included).
+    pub raw: bool,
+    /// The literal is a bytes literal (`b"..."`).
+    pub bytes: bool,
+    /// The literal contains an f-string part. Currently always false
+    /// because f-strings never produce a [`LiteralFact::Str`]; the field is
+    /// reserved for forward compatibility.
+    pub formatted: bool,
+}
+
+/// Statically known value of a literal argument expression.
+///
+/// A single leading unary minus is folded into numbers: `play(run_time=-1)`
+/// yields `Int(-1)`. Integers that do not fit `i64`, complex literals,
+/// f-strings, and tuples yield no fact at all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LiteralFact {
+    /// An integer literal (possibly negated) that fits `i64`.
+    Int(i64),
+    /// A float literal (possibly negated).
+    Float(f64),
+    /// A string or bytes literal whose runtime value is fully static,
+    /// including implicit concatenation of plain parts. F-strings never
+    /// produce this fact.
+    Str {
+        /// Decoded runtime value with all implicit-concatenation parts
+        /// joined. Bytes literals carry the lossy UTF-8 view.
+        value: String,
+        /// Prefix summary of the underlying string token(s).
+        prefix: StrPrefix,
+        /// Byte range covering the literal expression exactly (prefix and
+        /// quotes included); `SourceFile::slice` yields the raw source
+        /// text, which raw-escape rules must inspect.
+        range: TextRange,
+    },
+    /// A boolean literal.
+    Bool(bool),
+    /// The `None` literal.
+    NoneLit,
+}
+
+/// Float literals parsed from source are never NaN, so equality is total.
+impl Eq for LiteralFact {}
+
+/// How one declared parameter binds at call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ParamKind {
+    /// Before a `/` marker: positional binding only.
+    PositionalOnly,
+    /// A regular parameter: positional or keyword binding.
+    PositionalOrKeyword,
+    /// A `*args` parameter.
+    VarArgs,
+    /// After a `*` or `*args` marker: keyword binding only.
+    KeywordOnly,
+    /// A `**kwargs` parameter.
+    KwArgs,
+}
+
+/// One declared parameter of a project function or lambda.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ParamFact {
+    /// Parameter name as written.
+    pub name: String,
+    /// Binding kind.
+    pub kind: ParamKind,
+    /// Whether the parameter declares a default value (`*args` / `**kwargs`
+    /// never do).
+    pub has_default: bool,
+}
+
+/// Declared signature of a project function or lambda, in declaration
+/// order (positional-only, positional-or-keyword, `*args`, keyword-only,
+/// `**kwargs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CallableSignature {
+    /// Every declared parameter in order.
+    pub params: Vec<ParamFact>,
 }
 
 /// One argument of a call, in source order (positional then keyword).
@@ -223,6 +344,17 @@ pub struct CallArgument {
     pub shape: ArgShape,
     /// Byte range of the argument expression.
     pub range: TextRange,
+    /// Statically known literal value; `None` when the argument is not a
+    /// plain (possibly negated or implicitly concatenated) literal.
+    pub literal: Option<LiteralFact>,
+    /// Canonical class ids the argument value is known to instantiate via
+    /// straight-line tracking (`sq = Square(); play(sq)`). Empty when
+    /// unknown; never a guess.
+    pub kind_candidates: BTreeSet<String>,
+    /// Declared signature when the argument is a lambda or a name resolving
+    /// to a module- or class-level project function def. `None` when the
+    /// callable cannot be resolved; never a guess.
+    pub callable_signature: Option<CallableSignature>,
 }
 
 /// Enclosing context of a call site.
@@ -257,8 +389,42 @@ pub struct QualifiedCall {
     pub keyword_names: BTreeSet<String>,
     /// Every argument in source order.
     pub arguments: Vec<CallArgument>,
+    /// True when a positional argument is a `*args` splat: positional
+    /// counts and positions are then a lower bound and count-based rules
+    /// must skip this call.
+    pub has_star_args: bool,
+    /// True when a `**kwargs` splat is present: keyword names are then
+    /// incomplete and keyword-presence rules must skip this call.
+    pub has_star_star_kwargs: bool,
     /// Enclosing module / class / method.
     pub context: CallContext,
+}
+
+impl QualifiedCall {
+    /// The argument passed with keyword `name`, if written explicitly.
+    ///
+    /// A `**kwargs` splat may still supply the keyword at runtime; check
+    /// [`QualifiedCall::has_star_star_kwargs`] before treating `None` as
+    /// absence.
+    #[must_use]
+    pub fn keyword(&self, name: &str) -> Option<&CallArgument> {
+        self.arguments
+            .iter()
+            .find(|argument| argument.keyword.as_deref() == Some(name))
+    }
+
+    /// The `index`-th positional argument as written at the call site.
+    ///
+    /// A `*args` splat occupies a single position here; check
+    /// [`QualifiedCall::has_star_args`] before reasoning about positions.
+    #[must_use]
+    pub fn positional(&self, index: usize) -> Option<&CallArgument> {
+        if index < self.positional_count {
+            self.arguments.get(index)
+        } else {
+            None
+        }
+    }
 }
 
 /// All qualified call facts of the project, in file / source order.
@@ -474,6 +640,9 @@ struct Walker<'a> {
     module_unknown_star: bool,
     facts: Vec<QualifiedCall>,
     class_records: Vec<ClassRecord>,
+    /// Declared signatures of module-level functions and directly defined
+    /// methods, collected in bind mode.
+    signatures: Vec<(String, CallableSignature)>,
     all_names: Option<BTreeSet<String>>,
     all_invalid: bool,
     class_stack: Vec<String>,
@@ -796,8 +965,9 @@ impl Walker<'_> {
             self.scan(decorator, scopes);
         }
         let qualified = self.qualified(name.as_str());
-        scopes.bind(name.as_str(), Binding::LocalFunction(qualified));
+        scopes.bind(name.as_str(), Binding::LocalFunction(qualified.clone()));
         if self.mode == WalkMode::Bind {
+            self.signatures.push((qualified, signature_of(args)));
             return;
         }
         // Default expressions are evaluated in the enclosing scope.
@@ -886,6 +1056,10 @@ impl Walker<'_> {
             match stmt {
                 ast::Stmt::FunctionDef(method) => {
                     let method_qualified = self.qualified(method.name.as_str());
+                    if self.mode == WalkMode::Bind {
+                        self.signatures
+                            .push((method_qualified.clone(), signature_of(&method.args)));
+                    }
                     scopes.bind(
                         method.name.as_str(),
                         Binding::LocalFunction(method_qualified),
@@ -894,6 +1068,10 @@ impl Walker<'_> {
                 }
                 ast::Stmt::AsyncFunctionDef(method) => {
                     let method_qualified = self.qualified(method.name.as_str());
+                    if self.mode == WalkMode::Bind {
+                        self.signatures
+                            .push((method_qualified.clone(), signature_of(&method.args)));
+                    }
                     scopes.bind(
                         method.name.as_str(),
                         Binding::LocalFunction(method_qualified),
@@ -1140,32 +1318,35 @@ impl Walker<'_> {
 
         let mut arguments = Vec::new();
         let mut positional_count = 0;
+        let mut has_star_args = false;
         for arg in &call.args {
             positional_count += 1;
-            let shape = if let ast::Expr::Starred(starred) = arg {
+            if let ast::Expr::Starred(starred) = arg {
+                has_star_args = true;
                 self.visit_expr(&starred.value, scopes);
-                ArgShape::Other
+                arguments.push(CallArgument {
+                    keyword: None,
+                    shape: ArgShape::Other,
+                    range: arg.range(),
+                    literal: None,
+                    kind_candidates: BTreeSet::new(),
+                    callable_signature: None,
+                });
             } else {
-                self.argument_shape(arg, scopes)
-            };
-            arguments.push(CallArgument {
-                keyword: None,
-                shape,
-                range: arg.range(),
-            });
+                arguments.push(self.argument_fact(arg, None, scopes));
+            }
         }
         let mut keyword_names = BTreeSet::new();
+        let mut has_star_star_kwargs = false;
         for keyword in &call.keywords {
-            let shape = self.argument_shape(&keyword.value, scopes);
             let name = keyword.arg.as_ref().map(std::string::ToString::to_string);
-            if let Some(name) = &name {
-                keyword_names.insert(name.clone());
+            match &name {
+                Some(name) => {
+                    keyword_names.insert(name.clone());
+                }
+                None => has_star_star_kwargs = true,
             }
-            arguments.push(CallArgument {
-                keyword: name,
-                shape,
-                range: keyword.value.range(),
-            });
+            arguments.push(self.argument_fact(&keyword.value, name, scopes));
         }
 
         let fact = QualifiedCall {
@@ -1177,10 +1358,37 @@ impl Walker<'_> {
             positional_count,
             keyword_names,
             arguments,
+            has_star_args,
+            has_star_star_kwargs,
             context: self.context(),
         };
         self.facts.push(fact);
         self.facts.len() - 1
+    }
+
+    /// Builds the full fact for one non-starred argument expression.
+    fn argument_fact(
+        &mut self,
+        expr: &ast::Expr,
+        keyword: Option<String>,
+        scopes: &mut ScopeStack<'_>,
+    ) -> CallArgument {
+        let mut shape = self.argument_shape(expr, scopes);
+        let literal = self.literal_fact(expr);
+        // A folded signed number (`-1`) is a literal for classification
+        // purposes even though the expression is a unary op.
+        if literal.is_some() && shape == ArgShape::Other {
+            shape = ArgShape::Literal;
+        }
+        let (kind_candidates, callable_signature) = self.value_facts(expr, scopes);
+        CallArgument {
+            keyword,
+            shape,
+            range: expr.range(),
+            literal,
+            kind_candidates,
+            callable_signature,
+        }
     }
 
     fn argument_shape(&mut self, expr: &ast::Expr, scopes: &mut ScopeStack<'_>) -> ArgShape {
@@ -1191,8 +1399,127 @@ impl Walker<'_> {
             ast::Expr::Constant(_) | ast::Expr::JoinedStr(_) => ArgShape::Literal,
             ast::Expr::Name(_) => ArgShape::Name,
             ast::Expr::Lambda(_) => ArgShape::Lambda,
+            ast::Expr::Attribute(attribute) => {
+                ArgShape::Attribute(self.attribute_ref(expr, attribute, scopes))
+            }
             _ => ArgShape::Other,
         }
+    }
+
+    /// Facts for a bare attribute reference passed as an argument.
+    fn attribute_ref(
+        &self,
+        expr: &ast::Expr,
+        attribute: &ast::ExprAttribute,
+        scopes: &ScopeStack<'_>,
+    ) -> AttributeRef {
+        let (receiver, candidates) = match flatten_dotted(expr) {
+            Some((root, segments)) if !segments.is_empty() => {
+                self.resolve_attribute_callee(&root, &segments, scopes)
+            }
+            _ => (ReceiverKind::Unknown, BTreeSet::new()),
+        };
+        AttributeRef {
+            name: attribute.attr.to_string(),
+            receiver,
+            candidates,
+        }
+    }
+
+    /// Kind candidates and callable signature of a Name / Lambda argument.
+    fn value_facts(
+        &self,
+        expr: &ast::Expr,
+        scopes: &ScopeStack<'_>,
+    ) -> (BTreeSet<String>, Option<CallableSignature>) {
+        match expr {
+            ast::Expr::Name(name) => match scopes.lookup(name.id.as_str()) {
+                Some(Binding::LocalVar(LocalValue::Instance(kind))) => {
+                    (BTreeSet::from([kind]), None)
+                }
+                Some(Binding::LocalFunction(id)) => {
+                    let signature = self
+                        .index
+                        .and_then(|index| index.function_signature(&id))
+                        .cloned();
+                    (BTreeSet::new(), signature)
+                }
+                _ => (BTreeSet::new(), None),
+            },
+            ast::Expr::Lambda(lambda) => (BTreeSet::new(), Some(signature_of(&lambda.args))),
+            _ => (BTreeSet::new(), None),
+        }
+    }
+
+    /// Statically known literal value of an argument expression, folding a
+    /// single leading unary minus into numbers.
+    fn literal_fact(&self, expr: &ast::Expr) -> Option<LiteralFact> {
+        match expr {
+            ast::Expr::Constant(constant) => self.constant_literal(constant),
+            ast::Expr::UnaryOp(unary) if unary.op == ast::UnaryOp::USub => {
+                let ast::Expr::Constant(constant) = unary.operand.as_ref() else {
+                    return None;
+                };
+                match &constant.value {
+                    ast::Constant::Int(value) => {
+                        i64::try_from(-value.clone()).ok().map(LiteralFact::Int)
+                    }
+                    ast::Constant::Float(value) => Some(LiteralFact::Float(-value)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn constant_literal(&self, constant: &ast::ExprConstant) -> Option<LiteralFact> {
+        match &constant.value {
+            ast::Constant::Int(value) => i64::try_from(value).ok().map(LiteralFact::Int),
+            ast::Constant::Float(value) => Some(LiteralFact::Float(*value)),
+            ast::Constant::Bool(value) => Some(LiteralFact::Bool(*value)),
+            ast::Constant::None => Some(LiteralFact::NoneLit),
+            ast::Constant::Str(value) => Some(LiteralFact::Str {
+                value: value.clone(),
+                prefix: self.str_prefix(constant.range(), false),
+                range: constant.range(),
+            }),
+            ast::Constant::Bytes(value) => Some(LiteralFact::Str {
+                value: String::from_utf8_lossy(value).into_owned(),
+                prefix: self.str_prefix(constant.range(), true),
+                range: constant.range(),
+            }),
+            // Complex, Ellipsis, and tuple constants carry no literal fact.
+            _ => None,
+        }
+    }
+
+    /// Prefix summary of the string tokens inside `range`. `raw` is true
+    /// only when every part is raw (a mixed concatenation is not raw).
+    fn str_prefix(&self, range: TextRange, bytes: bool) -> StrPrefix {
+        let tokens = self.source.tokens();
+        let first = tokens.partition_point(|(_, token_range)| token_range.start() < range.start());
+        let mut prefix = StrPrefix {
+            raw: false,
+            bytes,
+            formatted: false,
+        };
+        let mut saw_string = false;
+        for (token, token_range) in &tokens[first..] {
+            if token_range.start() >= range.end() {
+                break;
+            }
+            let Tok::String { kind, .. } = token else {
+                continue;
+            };
+            if saw_string {
+                prefix.raw &= kind.is_raw();
+            } else {
+                prefix.raw = kind.is_raw();
+                saw_string = true;
+            }
+            prefix.formatted |= kind.is_any_fstring();
+        }
+        prefix
     }
 
     fn resolve_callee(
@@ -1324,6 +1651,43 @@ impl Walker<'_> {
     }
 }
 
+/// Extracts the declared parameter facts of a function or lambda.
+fn signature_of(args: &ast::Arguments) -> CallableSignature {
+    let mut params = Vec::new();
+    for arg in &args.posonlyargs {
+        params.push(param_fact(arg, ParamKind::PositionalOnly));
+    }
+    for arg in &args.args {
+        params.push(param_fact(arg, ParamKind::PositionalOrKeyword));
+    }
+    if let Some(vararg) = &args.vararg {
+        params.push(ParamFact {
+            name: vararg.arg.to_string(),
+            kind: ParamKind::VarArgs,
+            has_default: false,
+        });
+    }
+    for arg in &args.kwonlyargs {
+        params.push(param_fact(arg, ParamKind::KeywordOnly));
+    }
+    if let Some(kwarg) = &args.kwarg {
+        params.push(ParamFact {
+            name: kwarg.arg.to_string(),
+            kind: ParamKind::KwArgs,
+            has_default: false,
+        });
+    }
+    CallableSignature { params }
+}
+
+fn param_fact(arg: &ast::ArgWithDefault, kind: ParamKind) -> ParamFact {
+    ParamFact {
+        name: arg.def.arg.to_string(),
+        kind,
+        has_default: arg.default.is_some(),
+    }
+}
+
 fn bind_params(args: &ast::Arguments, method_of: Option<&str>, scopes: &mut ScopeStack<'_>) {
     let mut positional = args.posonlyargs.iter().chain(&args.args);
     if let Some(class) = method_of {
@@ -1446,6 +1810,7 @@ fn build_index(
     let empty_ns = BTreeMap::new();
     let mut states: BTreeMap<String, ModuleState> = BTreeMap::new();
     let mut class_records: Vec<ClassRecord> = Vec::new();
+    let mut signature_records: Vec<(String, CallableSignature)> = Vec::new();
     let max_passes = owners.len() + 2;
     for _ in 0..max_passes {
         let snapshot = states.clone();
@@ -1455,6 +1820,7 @@ fn build_index(
         };
         let mut next: BTreeMap<String, ModuleState> = BTreeMap::new();
         let mut records: Vec<ClassRecord> = Vec::new();
+        let mut signatures: Vec<(String, CallableSignature)> = Vec::new();
         for (name, module) in &owners {
             let identity = &module_of_file[&module.file];
             let mut walker = Walker {
@@ -1469,6 +1835,7 @@ fn build_index(
                 module_unknown_star: false,
                 facts: Vec::new(),
                 class_records: Vec::new(),
+                signatures: Vec::new(),
                 all_names: None,
                 all_invalid: false,
                 class_stack: Vec::new(),
@@ -1485,6 +1852,7 @@ fn build_index(
                 walker.all_invalid,
             );
             records.append(&mut walker.class_records);
+            signatures.append(&mut walker.signatures);
             next.insert(
                 name.clone(),
                 ModuleState {
@@ -1497,6 +1865,7 @@ fn build_index(
         let stable = next == states;
         states = next;
         class_records = records;
+        signature_records = signatures;
         if stable {
             break;
         }
@@ -1527,6 +1896,27 @@ fn build_index(
     }
     compute_roles(&mut classes, surface);
 
+    // 5. Function signature table. A qualified name recorded with two
+    // different signatures (conditional redefinition) is dropped entirely:
+    // resolution never guesses which def is live.
+    let mut function_signatures: BTreeMap<String, CallableSignature> = BTreeMap::new();
+    let mut conflicting: BTreeSet<String> = BTreeSet::new();
+    for (name, signature) in signature_records {
+        match function_signatures.entry(name) {
+            Entry::Vacant(entry) => {
+                entry.insert(signature);
+            }
+            Entry::Occupied(entry) => {
+                if *entry.get() != signature {
+                    conflicting.insert(entry.key().clone());
+                }
+            }
+        }
+    }
+    for name in &conflicting {
+        function_signatures.remove(name);
+    }
+
     let mut index = ProjectIndex {
         modules,
         module_of_file,
@@ -1535,6 +1925,7 @@ fn build_index(
         scene_classes: BTreeSet::new(),
         mobject_classes: BTreeSet::new(),
         animation_classes: BTreeSet::new(),
+        function_signatures,
     };
     for (name, class) in &index.classes {
         if class.kinds.contains(&ManimKind::Scene) {
@@ -1699,6 +2090,7 @@ fn collect_calls(
             module_unknown_star,
             facts: Vec::new(),
             class_records: Vec::new(),
+            signatures: Vec::new(),
             all_names: None,
             all_invalid: false,
             class_stack: Vec::new(),

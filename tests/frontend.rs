@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use manim_lint::frontend::ManimSurface;
-use manim_lint::frontend::index::{ArgShape, FrontendFacts, QualifiedCall, ReceiverKind, analyze};
+use manim_lint::frontend::index::{
+    ArgShape, AttributeRef, FrontendFacts, LiteralFact, ParamFact, ParamKind, QualifiedCall,
+    ReceiverKind, analyze,
+};
 use manim_lint::source::{FileId, SourceManager};
 
 const SCENE: &str = "manim.scene.scene.Scene";
@@ -14,6 +17,7 @@ const SQUARE: &str = "manim.mobject.geometry.polygram.Square";
 const FADE_IN: &str = "manim.animation.fading.FadeIn";
 const MOBJECT: &str = "manim.mobject.mobject.Mobject";
 const ANIMATION: &str = "manim.animation.animation.Animation";
+const DOT: &str = "manim.mobject.geometry.arc.Dot";
 
 fn surface() -> ManimSurface {
     let mut surface = ManimSurface::default();
@@ -22,6 +26,7 @@ fn surface() -> ManimSurface {
         ("Square", SQUARE),
         ("FadeIn", FADE_IN),
         ("Mobject", MOBJECT),
+        ("Dot", DOT),
         ("Create", "manim.animation.creation.Create"),
         ("RIGHT", "manim.constants.RIGHT"),
     ] {
@@ -392,6 +397,281 @@ fn loop_carried_bindings_are_widened_but_straight_line_stays_precise() {
         ReceiverKind::KnownInstance(SQUARE.to_owned()),
         "straight-line use after assignment in the same iteration"
     );
+}
+
+fn load_inline(name: &str, source: &str) -> (SourceManager, FrontendFacts) {
+    let root = fixture_root();
+    let mut sources = SourceManager::new(&root);
+    sources.load_bytes(&root.join(name), source.as_bytes());
+    for file in sources.files() {
+        assert!(file.is_parsed(), "inline source must parse: {source}");
+    }
+    let facts = analyze(&sources, &[".".to_owned()], &surface());
+    (sources, facts)
+}
+
+#[test]
+fn bare_attribute_arguments_expose_receiver_and_candidates() {
+    let (sources, facts) = load_inline(
+        "attr_args.py",
+        "from manim import *\n\n\nclass AttrScene(Scene):\n    def construct(self):\n        mob = Dot()\n        self.play(mob.shift, RIGHT)\n",
+    );
+    let play = single_call(&sources, &facts, "attr_args.py", "self.play");
+    assert_eq!(play.receiver, ReceiverKind::SelfScene);
+
+    assert_eq!(
+        play.arguments[0].shape,
+        ArgShape::Attribute(AttributeRef {
+            name: "shift".to_owned(),
+            receiver: ReceiverKind::KnownInstance(DOT.to_owned()),
+            candidates: BTreeSet::from(["manim.mobject.geometry.arc.Dot.shift".to_owned()]),
+        }),
+        "bound-method-style argument records base classification"
+    );
+    assert_eq!(play.arguments[0].literal, None);
+
+    assert_eq!(play.arguments[1].shape, ArgShape::Name);
+    assert!(
+        play.arguments[1].kind_candidates.is_empty(),
+        "RIGHT is a constant, not a tracked instance"
+    );
+}
+
+#[test]
+fn literal_values_are_folded_and_summarized() {
+    let (sources, facts) = load_inline(
+        "literal_args.py",
+        concat!(
+            "def build(scene):\n",
+            "    scene.play(\n",
+            "        -1,\n",
+            "        0.0,\n",
+            "        r\"\\frac{a}{b}\",\n",
+            "        f\"{scene}\",\n",
+            "        \"a\" \"b\",\n",
+            "        True,\n",
+            "        None,\n",
+            "        9223372036854775808,\n",
+            "        run_time=-1.5,\n",
+            "    )\n",
+        ),
+    );
+    let play = single_call(&sources, &facts, "literal_args.py", "scene.play");
+    let file = sources.file(file_id(&sources, "literal_args.py"));
+
+    assert_eq!(play.arguments[0].literal, Some(LiteralFact::Int(-1)));
+    assert_eq!(
+        play.arguments[0].shape,
+        ArgShape::Literal,
+        "folded negative counts as a literal"
+    );
+    assert_eq!(play.arguments[1].literal, Some(LiteralFact::Float(0.0)));
+
+    let Some(LiteralFact::Str {
+        value,
+        prefix,
+        range,
+    }) = &play.arguments[2].literal
+    else {
+        panic!("raw string argument must carry a Str fact");
+    };
+    assert_eq!(value, "\\frac{a}{b}");
+    assert!(prefix.raw);
+    assert!(!prefix.bytes);
+    assert!(!prefix.formatted);
+    assert_eq!(
+        file.slice(*range),
+        "r\"\\frac{a}{b}\"",
+        "range covers the literal exactly, prefix and quotes included"
+    );
+
+    assert_eq!(
+        play.arguments[3].literal, None,
+        "f-strings never produce a Str literal value"
+    );
+    assert_eq!(play.arguments[3].shape, ArgShape::Literal);
+
+    let Some(LiteralFact::Str { value, prefix, .. }) = &play.arguments[4].literal else {
+        panic!("implicit concatenation of plain parts must carry a Str fact");
+    };
+    assert_eq!(value, "ab");
+    assert!(!prefix.raw);
+
+    assert_eq!(play.arguments[5].literal, Some(LiteralFact::Bool(true)));
+    assert_eq!(play.arguments[6].literal, Some(LiteralFact::NoneLit));
+    assert_eq!(
+        play.arguments[7].literal, None,
+        "integers that do not fit i64 carry no fact"
+    );
+
+    let run_time = play.keyword("run_time").expect("run_time keyword");
+    assert_eq!(run_time.literal, Some(LiteralFact::Float(-1.5)));
+}
+
+#[test]
+fn name_arguments_carry_instance_kind_candidates() {
+    let (sources, facts) = load_inline(
+        "kind_args.py",
+        "from manim import Square\n\n\ndef build(scene, thing):\n    sq = Square()\n    scene.play(sq)\n    scene.play(thing)\n",
+    );
+    let plays = calls_named(&sources, &facts, "kind_args.py", "scene.play");
+    assert_eq!(plays.len(), 2);
+
+    assert_eq!(plays[0].arguments[0].shape, ArgShape::Name);
+    assert_eq!(
+        plays[0].arguments[0].kind_candidates,
+        BTreeSet::from([SQUARE.to_owned()])
+    );
+    assert!(
+        plays[1].arguments[0].kind_candidates.is_empty(),
+        "an opaque parameter never guesses a kind"
+    );
+}
+
+#[test]
+fn lambda_arguments_expose_declared_signatures() {
+    let (sources, facts) = load_inline(
+        "lambda_args.py",
+        "def build(scene):\n    scene.play(\n        lambda dt: dt,\n        lambda m, dt=0: m,\n        lambda *, k: 0,\n        lambda x, /, y: x,\n        lambda *args, **kw: 0,\n    )\n",
+    );
+    let play = single_call(&sources, &facts, "lambda_args.py", "scene.play");
+    let signature = |index: usize| -> Vec<ParamFact> {
+        play.arguments[index]
+            .callable_signature
+            .clone()
+            .unwrap_or_else(|| panic!("argument {index} must carry a signature"))
+            .params
+    };
+    let param = |name: &str, kind: ParamKind, has_default: bool| ParamFact {
+        name: name.to_owned(),
+        kind,
+        has_default,
+    };
+
+    assert_eq!(play.arguments[0].shape, ArgShape::Lambda);
+    assert_eq!(
+        signature(0),
+        vec![param("dt", ParamKind::PositionalOrKeyword, false)]
+    );
+    assert_eq!(
+        signature(1),
+        vec![
+            param("m", ParamKind::PositionalOrKeyword, false),
+            param("dt", ParamKind::PositionalOrKeyword, true),
+        ]
+    );
+    assert_eq!(
+        signature(2),
+        vec![param("k", ParamKind::KeywordOnly, false)],
+        "lambdas support keyword-only params after a bare star"
+    );
+    assert_eq!(
+        signature(3),
+        vec![
+            param("x", ParamKind::PositionalOnly, false),
+            param("y", ParamKind::PositionalOrKeyword, false),
+        ]
+    );
+    assert_eq!(
+        signature(4),
+        vec![
+            param("args", ParamKind::VarArgs, false),
+            param("kw", ParamKind::KwArgs, false),
+        ]
+    );
+}
+
+#[test]
+fn def_resolved_name_arguments_expose_signatures() {
+    let (sources, facts) = load_inline(
+        "sig_defs.py",
+        concat!(
+            "def updater(mob, dt=0):\n",
+            "    return mob\n",
+            "\n\n",
+            "class Helper:\n",
+            "    def tick(self, dt):\n",
+            "        return dt\n",
+            "\n\n",
+            "def build(scene, missing):\n",
+            "    scene.play(updater)\n",
+            "    scene.play(missing)\n",
+        ),
+    );
+    let plays = calls_named(&sources, &facts, "sig_defs.py", "scene.play");
+    assert_eq!(plays.len(), 2);
+
+    let signature = plays[0].arguments[0]
+        .callable_signature
+        .as_ref()
+        .expect("module-level def resolves by name");
+    assert_eq!(
+        signature.params,
+        vec![
+            ParamFact {
+                name: "mob".to_owned(),
+                kind: ParamKind::PositionalOrKeyword,
+                has_default: false,
+            },
+            ParamFact {
+                name: "dt".to_owned(),
+                kind: ParamKind::PositionalOrKeyword,
+                has_default: true,
+            },
+        ]
+    );
+    assert_eq!(
+        plays[1].arguments[0].callable_signature, None,
+        "an unresolvable name never guesses a signature"
+    );
+
+    let method = facts
+        .index
+        .function_signature("sig_defs.Helper.tick")
+        .expect("method signatures are indexed by qualified name");
+    assert_eq!(
+        method.params.first().map(|param| param.name.as_str()),
+        Some("self"),
+        "method signatures keep the written self parameter"
+    );
+    assert!(facts.index.function_signature("sig_defs.absent").is_none());
+}
+
+#[test]
+fn star_argument_splats_set_flags_and_accessors() {
+    let (sources, facts) = load_inline(
+        "star_args.py",
+        "def build(scene, anims, opts):\n    scene.play(*anims)\n    scene.play(**opts)\n    scene.play(1, 2, run_time=3)\n",
+    );
+    let plays = calls_named(&sources, &facts, "star_args.py", "scene.play");
+    assert_eq!(plays.len(), 3);
+
+    assert!(plays[0].has_star_args);
+    assert!(!plays[0].has_star_star_kwargs);
+    assert!(!plays[1].has_star_args);
+    assert!(plays[1].has_star_star_kwargs);
+
+    let plain = plays[2];
+    assert!(!plain.has_star_args && !plain.has_star_star_kwargs);
+    assert_eq!(
+        plain.positional(0).and_then(|arg| arg.literal.clone()),
+        Some(LiteralFact::Int(1))
+    );
+    assert_eq!(
+        plain.positional(1).and_then(|arg| arg.literal.clone()),
+        Some(LiteralFact::Int(2))
+    );
+    assert!(
+        plain.positional(2).is_none(),
+        "keyword arguments are not positional"
+    );
+    assert_eq!(
+        plain
+            .keyword("run_time")
+            .and_then(|arg| arg.literal.clone()),
+        Some(LiteralFact::Int(3))
+    );
+    assert!(plain.keyword("rate_func").is_none());
 }
 
 #[test]
