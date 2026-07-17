@@ -14,11 +14,9 @@
 //! (DESIGN §15 invariant 2). Name resolution through imports is
 //! conservative: a name rebound anywhere in the file is never trusted.
 //!
-//! NOTE(unification): `build_diagnostic`, `single_knowledge_symbol`,
-//! `each_statement`, and the case-insensitive path scan in
-//! `portability::paths` are minimal private copies of helpers that live
-//! privately in `rules::rendering` / `rules::rendering::assets`. They
-//! should move to a shared support module once file ownership allows.
+//! `build_diagnostic`, `single_knowledge_symbol`, `short_name`,
+//! `each_statement`, and the case-insensitive path scan are shared with
+//! `rules::rendering` (the owning module exports them `pub(crate)`).
 
 mod fonts;
 mod io_hooks;
@@ -30,11 +28,7 @@ mod updater_motion;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rustpython_parser::ast::{self, Ranged};
-use rustpython_parser::text_size::TextRange;
-use serde_json::Value;
 
-use crate::diagnostic::{Confidence, Diagnostic, Fix, RuleMetadata};
-use crate::knowledge::{KnowledgeProfile, SymbolEntry};
 use crate::rules::base::Rule;
 use crate::source::SourceFile;
 
@@ -56,121 +50,16 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared fact helpers (private copies flagged for unification above).
+// Shared fact helpers (owned and exported by `rules::rendering`).
 // ---------------------------------------------------------------------------
 
-/// The single knowledge entry every candidate of the set resolves to.
-///
-/// `None` when the set is empty, ambiguous, or contains an id the profile
-/// does not curate — resolution never guesses.
-fn single_knowledge_symbol<'a>(
-    profile: &'a KnowledgeProfile,
-    candidates: &BTreeSet<String>,
-) -> Option<(&'a str, &'a SymbolEntry)> {
-    if candidates.len() != 1 {
-        return None;
-    }
-    let id = candidates.iter().next()?;
-    let (key, entry) = profile.symbols.get_key_value(id)?;
-    Some((key.as_str(), entry))
-}
-
-/// The short display name of a canonical id (`Text` from
-/// `manim.mobject.text.text_mobject.Text`).
-fn short_name(id: &str) -> &str {
-    id.rsplit('.').next().unwrap_or(id)
-}
-
-/// Builds a diagnostic with the shared per-rule boilerplate filled in.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one flat builder keeps rules terse"
-)]
-fn build_diagnostic(
-    metadata: &RuleMetadata,
-    file: &SourceFile,
-    range: TextRange,
-    confidence: Confidence,
-    message: String,
-    explanation: &str,
-    evidence: BTreeMap<String, Value>,
-    applicable_profiles: Vec<String>,
-    fix: Option<Fix>,
-) -> Diagnostic {
-    Diagnostic {
-        rule_id: metadata.id.to_owned(),
-        severity: metadata.default_severity,
-        confidence,
-        path: file.relative_path().to_owned(),
-        primary_span: file.span_of_range(range),
-        message,
-        explanation: Some(explanation.to_owned()),
-        related_locations: Vec::new(),
-        evidence,
-        estimated_cost: None,
-        applicable_profiles,
-        fix,
-    }
-}
+use crate::rules::rendering::{
+    build_diagnostic, each_statement, short_name, single_knowledge_symbol,
+};
 
 // ---------------------------------------------------------------------------
 // AST walking utilities.
 // ---------------------------------------------------------------------------
-
-/// Depth-first visit over every statement of a body, entering all
-/// compound-statement bodies.
-fn each_statement<'a>(stmts: &'a [ast::Stmt], visit: &mut dyn FnMut(&'a ast::Stmt)) {
-    for stmt in stmts {
-        visit(stmt);
-        match stmt {
-            ast::Stmt::FunctionDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::AsyncFunctionDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::ClassDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::If(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::While(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::For(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::AsyncFor(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::With(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::AsyncWith(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::Try(inner) => {
-                each_statement(&inner.body, visit);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    each_statement(&handler.body, visit);
-                }
-                each_statement(&inner.orelse, visit);
-                each_statement(&inner.finalbody, visit);
-            }
-            ast::Stmt::TryStar(inner) => {
-                each_statement(&inner.body, visit);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    each_statement(&handler.body, visit);
-                }
-                each_statement(&inner.orelse, visit);
-                each_statement(&inner.finalbody, visit);
-            }
-            ast::Stmt::Match(inner) => {
-                for case in &inner.cases {
-                    each_statement(&case.body, visit);
-                }
-            }
-            _ => {}
-        }
-    }
-}
 
 /// The expressions embedded directly in one statement (compound bodies are
 /// reached by [`each_statement`], not here).

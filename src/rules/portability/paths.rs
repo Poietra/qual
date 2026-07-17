@@ -16,12 +16,12 @@
 //!   `SVGMobject("Name")`) that `MLR104`'s scan cannot map back onto the
 //!   literal.
 //!
-//! NOTE(unification): `has_drive_prefix` and the component-wise
-//! case-insensitive scan are private copies of
-//! `rules::rendering::assets` helpers.
+//! `has_drive_prefix` and the component-wise case-insensitive scan are
+//! shared with `rules::rendering::assets` (exported through
+//! `rules::rendering`).
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use rustpython_parser::text_size::TextRange;
 use serde_json::json;
@@ -31,6 +31,7 @@ use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::frontend::index::LiteralFact;
 use crate::knowledge::KnowledgeProfile;
 use crate::rules::base::{Rule, RuleContext};
+use crate::rules::rendering::{case_insensitive_match, has_drive_prefix};
 
 use super::{build_diagnostic, short_name, single_knowledge_symbol};
 
@@ -91,11 +92,6 @@ fn literal_asset_paths<'a>(
         });
     }
     paths
-}
-
-fn has_drive_prefix(literal: &str) -> bool {
-    let bytes = literal.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// Windows-only path syntax: a drive prefix or backslash separators.
@@ -338,39 +334,4 @@ fn case_only_correction(
         }
     }
     None
-}
-
-/// Resolves `relative` against `base` component by component, matching
-/// case-insensitively when the exact component is missing. Returns the
-/// path rewritten with the on-disk case only when it differs from the
-/// original (a true case-only mismatch).
-fn case_insensitive_match(base: &Path, relative: &str) -> Option<String> {
-    let mut current = base.to_path_buf();
-    let mut corrected_parts: Vec<String> = Vec::new();
-    for component in Path::new(relative).components() {
-        let Component::Normal(part) = component else {
-            // `..`, `.` and friends: keep the scan simple and give up.
-            return None;
-        };
-        let part = part.to_str()?;
-        let exact = current.join(part);
-        if exact.exists() {
-            corrected_parts.push(part.to_owned());
-            current = exact;
-            continue;
-        }
-        let entries = std::fs::read_dir(&current).ok()?;
-        let mut names: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .collect();
-        names.sort();
-        let matched = names
-            .into_iter()
-            .find(|name| name.to_lowercase() == part.to_lowercase())?;
-        current = current.join(&matched);
-        corrected_parts.push(matched);
-    }
-    let corrected = corrected_parts.join("/");
-    (corrected != relative).then_some(corrected)
 }

@@ -111,7 +111,8 @@ pub fn exists_relative_to(source_dir: &Path, literal: &str) -> bool {
     source_dir.join(literal).exists()
 }
 
-fn has_drive_prefix(literal: &str) -> bool {
+/// Whether the literal starts with a Windows drive prefix (`C:`).
+pub(crate) fn has_drive_prefix(literal: &str) -> bool {
     let bytes = literal.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
@@ -120,7 +121,7 @@ fn has_drive_prefix(literal: &str) -> bool {
 /// case-insensitively when the exact component is missing. Returns the
 /// literal rewritten with the on-disk case only when it differs from the
 /// original (a true case-only mismatch).
-fn case_insensitive_match(base: &Path, relative: &str) -> Option<String> {
+pub(crate) fn case_insensitive_match(base: &Path, relative: &str) -> Option<String> {
     let mut current = base.to_path_buf();
     let mut corrected_parts: Vec<String> = Vec::new();
     for component in Path::new(relative).components() {

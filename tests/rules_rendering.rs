@@ -247,7 +247,15 @@ fn mlr102_flags_played_bare_animate_with_unchanged_displayed_target() {
             warning("MLR102", "dot.animate", 1, 0),
         ],
     );
-    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // valid.py's stale-builder near miss is deliberately real MLC117
+    // territory (see the fixture comment): the mutation between builder
+    // creation and play is a true MLC117 finding, while MLR102 stays silent.
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "valid.py",
+        &[warning("MLC117", "stale.animate", 1, 0)],
+    );
     assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
     assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
 

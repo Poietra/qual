@@ -160,6 +160,8 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         diagnostics.extend(rule.run(&context));
     }
 
+    diagnostics = apply_supersedes(diagnostics);
+
     diagnostics.retain(|diagnostic| {
         suppression_indexes
             .get(&diagnostic.path)
@@ -780,6 +782,32 @@ fn is_selected(diagnostic: &Diagnostic, select: &[String], ignore: &[String]) ->
         .iter()
         .any(|selector| suppressions::selector_matches(selector, &diagnostic.rule_id));
     selected && !ignored
+}
+
+/// Specificity dedup (DESIGN §7.3 end): when two diagnostics share a
+/// primary span and the rule of one declares `supersedes` over the rule of
+/// the other, only the more specific one is reported. Individual rules may
+/// additionally pre-filter (MLP201 excludes MLP226's frame-varying calls
+/// where the facts are computed); this shared pass makes the guarantee
+/// uniform for every declared pair regardless of where each rule anchors.
+fn apply_supersedes(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let superseded: Vec<bool> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            diagnostics.iter().any(|other| {
+                other.path == diagnostic.path
+                    && other.primary_span == diagnostic.primary_span
+                    && registry::metadata_for(&other.rule_id).is_some_and(|metadata| {
+                        metadata.supersedes.contains(&diagnostic.rule_id.as_str())
+                    })
+            })
+        })
+        .collect();
+    diagnostics
+        .into_iter()
+        .zip(superseded)
+        .filter_map(|(diagnostic, is_superseded)| (!is_superseded).then_some(diagnostic))
+        .collect()
 }
 
 fn render_statistics(diagnostics: &[Diagnostic]) -> String {

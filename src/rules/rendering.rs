@@ -26,6 +26,12 @@ mod state;
 mod tex;
 mod tex_keys;
 
+/// Shared with `rules::portability::paths` (MLD303/MLD305): recognizing
+/// Windows drive prefixes and resolving a literal path against the
+/// filesystem case-insensitively are one behavior each, owned here next
+/// to MLR104.
+pub(crate) use assets::{case_insensitive_match, has_drive_prefix};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use rustpython_parser::Tok;
@@ -99,7 +105,7 @@ const TEX_CONSTRUCTORS: &[&str] = &[MATH_TEX, SINGLE_MATH_TEX, TEX];
 ///
 /// `None` when the set is empty, ambiguous, or contains an id the profile
 /// does not curate — resolution never guesses.
-fn single_knowledge_symbol<'a>(
+pub(crate) fn single_knowledge_symbol<'a>(
     profile: &'a KnowledgeProfile,
     candidates: &BTreeSet<String>,
 ) -> Option<(&'a str, &'a SymbolEntry)> {
@@ -251,7 +257,7 @@ fn numeric_literal(argument: &CallArgument) -> Option<f64> {
 
 /// The short display name of a canonical id (`Create` from
 /// `manim.animation.creation.Create`).
-fn short_name(id: &str) -> &str {
+pub(crate) fn short_name(id: &str) -> &str {
     id.rsplit('.').next().unwrap_or(id)
 }
 
@@ -260,7 +266,7 @@ fn short_name(id: &str) -> &str {
     clippy::too_many_arguments,
     reason = "one flat builder keeps rules terse"
 )]
-fn build_diagnostic(
+pub(crate) fn build_diagnostic(
     metadata: &RuleMetadata,
     file: &SourceFile,
     range: TextRange,
@@ -344,7 +350,7 @@ fn closing_quote_len(slice: &str) -> Option<usize> {
 
 /// Depth-first visit over every statement of a module, entering all
 /// compound-statement bodies.
-fn each_statement<'a>(stmts: &'a [ast::Stmt], visit: &mut dyn FnMut(&'a ast::Stmt)) {
+pub(crate) fn each_statement<'a>(stmts: &'a [ast::Stmt], visit: &mut dyn FnMut(&'a ast::Stmt)) {
     for stmt in stmts {
         visit(stmt);
         match stmt {

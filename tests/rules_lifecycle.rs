@@ -414,6 +414,10 @@ fn mlc121_timeline_reentry_golden() {
             "alias.py:8:38 MLC121 error high",
             "invalid.py:8:38 MLC121 error high",
             "invalid.py:9:37 MLC121 error high",
+            // Cross-rule interaction: the frame-stepped no-dt updater in
+            // valid.py is a true MLD301 finding (fixed-step shift without
+            // dt); it is not an MLC121 false positive.
+            "valid.py:12:38 MLD301 warning high",
         ],
     );
 }
