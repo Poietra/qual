@@ -7,6 +7,7 @@
 
 use crate::config::model::{RenderProfile, ResolvedConfig};
 use crate::diagnostic::{Diagnostic, RuleMetadata};
+use crate::knowledge::KnowledgeProfile;
 use crate::source::SourceManager;
 
 /// A single diagnostic rule.
@@ -56,6 +57,7 @@ pub struct CostFacts {}
 pub struct RuleContext<'a> {
     sources: &'a SourceManager,
     config: &'a ResolvedConfig,
+    knowledge: Option<&'a KnowledgeProfile>,
     qualified_calls: QualifiedCallFacts,
     project_index: ProjectIndexFacts,
     lifecycle_facts: LifecycleFacts,
@@ -69,11 +71,20 @@ impl<'a> RuleContext<'a> {
         Self {
             sources,
             config,
+            knowledge: None,
             qualified_calls: QualifiedCallFacts::default(),
             project_index: ProjectIndexFacts::default(),
             lifecycle_facts: LifecycleFacts::default(),
             cost_facts: CostFacts::default(),
         }
+    }
+
+    /// Attaches the loaded Manim knowledge profile so rules can query
+    /// symbol effects, `returns_self`, signatures, and renderer facts.
+    #[must_use]
+    pub const fn with_knowledge(mut self, knowledge: &'a KnowledgeProfile) -> Self {
+        self.knowledge = Some(knowledge);
+        self
     }
 
     /// Attaches frontend facts (project index and qualified calls).
@@ -103,6 +114,14 @@ impl<'a> RuleContext<'a> {
     #[must_use]
     pub fn active_profiles(&self) -> &'a [RenderProfile] {
         &self.config.active_profiles
+    }
+
+    /// The loaded Manim knowledge profile.
+    ///
+    /// `None` unless attached via [`RuleContext::with_knowledge`].
+    #[must_use]
+    pub const fn knowledge(&self) -> Option<&'a KnowledgeProfile> {
+        self.knowledge
     }
 
     /// Resolved qualified Manim call facts.

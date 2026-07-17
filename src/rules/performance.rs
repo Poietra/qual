@@ -4,7 +4,13 @@
 //! `MLP204`, `MLP205`, `MLP217`, `MLP218`, `MLP220`, `MLP226`, `MLP227`),
 //! then cardinality-dependent rules once estimation is stable.
 
-/// Placeholder owner type for the performance rule set.
-#[derive(Debug, Default, Clone, Copy)]
-#[non_exhaustive]
-pub struct PerformanceRules {}
+use crate::rules::base::Rule;
+
+/// Every implemented performance rule, in rule-ID order.
+///
+/// The registry composes this with the other rule-group modules; adding a
+/// rule here is the only registration step a performance rule needs.
+#[must_use]
+pub fn rules() -> Vec<Box<dyn Rule>> {
+    Vec::new()
+}

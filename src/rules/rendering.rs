@@ -7,7 +7,13 @@
 //! TODO(phase-4): renderer-dependent rules (`MLR107`-`MLR112`,
 //! `MLR118`-`MLR123`).
 
-/// Placeholder owner type for the rendering rule set.
-#[derive(Debug, Default, Clone, Copy)]
-#[non_exhaustive]
-pub struct RenderingRules {}
+use crate::rules::base::Rule;
+
+/// Every implemented rendering rule, in rule-ID order.
+///
+/// The registry composes this with the other rule-group modules; adding a
+/// rule here is the only registration step a rendering rule needs.
+#[must_use]
+pub fn rules() -> Vec<Box<dyn Rule>> {
+    Vec::new()
+}

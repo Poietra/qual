@@ -151,7 +151,9 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
 
     let surface = manim_surface(&profile);
     let facts = frontend::index::analyze(&sources, &config.source_roots, &surface);
-    let context = RuleContext::new(&sources, &config).with_frontend(facts.index, facts.calls);
+    let context = RuleContext::new(&sources, &config)
+        .with_knowledge(&profile)
+        .with_frontend(facts.index, facts.calls);
     for rule in registry::all_rules() {
         diagnostics.extend(rule.run(&context));
     }

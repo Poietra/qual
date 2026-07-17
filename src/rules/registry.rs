@@ -30,35 +30,49 @@ pub const INVALID_SUPPRESSION: RuleMetadata = RuleMetadata {
 
 pub const RULE_PREFIXES: [&str; 4] = ["MLC", "MLR", "MLP", "MLD"];
 
-/// Rule IDs that emit diagnostics in the current build.
-///
-/// Both Phase 0 IDs are emitted by the analysis pipeline itself rather than
-/// by a registered [`Rule`].
-pub const IMPLEMENTED_RULE_IDS: [&str; 2] = ["MLC000", "MLC001"];
+/// Rule IDs emitted by the analysis pipeline itself (parse and suppression
+/// handling) rather than by a registered [`Rule`].
+pub const PIPELINE_RULE_IDS: [&str; 2] = ["MLC000", "MLC001"];
 
-/// Every registered [`Rule`] instance.
+/// Every registered [`Rule`] instance, composed from the rule-group modules.
 ///
-/// Empty in Phase 0: `MLC000`/`MLC001` are emitted by the parse and
-/// suppression pipeline, not by rules.
+/// Each group module (`lifecycle`, `rendering`, `performance`,
+/// `portability`) owns its own registration list; nothing else needs to
+/// change when a rule is added there.
 #[must_use]
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
-    Vec::new()
+    let mut rules = crate::rules::lifecycle::rules();
+    rules.extend(crate::rules::rendering::rules());
+    rules.extend(crate::rules::performance::rules());
+    rules.extend(crate::rules::portability::rules());
+    rules
+}
+
+fn metadata_index() -> &'static std::collections::BTreeMap<&'static str, &'static RuleMetadata> {
+    static INDEX: std::sync::OnceLock<
+        std::collections::BTreeMap<&'static str, &'static RuleMetadata>,
+    > = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = std::collections::BTreeMap::new();
+        index.insert(SYNTAX_ERROR.id, &SYNTAX_ERROR);
+        index.insert(INVALID_SUPPRESSION.id, &INVALID_SUPPRESSION);
+        for rule in all_rules() {
+            index.insert(rule.metadata().id, rule.metadata());
+        }
+        index
+    })
 }
 
 /// Static metadata for an implemented rule ID.
 #[must_use]
 pub fn metadata_for(rule_id: &str) -> Option<&'static RuleMetadata> {
-    match rule_id {
-        "MLC000" => Some(&SYNTAX_ERROR),
-        "MLC001" => Some(&INVALID_SUPPRESSION),
-        _ => None,
-    }
+    metadata_index().get(rule_id).copied()
 }
 
 /// Whether the current build can emit this rule ID.
 #[must_use]
 pub fn is_implemented(rule_id: &str) -> bool {
-    IMPLEMENTED_RULE_IDS.contains(&rule_id)
+    metadata_index().contains_key(rule_id)
 }
 
 #[must_use]

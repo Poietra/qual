@@ -5,10 +5,13 @@
 //! TODO(phase-2): state-dependent lifecycle rules over the abstract
 //! interpreter facts (`MLC107`-`MLC129`).
 
-/// Placeholder owner type for the lifecycle rule set.
+use crate::rules::base::Rule;
+
+/// Every implemented lifecycle rule, in rule-ID order.
 ///
-/// Replaced by concrete `Rule` implementations in later phases; kept so the
-/// module has a stable public anchor for registration.
-#[derive(Debug, Default, Clone, Copy)]
-#[non_exhaustive]
-pub struct LifecycleRules {}
+/// The registry composes this with the other rule-group modules; adding a
+/// rule here is the only registration step a lifecycle rule needs.
+#[must_use]
+pub fn rules() -> Vec<Box<dyn Rule>> {
+    Vec::new()
+}
