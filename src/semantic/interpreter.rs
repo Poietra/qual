@@ -20,7 +20,14 @@
 //!   removes and `ReplacementTransform` replaces, final updater pass),
 //! - `.animate` builders (`generate_target` runs at builder creation),
 //! - branch joins to `MAYBE` and bounded loop evaluation with widening
-//!   (DESIGN §5.5).
+//!   (DESIGN §5.5),
+//! - bounded inlining of `self.<helper>()` calls resolved through the
+//!   project MRO (DESIGN §2.1 "Scene helper", §5.1 step 5): a play or
+//!   wait inside a helper body materializes as a real [`PlayFact`] per
+//!   call site, anchored at the play call in the helper file with the
+//!   call chain in [`PlayFact::call_path`]. Recursion and chains deeper
+//!   than [`MAX_INLINE_DEPTH`] fall back to the §5.7 effect summary
+//!   (membership effects survive; frontier plays stay unmaterialized).
 //!
 //! Everything the interpreter cannot prove is an explicit `Unknown` /
 //! `Maybe` fact — a rule must never receive a wrong certain fact
@@ -80,6 +87,12 @@ use crate::source::{FileId, SourceManager};
 const WIDEN_AFTER_PASS: usize = 3;
 /// Hard cap on fixpoint passes over one body.
 const MAX_PASSES: usize = 6;
+/// Maximum depth of `self.<helper>()` calls inlined during a scene run
+/// (DESIGN §5.1 step 5). A recursive or deeper call falls back to the
+/// DESIGN §5.7 effect summary: membership and updater effects still
+/// apply, while plays inside the unexpanded frontier stay unmaterialized
+/// — missing information, never a wrong fact.
+const MAX_INLINE_DEPTH: usize = 3;
 
 /// Lifecycle methods whose project override invalidates curated animation
 /// effects (DESIGN §5.4).
@@ -116,6 +129,13 @@ pub struct TracedEvent {
 pub struct StateSnapshot {
     /// The statement's source range.
     pub site: AllocationSite,
+    /// The byte range of the method body (`def`) the statement executed
+    /// in. Site-order lookups ([`SceneLifecycle::state_at`]) restrict to
+    /// snapshots whose scope contains the query byte, so a query inside
+    /// one method never resolves to a state from a textually earlier but
+    /// chronologically later statement of a *different* method (helper
+    /// bodies execute between the caller's statements).
+    pub scope: AllocationSite,
     /// The abstract heap after the statement (converged fixpoint state).
     pub heap: AbstractHeap,
 }
@@ -184,7 +204,9 @@ pub struct PlayFact {
     /// animation list is incomplete, so untracked animations may target
     /// (and suspend) any mobject.
     pub star_args: bool,
-    /// Path certainty of the call itself.
+    /// Path certainty of the call itself. For a play inside an inlined
+    /// helper this already composes the certainty of every call site on
+    /// [`PlayFact::call_path`] with the play's own path certainty.
     pub certainty: Presence,
     /// How many times one run of the enclosing lifecycle method executes
     /// this play site: exactly `1` outside loops; `[0, n]` inside loops
@@ -193,6 +215,13 @@ pub struct PlayFact {
     /// open above when any enclosing trip count is unknown — never left
     /// at `1` (DESIGN §4.1: unknowns must not underestimate).
     pub repetitions: Num,
+    /// The `self.<helper>()` call sites through which a lifecycle method
+    /// reached this play, outermost first; empty for plays written
+    /// directly in a lifecycle method. One helper called from two sites
+    /// produces one fact per call site (the facts share
+    /// [`PlayFact::site`] but differ here and in their animation
+    /// identities), so per-site consumers see every execution.
+    pub call_path: Vec<AllocationSite>,
 }
 
 /// Where an updater was registered.
@@ -436,10 +465,11 @@ pub struct OwnershipInterval {
     /// Effective scene-family membership at this statement.
     pub in_family: Presence,
     /// The object is a live target of a play issued *directly* by this
-    /// statement. Plays issued inside called helpers are not attributed
-    /// (their membership effects still show in `in_family`), so `Absent`
-    /// here describes the steady state after the statement, never "no
-    /// animation ever ran here".
+    /// statement. Plays inside inlined helpers are attributed to the
+    /// helper body's own statement intervals, not to the calling
+    /// statement (whose membership effects still show in `in_family`),
+    /// so `Absent` here describes the steady state after the statement,
+    /// never "no animation ever ran here".
     pub animation_target: Presence,
     /// The object carries registered updaters here. `No` is definite;
     /// `Maybe` means the may-set is non-empty — combine with
@@ -545,12 +575,27 @@ pub struct SceneLifecycle {
 }
 
 impl SceneLifecycle {
-    /// The last statement snapshot in `file` ending at or before `byte`.
+    /// The last statement snapshot in `file` ending at or before `byte`,
+    /// restricted to snapshots of the method body containing `byte`.
+    ///
+    /// The scope restriction keeps site order and program order aligned:
+    /// helper bodies (and the `__init__ → setup → construct → tear_down`
+    /// methods) may appear in any textual order and execute between other
+    /// statements, so an unrestricted "last site before byte" could
+    /// resolve to a chronologically *later* state of a different method.
+    /// Every executed body records an entry snapshot at its `def` start,
+    /// so the query for its first statement still finds the state the
+    /// body started from. A byte inside a never-executed body yields
+    /// `None` — no state is known there, never a borrowed one.
     #[must_use]
     pub fn state_at(&self, file: FileId, byte: u32) -> Option<&StateSnapshot> {
-        self.snapshots
-            .iter()
-            .rfind(|snapshot| snapshot.site.file == file && snapshot.site.end <= byte)
+        self.snapshots.iter().rfind(|snapshot| {
+            snapshot.site.file == file
+                && snapshot.site.end <= byte
+                && snapshot.scope.file == file
+                && snapshot.scope.start <= byte
+                && byte <= snapshot.scope.end
+        })
     }
 
     /// Root and family membership of `object` at the last snapshot before
@@ -1147,6 +1192,28 @@ impl Default for BlockCtx {
 }
 
 impl BlockCtx {
+    /// The context of a statement at `inner` depths inside a body entered
+    /// from a call site at `self` depths (helper inlining): loop and
+    /// condition depths add, definite-loop and comprehension contexts
+    /// carry over — a play inside a helper called from a branch is a
+    /// maybe-fact, and an allocation inside a helper called from a loop
+    /// is not a singleton. Repetition bounds multiply (call-site loops ×
+    /// helper-internal loops); an unknown factor on either side keeps the
+    /// composed bound unknown, and overflow degrades to unknown rather
+    /// than wrapping (DESIGN §4.1: never underestimate).
+    fn compose(self, inner: Self) -> Self {
+        Self {
+            loop_depth: self.loop_depth + inner.loop_depth,
+            cond_depth: self.cond_depth + inner.cond_depth,
+            in_definite_loop: self.in_definite_loop || inner.in_definite_loop,
+            comprehension: self.comprehension || inner.comprehension,
+            repetitions: match (self.repetitions, inner.repetitions) {
+                (Some(outer), Some(body)) => outer.checked_mul(body),
+                _ => None,
+            },
+        }
+    }
+
     fn certainty(self) -> Presence {
         if self.cond_depth == 0 && !self.comprehension {
             Presence::Present
@@ -1953,6 +2020,20 @@ struct Machine<'a, 'b> {
     /// While applying a summary event: its combined certainty overrides
     /// the block certainty for recorded ops and state effects.
     forced_certainty: Option<Presence>,
+    /// This machine runs a scene lifecycle (not a summary extraction):
+    /// only scene runs inline `self.<helper>()` bodies.
+    scene_run: bool,
+    /// Qualified names and call sites of the inlined helper calls
+    /// currently on the stack: the recursion guard and the
+    /// [`PlayFact::call_path`] source.
+    inline_stack: Vec<(String, AllocationSite)>,
+    /// Depth context of the enclosing call site while executing an
+    /// inlined helper body; composed with every block's own depths so
+    /// certainty and cardinality reflect the whole call path.
+    base_block: BlockCtx,
+    /// Byte range of the method body currently executing (the `def`);
+    /// recorded as every snapshot's scope.
+    body_site: AllocationSite,
 }
 
 impl<'a> Machine<'a, '_> {
@@ -1975,6 +2056,26 @@ impl<'a> Machine<'a, '_> {
             in_loop: self.block.in_loop(),
             in_definite_loop: self.block.in_definite_loop,
             op,
+        });
+    }
+
+    /// Records the state a method body starts from as a zero-width
+    /// snapshot at the `def` start. [`SceneLifecycle::state_at`] then
+    /// resolves a query at the body's *first* statement (e.g. the
+    /// pre-play state of a play that opens the body) to this entry state
+    /// instead of finding nothing.
+    fn record_entry_snapshot(&mut self, state: &ExecState) {
+        if !self.snapshot {
+            return;
+        }
+        self.sink.snapshots.push(StateSnapshot {
+            site: AllocationSite {
+                file: self.body_site.file,
+                start: self.body_site.start,
+                end: self.body_site.start,
+            },
+            scope: self.body_site,
+            heap: state.heap.clone(),
         });
     }
 
@@ -2073,13 +2174,13 @@ impl<'a> Machine<'a, '_> {
     }
 
     fn exec_block(&mut self, block: &BasicBlock<'a>, mut state: ExecState) -> ExecState {
-        self.block = BlockCtx {
+        self.block = self.base_block.compose(BlockCtx {
             loop_depth: block.loop_depth,
             cond_depth: block.cond_depth,
             in_definite_loop: block.in_definite_loop,
             comprehension: false,
             repetitions: block.repetitions,
-        };
+        });
         for item in &block.stmts {
             self.exec_cfg_stmt(item, &mut state);
         }
@@ -2113,6 +2214,7 @@ impl<'a> Machine<'a, '_> {
                 if self.snapshot {
                     self.sink.snapshots.push(StateSnapshot {
                         site: self.site(stmt.range()),
+                        scope: self.body_site,
                         heap: state.heap.clone(),
                     });
                 }
@@ -3783,13 +3885,7 @@ impl<'a> Machine<'a, '_> {
         for class in &mro {
             let qualified = format!("{class}.{method}");
             if self.ctx.defs.defs.contains_key(&qualified) {
-                return self.apply_summary_call(
-                    &qualified,
-                    Some(AbstractValue::SelfScene),
-                    call,
-                    fact,
-                    state,
-                );
+                return self.call_scene_helper(&qualified, call, fact, state);
             }
         }
         let resolved = fact
@@ -4474,13 +4570,7 @@ impl<'a> Machine<'a, '_> {
         for class in &mro[start.min(mro.len())..] {
             let qualified = format!("{class}.{method}");
             if self.ctx.defs.defs.contains_key(&qualified) {
-                return self.apply_summary_call(
-                    &qualified,
-                    Some(AbstractValue::SelfScene),
-                    call,
-                    fact,
-                    state,
-                );
+                return self.call_scene_helper(&qualified, call, fact, state);
             }
         }
         // External base: curated effect if any, else the empty base
@@ -4974,9 +5064,16 @@ impl<'a> Machine<'a, '_> {
                     .any(|arg| matches!(arg, ast::Expr::Starred(_))),
                 certainty,
                 repetitions: self.block.repetition_bound(),
+                call_path: self.inline_call_path(),
             });
         }
         AbstractValue::Unknown
+    }
+
+    /// The helper call sites currently on the inline stack, outermost
+    /// first ([`PlayFact::call_path`]).
+    fn inline_call_path(&self) -> Vec<AllocationSite> {
+        self.inline_stack.iter().map(|(_, site)| *site).collect()
     }
 
     fn do_wait(
@@ -5071,9 +5168,203 @@ impl<'a> Machine<'a, '_> {
                 star_args: false,
                 certainty: self.certainty(),
                 repetitions: self.block.repetition_bound(),
+                call_path: self.inline_call_path(),
             });
         }
         AbstractValue::Unknown
+    }
+
+    // -- helper inlining (scene runs only) -----------------------------------
+
+    /// A `self.<method>()` / `super().<method>()` call resolved to a
+    /// project definition: inline the body during scene runs (bounded by
+    /// [`MAX_INLINE_DEPTH`], recursion falls back), apply the effect
+    /// summary otherwise.
+    ///
+    /// Inlining executes the helper body against the live caller state,
+    /// so plays and waits inside it materialize as real [`PlayFact`]s
+    /// with their sites in the helper file, exact per-animation argument
+    /// facts, membership effects applied exactly once (the summary is
+    /// *not* applied for an inlined call), and wait dynamics judged on
+    /// the caller's actual updater state. Summary application remains
+    /// the semantics for summary runs (SCC fixpoints stay compositional)
+    /// and for the recursion / depth fallback frontier.
+    fn call_scene_helper(
+        &mut self,
+        qualified: &str,
+        call: &'a ast::ExprCall,
+        fact: Option<&'a QualifiedCall>,
+        state: &mut ExecState,
+    ) -> AbstractValue {
+        let recursive = self.inline_stack.iter().any(|(name, _)| name == qualified);
+        if !self.scene_run || recursive || self.inline_stack.len() >= MAX_INLINE_DEPTH {
+            return self.apply_summary_call(
+                qualified,
+                Some(AbstractValue::SelfScene),
+                call,
+                fact,
+                state,
+            );
+        }
+        let Some(def) = self.ctx.defs.defs.get(qualified).cloned() else {
+            return self.apply_summary_call(
+                qualified,
+                Some(AbstractValue::SelfScene),
+                call,
+                fact,
+                state,
+            );
+        };
+        self.inline_scene_method(qualified, &def, call, state)
+    }
+
+    /// Executes one resolved helper body inline (depth-limited by the
+    /// caller). Arguments bind to the declared parameter names, the
+    /// receiver binds to the scene, and every recorded op composes the
+    /// call site's certainty / loop context through
+    /// [`Machine::base_block`].
+    #[allow(
+        clippy::too_many_lines,
+        reason = "argument binding, frame switch, and write-back form one sequence"
+    )]
+    fn inline_scene_method(
+        &mut self,
+        qualified: &str,
+        def: &FnDef<'a>,
+        call: &'a ast::ExprCall,
+        state: &mut ExecState,
+    ) -> AbstractValue {
+        let call_site = self.site(call.range());
+        let params = def.param_names();
+
+        // Evaluate the arguments in the caller frame and bind them to
+        // parameter slots (the apply_summary_call discipline: a `*args`
+        // splat voids positional mapping, keywords bind by name).
+        let mut slots: Vec<AbstractValue> = vec![AbstractValue::Unknown; params.len()];
+        let star = call
+            .args
+            .iter()
+            .any(|arg| matches!(arg, ast::Expr::Starred(_)));
+        let mut next = 1usize;
+        for arg in &call.args {
+            if let ast::Expr::Starred(starred) = arg {
+                self.eval_expr(&starred.value, state);
+                continue;
+            }
+            let value = self.eval_expr(arg, state);
+            if !star {
+                if let Some(slot) = slots.get_mut(next) {
+                    *slot = value;
+                }
+            }
+            next += 1;
+        }
+        let mut keyword_bindings: Vec<(String, AbstractValue)> = Vec::new();
+        let declared_keyword_only: BTreeSet<&str> = def
+            .args
+            .kwonlyargs
+            .iter()
+            .map(|arg| arg.def.arg.as_str())
+            .collect();
+        for keyword in &call.keywords {
+            let value = self.eval_expr(&keyword.value, state);
+            if let Some(name) = &keyword.arg {
+                if let Some(position) = params.iter().position(|param| param == name.as_str()) {
+                    slots[position] = value;
+                } else if declared_keyword_only.contains(name.as_str()) {
+                    keyword_bindings.push((name.to_string(), value));
+                }
+            }
+        }
+
+        // The callee environment: every declared name binds explicitly
+        // (an unbound parameter must not fall back to a same-named
+        // module function), the receiver binds to the scene.
+        let mut bindings: BTreeMap<String, AbstractValue> = BTreeMap::new();
+        for name in &declared_keyword_only {
+            bindings.insert((*name).to_owned(), AbstractValue::Unknown);
+        }
+        for (position, name) in params.iter().enumerate() {
+            bindings.insert(name.clone(), slots[position].clone());
+        }
+        for (name, value) in keyword_bindings {
+            bindings.insert(name, value);
+        }
+        for arg in [&def.args.vararg, &def.args.kwarg].into_iter().flatten() {
+            bindings.insert(arg.arg.to_string(), AbstractValue::Unknown);
+        }
+        if let Some(receiver) = params.first() {
+            bindings.insert(receiver.clone(), AbstractValue::SelfScene);
+        }
+
+        // Switch to the callee frame.
+        let child_context = self.call_context.push(call_site);
+        let saved_file = self.file;
+        let saved_module = std::mem::replace(&mut self.module, def.module.clone());
+        let saved_class = std::mem::replace(&mut self.current_class, def.class.clone());
+        let method_name = qualified.rsplit('.').next().unwrap_or(qualified).to_owned();
+        let saved_method = std::mem::replace(&mut self.current_method, method_name);
+        let saved_context = std::mem::replace(&mut self.call_context, child_context.clone());
+        let saved_block = self.block;
+        let saved_base = std::mem::replace(&mut self.base_block, self.block);
+        let saved_forced = self.forced_certainty.take();
+        let saved_body_site = self.body_site;
+        self.file = def.file;
+        self.body_site = AllocationSite::new(def.file, def.range);
+        self.inline_stack.push((qualified.to_owned(), call_site));
+
+        let mut callee_state = state.clone();
+        callee_state.env = bindings;
+        callee_state.super_called = Presence::Absent;
+        self.record_entry_snapshot(&callee_state);
+        let exit = self.run_body(def.body, &callee_state);
+
+        self.inline_stack.pop();
+        self.file = saved_file;
+        self.module = saved_module;
+        self.current_class = saved_class;
+        self.current_method = saved_method;
+        self.call_context = saved_context;
+        self.block = saved_block;
+        self.base_block = saved_base;
+        self.forced_certainty = saved_forced;
+        self.body_site = saved_body_site;
+
+        // The callee's heap effects flow back; the caller keeps its own
+        // bindings and `super_called` flag.
+        state.heap = exit.heap;
+        state.animations = exit.animations;
+        state.replacement_targets = exit.replacement_targets;
+        state.attrs = exit.attrs;
+        state.definite_children = exit.definite_children;
+
+        // Return alias from the converged summary, with the actual
+        // argument values substituted (the same lookup discipline as
+        // apply_summary_call; a fresh id only resolves when the inline
+        // run allocated it under the same context and cardinality).
+        let returns = self
+            .ctx
+            .summaries
+            .get(qualified)
+            .map_or(SummaryReturn::Unknown, |summary| summary.returns.clone());
+        match returns {
+            SummaryReturn::SelfValue => AbstractValue::SelfScene,
+            SummaryReturn::Param(position) => slots
+                .get(position as usize)
+                .cloned()
+                .unwrap_or(AbstractValue::Unknown),
+            SummaryReturn::Fresh(site) => {
+                let id = ObjectId::new(site, child_context, self.block.cardinality());
+                if state.animations.contains_key(&id) {
+                    AbstractValue::Animation(id)
+                } else if state.heap.object(&id).is_some() {
+                    AbstractValue::Object(id)
+                } else {
+                    AbstractValue::Unknown
+                }
+            }
+            SummaryReturn::Unknown => AbstractValue::Unknown,
+        }
     }
 
     // -- summary application -------------------------------------------------
@@ -5804,7 +6095,12 @@ fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
             snapshot: true,
             block: BlockCtx::default(),
             forced_certainty: None,
+            scene_run: true,
+            inline_stack: Vec::new(),
+            base_block: BlockCtx::default(),
+            body_site: AllocationSite::new(def.file, def.range),
         };
+        machine.record_entry_snapshot(&method_state);
         let exit = machine.run_body(def.body, &method_state);
         play_counter = machine.play_counter;
         super_calls.insert(method.to_owned(), exit.super_called);
@@ -5945,6 +6241,10 @@ pub(crate) fn summarize_callable(
         snapshot: false,
         block: BlockCtx::default(),
         forced_certainty: None,
+        scene_run: false,
+        inline_stack: Vec::new(),
+        base_block: BlockCtx::default(),
+        body_site: AllocationSite::new(def.file, def.range),
     };
     let _exit = machine.run_body(def.body, &state);
 

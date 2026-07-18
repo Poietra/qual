@@ -975,6 +975,180 @@ fn z_index_family_write_joins_children() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Helper plays materialize as real lifecycle facts (DESIGN §2.1 "Scene
+// helper", §5.1 step 5): bounded inlining of `self.<helper>()` calls.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn helper_play_materializes_at_the_helper_site() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let helper = scene(&lifecycle, "helper_plays.HelperPlay");
+    assert_eq!(helper.plays.len(), 1, "the helper play is a real fact");
+    let play = &helper.plays[0];
+    assert_eq!(play.kind, PlayKind::Play);
+    assert_eq!(play.certainty, Presence::Present);
+    // The literal FadeIn run_time flows through: MLC104's zero-duration
+    // evidence.
+    assert_eq!(play.duration, Num::int(0));
+    // The site is the play call inside the helper body, not the call
+    // statement in construct.
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "self.play(FadeIn(mob, run_time=0))"
+    );
+    assert_eq!(play.call_path.len(), 1);
+    assert_eq!(
+        slice_at(
+            &sources,
+            play.call_path[0].file,
+            play.call_path[0].start,
+            play.call_path[0].end,
+        ),
+        "self.show(Square())"
+    );
+
+    // The parameter bound to the caller's square: introducer effects
+    // applied exactly once against the live caller state.
+    let sq = alloc_id(helper, &sources, "Square()");
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert_eq!(state.introducer, Truth::Yes);
+    assert!(state.targets.contains(&sq));
+    assert_eq!(state.run_time, Num::int(0));
+    assert_eq!(
+        helper.final_membership(&sq),
+        Some((Presence::Present, Presence::Present))
+    );
+
+    // The pre-play state is queryable at the helper play site (the
+    // liveness anchor): the introducer's target is not yet a member.
+    assert_eq!(
+        helper.membership_at(&sq, play.site.file, play.site.start),
+        Some((Presence::Absent, Presence::Absent))
+    );
+}
+
+#[test]
+fn two_call_sites_produce_one_play_fact_each() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let two = scene(&lifecycle, "helper_plays.TwoCalls");
+    assert_eq!(two.plays.len(), 2, "one fact per call site");
+    let (first, second) = (&two.plays[0], &two.plays[1]);
+    // Same play span in the helper, distinguished by call-site context.
+    assert_eq!(first.site, second.site);
+    assert_ne!(first.call_path, second.call_path);
+    assert_eq!(
+        slice_at(
+            &sources,
+            first.call_path[0].file,
+            first.call_path[0].start,
+            first.call_path[0].end,
+        ),
+        "self.flash(a)"
+    );
+    assert_eq!(
+        slice_at(
+            &sources,
+            second.call_path[0].file,
+            second.call_path[0].start,
+            second.call_path[0].end,
+        ),
+        "self.flash(b)"
+    );
+    // Each fact carries its own call's live target and identity.
+    let a = alloc_id(two, &sources, "Square()");
+    let b = alloc_id(two, &sources, "Circle()");
+    let first_state = first.animations[0].state.as_ref().expect("state");
+    let second_state = second.animations[0].state.as_ref().expect("state");
+    assert!(first_state.targets.contains(&a));
+    assert!(second_state.targets.contains(&b));
+    assert_ne!(
+        first.animations[0].animation,
+        second.animations[0].animation
+    );
+    // The play-level run_time kwarg applies inside the helper.
+    assert_eq!(first.duration, Num::int(2));
+}
+
+#[test]
+fn branch_reached_helper_play_is_a_maybe_fact() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let branch = scene(&lifecycle, "helper_plays.BranchCall");
+    assert_eq!(branch.plays.len(), 1);
+    // The call site's branch dependence composes into the play fact:
+    // never a certain claim from a conditional helper call.
+    assert_eq!(branch.plays[0].certainty, Presence::Maybe);
+}
+
+#[test]
+fn helper_chain_inlines_with_the_full_call_path() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let chain = scene(&lifecycle, "helper_plays.ChainCall");
+    assert_eq!(chain.plays.len(), 1);
+    let play = &chain.plays[0];
+    let path: Vec<&str> = play
+        .call_path
+        .iter()
+        .map(|site| slice_at(&sources, site.file, site.start, site.end))
+        .collect();
+    assert_eq!(path, vec!["self.outer(Square())", "self.inner(mob)"]);
+    assert_eq!(play.certainty, Presence::Present);
+}
+
+#[test]
+fn recursive_helper_falls_back_to_summary_without_frontier_plays() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let recursive = scene(&lifecycle, "helper_plays.RecursivePlay");
+    // The first inline level materializes its play; the recursive call
+    // falls back to the effect summary (no fabricated further plays,
+    // and the analysis terminates).
+    assert_eq!(recursive.plays.len(), 1);
+    assert_eq!(recursive.plays[0].call_path.len(), 1);
+}
+
+#[test]
+fn module_level_helper_stays_on_the_summary_path() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let module = scene(&lifecycle, "helper_plays.ModuleHelper");
+    // `flourish(self, sq)` is not a self-method call: unchanged summary
+    // semantics — the scene widens, no play fact is fabricated.
+    assert!(module.plays.is_empty());
+}
+
+#[test]
+fn helper_wait_dynamics_use_the_caller_state() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let waits = scene(&lifecycle, "helper_plays.WaitHelper");
+    let wait = waits
+        .plays
+        .iter()
+        .find(|play| play.kind == PlayKind::Wait)
+        .expect("wait fact");
+    // The dt updater registered in construct makes the helper's wait
+    // dynamic: the freeze verdict is judged on the live caller heap.
+    assert_eq!(wait.dynamic_wait, Truth::Yes);
+    assert_eq!(wait.duration, Num::int(2));
+    assert_eq!(
+        slice_at(&sources, wait.site.file, wait.site.start, wait.site.end),
+        "self.wait(2)"
+    );
+    assert_eq!(wait.call_path.len(), 1);
+}
+
+#[test]
+fn module_alias_helper_play_materializes_identically() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let alias = scene(&lifecycle, "helper_plays.AliasHelper");
+    assert_eq!(alias.plays.len(), 1);
+    let play = &alias.plays[0];
+    assert_eq!(play.certainty, Presence::Present);
+    assert_eq!(play.duration, Num::int(0));
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "self.play(mn.FadeIn(mob, run_time=0))"
+    );
+}
+
 #[test]
 fn z_index_unknown_on_unproven_writes() {
     let (sources, _facts, lifecycle) = analyze(&["z_index_scenes.py"]);

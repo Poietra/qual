@@ -151,6 +151,44 @@ fn cost_report_never_fabricates_numbers_for_unknown_durations() {
     }
 }
 
+/// A play issued inside a `self.<helper>()` body: the cost report counts
+/// it as a play row at the helper site, and the tracker label's
+/// `always_redraw` callback proves execution during it (the helper-driven
+/// play animates the unrelated square).
+const HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Helper(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.flash(square)
+";
+
+#[test]
+fn cost_report_counts_helper_plays() {
+    let dir = project(&[("helper.py", HELPER_SCENE)]);
+    let output = cost_output(dir.path(), None).unwrap();
+    assert!(
+        output.contains("helper.py:6:9 play duration 2 s -> frames ~120"),
+        "the helper-body play must appear as a play row: {output}"
+    );
+    assert!(
+        output.contains("proven execution plays: helper.py:6:9"),
+        "the callback's liveness must cite the helper play: {output}"
+    );
+    assert!(
+        output.contains("MathTex construction x ~120 invocations across 1 proven play(s)"),
+        "the frame bound must come from the helper play's literal run_time: {output}"
+    );
+}
+
 #[test]
 fn cost_scene_filter_selects_one_scene() {
     let dir = project(&[("demo.py", LITERAL_SCENE), ("loose.py", UNKNOWN_SCENE)]);

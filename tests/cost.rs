@@ -992,6 +992,59 @@ fn all_paths_removal_before_the_play_deactivates_the_registration() {
     assert_eq!(cost.proven_frames_for_call(math_tex), None);
 }
 
+/// A play issued inside a `self.<helper>()` body is a real lifecycle
+/// play fact: the un-suspended `always_redraw` host provably executes
+/// during the helper-driven play of the unrelated square (the tracker
+/// label's callback), and the frame bound comes from the helper play's
+/// literal `run_time` through the existing liveness pipeline.
+const HELPER_PLAY_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.flash(square)
+";
+
+#[test]
+fn helper_driven_play_proves_execution_and_frame_bounds() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", HELPER_PLAY_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // The helper play materialized as a lifecycle fact with its call
+    // path recorded.
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 1, "the helper play is a real fact");
+    assert_eq!(scene.plays[0].call_path.len(), 1);
+
+    // Liveness proves execution during exactly that play, and the frame
+    // bound comes from its literal 2 s run_time.
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(
+        execution.proven.len(),
+        1,
+        "the helper play proves execution"
+    );
+    assert!(execution.maybe.is_empty());
+    assert_eq!(execution.proven[0].site, scene.plays[0].site);
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(120.0),
+            hi: Some(120.0),
+        })
+    );
+}
+
 /// A non-literal `suspend_mobject_updating` value proves nothing about
 /// suspension: the targeted host's execution becomes a maybe, never a
 /// proven claim in either direction (DESIGN §15 invariant 2).

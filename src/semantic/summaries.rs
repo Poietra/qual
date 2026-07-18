@@ -20,8 +20,13 @@
 //!
 //! - A `self.play(...)` inside a helper contributes its *membership*
 //!   effects (auto-add, introducer add, remover remove) to the summary;
-//!   the play group itself is only recorded for plays reached directly
-//!   from scene methods.
+//!   the play group itself is not summarizable (its duration, auto-add
+//!   certainty, and wait dynamics depend on the caller's state at the
+//!   call point). Scene runs therefore *inline* resolvable
+//!   `self.<helper>()` bodies instead of applying their summaries, which
+//!   materializes helper plays as real per-call-site `PlayFact`s; the
+//!   summary path remains for summary runs and for the bounded-depth /
+//!   recursion fallback, where frontier plays stay unmaterialized.
 //! - Effects on values that are neither parameters, `self`, nor local
 //!   allocations become [`SummaryOperand::Opaque`] and are applied as
 //!   unknown mutations, never as certain facts.

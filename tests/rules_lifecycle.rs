@@ -135,10 +135,15 @@ fn mlc103_bound_method_play_argument_golden() {
 
 #[test]
 fn mlc104_non_positive_duration_golden() {
+    // helper.py is the review's empirically confirmed repro: the zero
+    // run_time play happens inside a `self.show(...)` helper body and
+    // must fire at the helper play span (helper plays materialize as
+    // real lifecycle facts).
     assert_golden(
         "MLC104",
         &[
             "alias.py:6:19 MLC104 error certain",
+            "helper.py:6:40 MLC104 error certain",
             "invalid.py:7:44 MLC104 error certain",
             "invalid.py:8:44 MLC104 error certain",
             "invalid.py:9:19 MLC104 error certain",
@@ -305,10 +310,15 @@ fn mlc107_missing_generated_target_golden() {
 
 #[test]
 fn mlc108_conflicting_play_writes_golden() {
+    // helper.py plays two same-target builders inside a helper body: the
+    // parameter binds to the caller's live square, so the conflict is
+    // provable at the helper play (helper plays materialize as real
+    // lifecycle facts).
     assert_golden(
         "MLC108",
         &[
             "alias.py:8:48 MLC108 warning high",
+            "helper.py:6:45 MLC108 warning high",
             "invalid.py:8:48 MLC108 warning high",
             "invalid.py:10:32 MLC108 warning high",
         ],
