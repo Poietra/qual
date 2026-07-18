@@ -1106,6 +1106,79 @@ fn recursive_helper_falls_back_to_summary_without_frontier_plays() {
     assert_eq!(recursive.plays[0].call_path.len(), 1);
 }
 
+/// Inlining is governed by cycle detection, not a small fixed depth:
+/// acyclic helper chains 4, 6, and 10 deep all materialize the deepest
+/// play as a real fact with the full call chain.
+#[test]
+fn deep_acyclic_helper_chains_materialize_the_deepest_play() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+
+    let four = scene(&lifecycle, "helper_plays.DeepFour");
+    assert_eq!(four.plays.len(), 1, "4-deep chain keeps its play");
+    assert_eq!(four.plays[0].call_path.len(), 4);
+    assert_eq!(four.plays[0].certainty, Presence::Present);
+
+    // At depth 6 the literal run_time=0 still flows through exactly:
+    // MLC104's zero-duration evidence survives the whole chain.
+    let six = scene(&lifecycle, "helper_plays.DeepSix");
+    assert_eq!(six.plays.len(), 1, "6-deep chain keeps its play");
+    let play = &six.plays[0];
+    assert_eq!(play.call_path.len(), 6);
+    assert_eq!(play.duration, Num::int(0));
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "self.play(FadeIn(mob, run_time=0))"
+    );
+
+    let ten = scene(&lifecycle, "helper_plays.DeepTen");
+    assert_eq!(ten.plays.len(), 1, "10-deep chain keeps its play");
+    assert_eq!(ten.plays[0].call_path.len(), 10);
+    assert_eq!(ten.plays[0].certainty, Presence::Present);
+}
+
+/// Mutual recursion (ping calls pong calls ping) terminates at the cycle
+/// guard: each method inlines once, the cycle-closing call falls back to
+/// the summary. If the safety depth cap were deciding instead, dozens of
+/// plays would materialize down the alternating chain.
+#[test]
+fn mutual_recursion_hits_the_cycle_guard_not_the_depth_cap() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let mutual = scene(&lifecycle, "helper_plays.MutualPlay");
+    assert_eq!(
+        mutual.plays.len(),
+        2,
+        "one play per inlined level, none fabricated past the cycle"
+    );
+    let mut depths: Vec<usize> = mutual
+        .plays
+        .iter()
+        .map(|play| play.call_path.len())
+        .collect();
+    depths.sort_unstable();
+    assert_eq!(depths, vec![1, 2]);
+}
+
+/// One helper reached through another from five call sites: exactly one
+/// play fact per site (no exponential re-expansion), each with its own
+/// two-level call path.
+#[test]
+fn wide_chain_produces_exactly_one_play_fact_per_call_site() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let wide = scene(&lifecycle, "helper_plays.WideChain");
+    assert_eq!(wide.plays.len(), 5, "one fact per call site, no blowup");
+    let distinct_paths: std::collections::BTreeSet<_> = wide
+        .plays
+        .iter()
+        .map(|play| play.call_path.clone())
+        .collect();
+    assert_eq!(distinct_paths.len(), 5);
+    assert!(wide.plays.iter().all(|play| play.call_path.len() == 2));
+    // The shared play span in the glow helper anchors every fact.
+    let distinct_sites: std::collections::BTreeSet<_> =
+        wide.plays.iter().map(|play| play.site).collect();
+    assert_eq!(distinct_sites.len(), 1);
+}
+
 #[test]
 fn module_level_helper_stays_on_the_summary_path() {
     let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);

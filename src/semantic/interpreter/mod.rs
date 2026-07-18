@@ -21,13 +21,15 @@
 //! - `.animate` builders (`generate_target` runs at builder creation),
 //! - branch joins to `MAYBE` and bounded loop evaluation with widening
 //!   (DESIGN §5.5),
-//! - bounded inlining of `self.<helper>()` calls resolved through the
-//!   project MRO (DESIGN §2.1 "Scene helper", §5.1 step 5): a play or
-//!   wait inside a helper body materializes as a real [`PlayFact`] per
-//!   call site, anchored at the play call in the helper file with the
-//!   call chain in [`PlayFact::call_path`]. Recursion and chains deeper
-//!   than [`MAX_INLINE_DEPTH`] fall back to the §5.7 effect summary
-//!   (membership effects survive; frontier plays stay unmaterialized).
+//! - cycle-guarded inlining of `self.<helper>()` calls resolved through
+//!   the project MRO (DESIGN §2.1 "Scene helper", §5.1 step 5): a play
+//!   or wait inside a helper body materializes as a real [`PlayFact`]
+//!   per call site, anchored at the play call in the helper file with
+//!   the call chain in [`PlayFact::call_path`]. A call that closes a
+//!   recursion cycle (direct or mutual) — or exceeds the work-bounding
+//!   `INLINE_DEPTH_SAFETY_CAP` backstop — falls back to the §5.7 effect
+//!   summary (membership effects survive; frontier plays stay
+//!   unmaterialized).
 //!
 //! Everything the interpreter cannot prove is an explicit `Unknown` /
 //! `Maybe` fact — a rule must never receive a wrong certain fact

@@ -8,9 +8,10 @@
 //! applies — never both, never neither:
 //!
 //! 1. **Inline execution** ([`Machine::inline_scene_method`]): only
-//!    during scene runs (`Machine::scene_run`), only while the call is
-//!    non-recursive and the inline stack is shallower than
-//!    [`MAX_INLINE_DEPTH`]. The helper body executes against the live
+//!    during scene runs (`Machine::scene_run`), only while the called
+//!    method is not already on the inline stack (cycle detection) and
+//!    the stack is shallower than the [`INLINE_DEPTH_SAFETY_CAP`]
+//!    work-bounding backstop. The helper body executes against the live
 //!    caller state, so it covers *everything* the body does: membership /
 //!    updater / heap effects exactly once, plays and waits materialized
 //!    as real [`PlayFact`]s per call site (anchored in the helper file,
@@ -19,8 +20,8 @@
 //!    snapshots inside the helper body. The §5.7 summary is *not* applied
 //!    for an inlined call (its only contribution is the return alias).
 //! 2. **Summary application** ([`Machine::apply_summary_call`]): for
-//!    summary runs (SCC fixpoints stay compositional), for the recursion
-//!    / depth fallback frontier of scene runs, and for calls that are not
+//!    summary runs (SCC fixpoints stay compositional), for the cycle /
+//!    safety-cap fallback frontier of scene runs, and for calls that are not
 //!    scene-helper dispatch (project constructors, mobject methods,
 //!    module-level functions). It replays the callable's parameter-
 //!    relative effect summary — membership, children, updaters,
@@ -35,7 +36,7 @@
 //! so no effect is ever applied twice (inline + summary) or dropped
 //! (neither mode).
 //!
-//! [`MAX_INLINE_DEPTH`]: self::MAX_INLINE_DEPTH
+//! [`INLINE_DEPTH_SAFETY_CAP`]: self::INLINE_DEPTH_SAFETY_CAP
 //! [`PlayFact`]: super::PlayFact
 //! [`PlayFact::call_path`]: super::PlayFact::call_path
 
@@ -65,20 +66,31 @@ use super::heap_ops::{seed_path_counts, widen_z_index_family};
 use super::mro::linearize_project;
 use super::{DefMap, FnDef, ReturnFact, TargetRequirement, TargetRequirementFact};
 
-/// Maximum depth of `self.<helper>()` calls inlined during a scene run
-/// (DESIGN §5.1 step 5). A recursive or deeper call falls back to the
-/// DESIGN §5.7 effect summary: membership and updater effects still
-/// apply, while plays inside the unexpanded frontier stay unmaterialized
-/// — missing information, never a wrong fact.
-const MAX_INLINE_DEPTH: usize = 3;
+/// Safety backstop on the inline stack depth (DESIGN §5.1 step 5).
+///
+/// Termination is guaranteed by CYCLE DETECTION — a `self.<helper>()`
+/// call whose method is already on the inline stack falls back to the
+/// DESIGN §5.7 effect summary — so this cap never decides ordinary
+/// programs (any acyclic chain of up to 32 distinct helpers inlines
+/// fully). It exists ONLY to bound work on pathological call graphs
+/// (e.g. dozens of distinct helpers fanning out at every level). When
+/// hit, the behavior is the established conservative fallback: the
+/// summary applies membership / updater effects while plays inside the
+/// unexpanded frontier stay unmaterialized — missing information, never
+/// a wrong fact.
+const INLINE_DEPTH_SAFETY_CAP: usize = 32;
 
 impl<'a> Machine<'a, '_> {
     // -- helper inlining (scene runs only) -----------------------------------
 
     /// A `self.<method>()` / `super().<method>()` call resolved to a
-    /// project definition: inline the body during scene runs (bounded by
-    /// [`MAX_INLINE_DEPTH`], recursion falls back), apply the effect
-    /// summary otherwise.
+    /// project definition: inline the body during scene runs, apply the
+    /// effect summary otherwise. Inlining is governed by cycle detection
+    /// — a method already on the inline stack (direct *or* mutual
+    /// recursion) falls back to the summary — with the
+    /// [`INLINE_DEPTH_SAFETY_CAP`] backstop bounding pathological
+    /// non-recursive fan-out; acyclic helper chains inline at any
+    /// ordinary depth.
     ///
     /// Inlining executes the helper body against the live caller state,
     /// so plays and waits inside it materialize as real [`PlayFact`]s
@@ -87,7 +99,7 @@ impl<'a> Machine<'a, '_> {
     /// *not* applied for an inlined call), and wait dynamics judged on
     /// the caller's actual updater state. Summary application remains
     /// the semantics for summary runs (SCC fixpoints stay compositional)
-    /// and for the recursion / depth fallback frontier.
+    /// and for the cycle / safety-cap fallback frontier.
     pub(super) fn call_scene_helper(
         &mut self,
         qualified: &str,
@@ -95,8 +107,12 @@ impl<'a> Machine<'a, '_> {
         fact: Option<&'a QualifiedCall>,
         state: &mut ExecState,
     ) -> AbstractValue {
-        let recursive = self.inline_stack.iter().any(|(name, _)| name == qualified);
-        if !self.scene_run || recursive || self.inline_stack.len() >= MAX_INLINE_DEPTH {
+        // Cycle detection: the method identity already on the inline
+        // stack means this call closes a recursion cycle (direct or
+        // mutual) — the summary fallback keeps the analysis terminating
+        // and the semantics conservative.
+        let cyclic = self.inline_stack.iter().any(|(name, _)| name == qualified);
+        if !self.scene_run || cyclic || self.inline_stack.len() >= INLINE_DEPTH_SAFETY_CAP {
             return self.apply_summary_call(
                 qualified,
                 Some(AbstractValue::SelfScene),
@@ -117,7 +133,7 @@ impl<'a> Machine<'a, '_> {
         self.inline_scene_method(qualified, &def, call, state)
     }
 
-    /// Executes one resolved helper body inline (depth-limited by the
+    /// Executes one resolved helper body inline (cycle-guarded by the
     /// caller). Arguments bind to the declared parameter names, the
     /// receiver binds to the scene, and every recorded op composes the
     /// call site's certainty / loop context through
