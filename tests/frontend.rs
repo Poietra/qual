@@ -690,3 +690,62 @@ fn conditional_rebinding_joins_to_unknown() {
         "conflicting branch bindings never guess"
     );
 }
+
+#[test]
+fn tuple_and_list_displays_yield_element_literals() {
+    let (sources, facts) = load_inline(
+        "literal_sequences.py",
+        concat!(
+            "def build(axes, x):\n",
+            "    axes.plot(\n",
+            "        (0, 1, 0.01),\n",
+            "        [1, -2],\n",
+            "        (1, f\"{x}\"),\n",
+            "        (1, (2, 3)),\n",
+            "        (1, *x),\n",
+            "    )\n",
+        ),
+    );
+    let plot = single_call(&sources, &facts, "literal_sequences.py", "axes.plot");
+
+    // Literal t_range-style tuple (MLP221).
+    assert_eq!(
+        plot.arguments[0].literal,
+        Some(LiteralFact::Tuple(vec![
+            LiteralFact::Int(0),
+            LiteralFact::Int(1),
+            LiteralFact::Float(0.01),
+        ]))
+    );
+    assert_eq!(plot.arguments[0].shape, ArgShape::Literal);
+
+    // List displays fold folded-negative numbers too.
+    assert_eq!(
+        plot.arguments[1].literal,
+        Some(LiteralFact::List(vec![
+            LiteralFact::Int(1),
+            LiteralFact::Int(-2),
+        ]))
+    );
+
+    // A single non-literal element voids the whole display fact.
+    assert_eq!(
+        plot.arguments[2].literal, None,
+        "an f-string element voids the tuple fact"
+    );
+
+    // Nesting is allowed.
+    assert_eq!(
+        plot.arguments[3].literal,
+        Some(LiteralFact::Tuple(vec![
+            LiteralFact::Int(1),
+            LiteralFact::Tuple(vec![LiteralFact::Int(2), LiteralFact::Int(3)]),
+        ]))
+    );
+
+    // Starred elements make the element count unknown: no fact.
+    assert_eq!(
+        plot.arguments[4].literal, None,
+        "starred elements void the fact"
+    );
+}

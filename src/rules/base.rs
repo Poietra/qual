@@ -41,6 +41,16 @@ pub use crate::frontend::index::ProjectIndex as ProjectIndexFacts;
 /// Phase-2 rule should read).
 pub use crate::semantic::interpreter::LifecycleFacts;
 
+/// Capability-pack fact types for the reserved rules (see the
+/// [`LifecycleFacts`] query map): per-callable return facts (MLC123),
+/// updater-body dataflow (MLC112 / MLP218), own-path state (MLR116),
+/// per-statement ownership intervals (MLC111), fixed-object registration
+/// facts and the scene camera kind (renderer wave, DESIGN §3.5).
+pub use crate::semantic::interpreter::{
+    CallbackReturnFacts, CameraKind, FixedAction, FixedKind, FixedRegistrationFact,
+    OwnershipInterval, PathStateFact, ReturnFact, UpdaterBodyFact,
+};
+
 /// Symbolic cost facts (hot contexts, multiplicities, frame estimates, and
 /// per-operation cost facts) produced by [`crate::cost::CostFacts::compute`]
 /// (DESIGN §4).

@@ -155,6 +155,11 @@ impl Default for Multiplicity {
 pub enum MutationKind {
     /// Geometry points changed.
     Points,
+    /// The path topology changed: point / curve / subpath counts moved
+    /// (`set_points`, `start_new_path`, `add_line_to`, `append_points`,
+    /// `clear_points`, ...). A `Points` mutation moves existing geometry;
+    /// a `PathTopology` mutation changes how much geometry there is.
+    PathTopology,
     /// Color / stroke / fill style changed.
     Style,
     /// Fill / stroke / points opacity changed.

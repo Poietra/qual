@@ -268,8 +268,14 @@ pub struct StrPrefix {
 /// Statically known value of a literal argument expression.
 ///
 /// A single leading unary minus is folded into numbers: `play(run_time=-1)`
-/// yields `Int(-1)`. Integers that do not fit `i64`, complex literals,
-/// f-strings, and tuples yield no fact at all.
+/// yields `Int(-1)`. Integers that do not fit `i64`, complex literals, and
+/// f-strings yield no fact at all. Tuple / list display expressions whose
+/// elements are all plain literals (nesting allowed) yield
+/// [`LiteralFact::Tuple`] / [`LiteralFact::List`]; a single non-literal
+/// element (a name, an f-string, arithmetic, a starred element, ...) makes
+/// the whole display yield no fact — element counts and values are never
+/// guessed (MLP221 consumes exactly this shape for literal `t_range`
+/// tuples).
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiteralFact {
     /// An integer literal (possibly negated) that fits `i64`.
@@ -294,6 +300,12 @@ pub enum LiteralFact {
     Bool(bool),
     /// The `None` literal.
     NoneLit,
+    /// A tuple display whose elements are all plain literals, in source
+    /// order.
+    Tuple(Vec<LiteralFact>),
+    /// A list display whose elements are all plain literals, in source
+    /// order.
+    List(Vec<LiteralFact>),
 }
 
 /// Float literals parsed from source are never NaN, so equality is total.
@@ -1452,7 +1464,9 @@ impl Walker<'_> {
     }
 
     /// Statically known literal value of an argument expression, folding a
-    /// single leading unary minus into numbers.
+    /// single leading unary minus into numbers. Tuple / list displays
+    /// recurse element-wise; any non-literal element makes the whole
+    /// display yield `None` (never a partial or guessed fact).
     fn literal_fact(&self, expr: &ast::Expr) -> Option<LiteralFact> {
         match expr {
             ast::Expr::Constant(constant) => self.constant_literal(constant),
@@ -1468,8 +1482,19 @@ impl Walker<'_> {
                     _ => None,
                 }
             }
+            ast::Expr::Tuple(tuple) => self.sequence_literal(&tuple.elts).map(LiteralFact::Tuple),
+            ast::Expr::List(list) => self.sequence_literal(&list.elts).map(LiteralFact::List),
             _ => None,
         }
+    }
+
+    /// Element literals of a tuple / list display; `None` as soon as one
+    /// element is not a plain literal (starred elements included).
+    fn sequence_literal(&self, elements: &[ast::Expr]) -> Option<Vec<LiteralFact>> {
+        elements
+            .iter()
+            .map(|element| self.literal_fact(element))
+            .collect()
     }
 
     fn constant_literal(&self, constant: &ast::ExprConstant) -> Option<LiteralFact> {

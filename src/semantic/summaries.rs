@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::frontend::index::{ProjectIndex, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::events::MutationKind;
-use crate::semantic::interpreter::{DefMap, FnDef};
+use crate::semantic::interpreter::{DefMap, FnDef, ReturnFact};
 use crate::semantic::state::{AnimationState, CallbackRef, UpdaterFact};
 use crate::semantic::values::{AllocationSite, KindSet, Presence};
 use crate::source::SourceManager;
@@ -49,6 +49,9 @@ pub enum SummaryOperand {
     Param(u32),
     /// An object allocated inside the summarized body at this site.
     Fresh(AllocationSite),
+    /// A literal `True` / `False` value (drives literal
+    /// `self.always_update_mobjects = ...` tracking through helpers).
+    LiteralBool(bool),
     /// A value the summary cannot name (globals, attribute loads, results
     /// of unknown calls). Applying an effect on it never yields a certain
     /// fact.
@@ -219,6 +222,9 @@ pub struct MethodSummary {
     pub events: Vec<SummaryEvent>,
     /// Return-value alias fact.
     pub returns: SummaryReturn,
+    /// Return-path classification (all-paths mobject return, bare-return
+    /// paths, fall-off-the-end paths; MLC123).
+    pub return_fact: ReturnFact,
     /// `false` when the SCC fixpoint did not converge and the unstable
     /// knowledge was widened.
     pub converged: bool,
@@ -233,6 +239,7 @@ impl MethodSummary {
             params,
             events: Vec::new(),
             returns: SummaryReturn::Unknown,
+            return_fact: ReturnFact::unknown(),
             converged: true,
         }
     }
@@ -338,6 +345,7 @@ pub fn build(
                         },
                     });
                     summary.returns = SummaryReturn::Unknown;
+                    summary.return_fact = ReturnFact::unknown();
                 }
             }
         }

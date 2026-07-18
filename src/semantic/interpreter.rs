@@ -26,11 +26,28 @@
 //! `Maybe` fact — a rule must never receive a wrong certain fact
 //! (DESIGN §15 invariant 2).
 //!
+//! On top of the lifecycle trace this layer exposes the capability facts
+//! of the reserved-rule waves:
+//!
+//! - own-path point/curve counts with `SceneLifecycle::path_state_at`
+//!   (MLR116; curated empty-start constructors, exact `set_points` /
+//!   `start_new_path` / `add_line_to` arithmetic, unknown mutations widen),
+//! - `SceneState::always_update_mobjects` literal tracking and the
+//!   [`PlayFact::always_update_mobjects`] snapshot (MLP227),
+//! - per-callable [`ReturnFact`]s in [`CallbackReturnFacts`] (MLC123),
+//! - conservative [`UpdaterBodyFact`] dataflow classification attached to
+//!   every [`UpdaterRegistration`] (MLC112 / MLP218 / MLD301),
+//! - per-statement ownership intervals via
+//!   `SceneLifecycle::ownership_intervals` (MLC111),
+//! - queryable fixed-in-frame / fixed-orientation registrations and the
+//!   scene's [`CameraKind`] (renderer-rules groundwork, DESIGN §3.5).
+//!
 //! Deliberate scope limits of this phase (all degrade to `Unknown`):
-//! camera state, `always_update_mobjects` value tracking, effects of
-//! nested `def` bodies (their registration identity and signature are
-//! modeled; their body runs per-frame and belongs to the cost phase), and
-//! `finally` effects on early-return paths (see `frontend::cfg`).
+//! full camera state, point counts of project-defined mobject subclasses
+//! (their `__init__` may build arbitrary paths), effects of nested `def`
+//! bodies (their registration identity and signature are modeled; their
+//! body runs per-frame and belongs to the cost phase), and `finally`
+//! effects on early-return paths (see `frontend::cfg`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -152,12 +169,17 @@ pub struct PlayFact {
     /// Compiled animation arguments in source order (empty for waits).
     pub animations: Vec<PlayedAnimation>,
     /// Wait only: whether the wait renders dynamically (scene updaters,
-    /// `stop_condition`, or time-based family updaters; DESIGN §3.3).
+    /// `stop_condition`, `always_update_mobjects`, or time-based family
+    /// updaters; DESIGN §3.3).
     pub dynamic_wait: Truth,
     /// A `stop_condition` argument was written.
     pub has_stop_condition: bool,
     /// Literal `frozen_frame` argument, when written.
     pub frozen_frame: Option<bool>,
+    /// Tracked `self.always_update_mobjects` value at this call
+    /// (MLP227): `No` is the Manim default, literal assignments set it
+    /// exactly, non-literal writes degrade it to `Maybe`.
+    pub always_update_mobjects: Truth,
     /// Path certainty of the call itself.
     pub certainty: Presence,
 }
@@ -171,6 +193,49 @@ pub enum UpdaterHost {
     Scene,
 }
 
+/// Conservative dataflow classification of an updater callback body
+/// (MLC112 / MLP218 / MLD301).
+///
+/// Every field is a [`Truth`]: `Yes` / `No` only when the body proves it,
+/// `Maybe` otherwise. A call to an unresolvable function makes
+/// [`UpdaterBodyFact::calls_unknown`] `Yes` and degrades every dependent
+/// field to at most `Maybe` — a rule must never treat `Maybe` as a
+/// definite verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdaterBodyFact {
+    /// The body reads the frame-delta parameter (the parameter named `dt`
+    /// for mobject updaters, the first parameter for scene updaters).
+    pub uses_dt: Truth,
+    /// The body provably reads frame-varying state: `ValueTracker`
+    /// `get_value`, `random` / `numpy.random`, wall-clock time, or
+    /// iterator advancement (`next`). Conditional reads are `Maybe`.
+    pub reads_frame_varying: Truth,
+    /// The body mutates the updater's mobject parameter (curated mutator
+    /// call, raw attribute write, or the parameter escaping into a call).
+    pub mutates_target: Truth,
+    /// The body performs *only* `shift` / `rotate` / `scale` / `move_to` /
+    /// `set_*` calls on the updater parameter plus pure reads. `No` when a
+    /// definitely different effect exists, `Maybe` when unprovable.
+    pub pure_affine_on_target: Truth,
+    /// The body calls something whose identity cannot be resolved (or an
+    /// unrecognized method on the updater parameter).
+    pub calls_unknown: Truth,
+}
+
+impl UpdaterBodyFact {
+    /// The all-`Maybe` fact for callbacks whose body is unavailable.
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            uses_dt: Truth::Maybe,
+            reads_frame_varying: Truth::Maybe,
+            mutates_target: Truth::Maybe,
+            pure_affine_on_target: Truth::Maybe,
+            calls_unknown: Truth::Maybe,
+        }
+    }
+}
+
 /// One updater registration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdaterRegistration {
@@ -180,6 +245,9 @@ pub struct UpdaterRegistration {
     pub host: UpdaterHost,
     /// Callback identity, signature facts, and time-based classification.
     pub fact: UpdaterFact,
+    /// Conservative body dataflow classification; all-`Maybe` when the
+    /// callback body could not be resolved.
+    pub body: UpdaterBodyFact,
     /// Path certainty.
     pub certainty: Presence,
 }
@@ -265,6 +333,154 @@ pub struct SceneRemovalFact {
     pub certainty: Presence,
 }
 
+/// Return-path classification of a project callable (MLC123).
+///
+/// `returns_mobject` asks: does *every* normal return path yield a tracked
+/// mobject, assuming mobject-valued parameters (the assumption under which
+/// `ApplyFunction` invokes its callback)? A bare `return` or a
+/// fall-off-the-end path is a definite `No`; a path returning an
+/// untracked value is `Maybe` — the two are never conflated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReturnFact {
+    /// Every normal return path yields a (parameter-derived or freshly
+    /// allocated) mobject. `No` as soon as one path definitely does not.
+    pub returns_mobject: Truth,
+    /// Some path executes a bare `return` (returning `None`).
+    pub has_bare_return_path: Truth,
+    /// Some CFG path reaches the end of the body without a `return`
+    /// statement (paths ending in `raise` do not count).
+    pub has_no_return_path: Truth,
+}
+
+impl ReturnFact {
+    /// The all-`Maybe` fact for callables whose body was not analyzed.
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            returns_mobject: Truth::Maybe,
+            has_bare_return_path: Truth::Maybe,
+            has_no_return_path: Truth::Maybe,
+        }
+    }
+}
+
+/// Return facts for every project callable: functions/methods by
+/// qualified name, lambdas by their source span — so a rule can resolve
+/// both `ApplyFunction(helper, ...)` and `ApplyFunction(lambda m: ..., ...)`
+/// arguments (MLC123).
+#[derive(Debug, Clone, Default)]
+pub struct CallbackReturnFacts {
+    /// Facts keyed by qualified callable name (`module.helper`,
+    /// `module.Class.method`).
+    pub functions: BTreeMap<String, ReturnFact>,
+    /// Facts keyed by the lambda expression's source span.
+    pub lambdas: BTreeMap<AllocationSite, ReturnFact>,
+}
+
+impl CallbackReturnFacts {
+    /// The fact for a resolved callback reference.
+    #[must_use]
+    pub fn for_callback(&self, callback: &CallbackRef) -> Option<&ReturnFact> {
+        match callback {
+            CallbackRef::Named(name) => self.functions.get(name),
+            CallbackRef::Lambda(site) => self.lambdas.get(site),
+            CallbackRef::Unknown => None,
+        }
+    }
+
+    /// The fact for the lambda spanning exactly `start..end` in `file`.
+    #[must_use]
+    pub fn lambda_at(&self, file: FileId, start: u32, end: u32) -> Option<&ReturnFact> {
+        self.lambdas.get(&AllocationSite { file, start, end })
+    }
+}
+
+/// Own-path state of one mobject at a program point (MLR116).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathStateFact {
+    /// Own `points` array length (not the family total).
+    pub point_count: Num,
+    /// Bezier curve count.
+    pub curve_count: Num,
+    /// Subpath count (currently always `Unknown`; subpath splits are not
+    /// tracked).
+    pub subpath_count: Num,
+    /// Whether the own path is provably empty (`Yes`), provably non-empty
+    /// (`No`), or unknown (`Maybe`).
+    pub empty: Truth,
+}
+
+/// Ownership classification of one object at one statement (MLC111): is
+/// it in the scene family, and is it the live target of an in-flight
+/// animation of this statement's play?
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnershipInterval {
+    /// The statement span the classification holds after.
+    pub site: AllocationSite,
+    /// Effective scene-family membership at this statement.
+    pub in_family: Presence,
+    /// The object is a live target of a play issued *directly* by this
+    /// statement. Plays issued inside called helpers are not attributed
+    /// (their membership effects still show in `in_family`), so `Absent`
+    /// here describes the steady state after the statement, never "no
+    /// animation ever ran here".
+    pub animation_target: Presence,
+    /// The object carries registered updaters here. `No` is definite;
+    /// `Maybe` means the may-set is non-empty — combine with
+    /// [`UpdaterRegistration::certainty`] for a definite verdict.
+    pub has_updaters: Truth,
+}
+
+/// Which 3D fixed-object registry a call touched (DESIGN §3.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixedKind {
+    /// `add_fixed_in_frame_mobjects` / `remove_fixed_in_frame_mobjects`.
+    InFrame,
+    /// `add_fixed_orientation_mobjects` / `remove_...`.
+    Orientation,
+}
+
+/// Registration vs removal of a fixed-object registry entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixedAction {
+    /// The object was registered (and auto-added to the scene).
+    Register,
+    /// The registration was removed.
+    Remove,
+}
+
+/// One fixed-in-frame / fixed-orientation registration or removal,
+/// queryable per object (renderer-rules groundwork; DESIGN §3.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixedRegistrationFact {
+    /// Source range of the call.
+    pub site: AllocationSite,
+    /// The affected object.
+    pub object: ObjectId,
+    /// Which registry.
+    pub kind: FixedKind,
+    /// Registration vs removal.
+    pub action: FixedAction,
+    /// The membership effect diverges between Cairo and OpenGL (curated;
+    /// true for the removal APIs in v0.20).
+    pub renderer_divergent: bool,
+    /// Path certainty of the call.
+    pub certainty: Presence,
+}
+
+/// Which camera contract the scene class commits to (DESIGN §3.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CameraKind {
+    /// Plain 2D `Scene` camera.
+    Standard,
+    /// `MovingCameraScene`: an animatable camera frame.
+    MovingCamera,
+    /// `ThreeDScene`: `ThreeDCamera` with fixed-object registries.
+    ThreeD,
+    /// Unresolved or mixed base chain — never guessed.
+    Unknown,
+}
+
 /// Lifecycle analysis of one Scene subclass.
 #[derive(Debug, Clone)]
 pub struct SceneLifecycle {
@@ -298,6 +514,11 @@ pub struct SceneLifecycle {
     pub target_requirements: Vec<TargetRequirementFact>,
     /// `Scene.remove` restructuring facts.
     pub scene_removals: Vec<SceneRemovalFact>,
+    /// Which camera contract the scene class commits to.
+    pub camera_kind: CameraKind,
+    /// Fixed-in-frame / fixed-orientation registrations and removals in
+    /// program order.
+    pub fixed_registrations: Vec<FixedRegistrationFact>,
     /// Per lifecycle method: whether `super().<method>()` was called
     /// (`Absent` = on no path, `Maybe` = on some paths). Only methods the
     /// project defines appear.
@@ -336,6 +557,90 @@ impl SceneLifecycle {
         let state = self.final_heap.object(object)?;
         Some((state.scene_root_membership, state.family_membership))
     }
+
+    /// Own-path state of `object` at the last statement snapshot ending
+    /// at or before `byte` in `file` (MLR116).
+    ///
+    /// Snapshots are taken *after* each statement; pass the byte offset of
+    /// the call expression of interest (its start) to observe the state
+    /// established before its enclosing statement — e.g. "is the path
+    /// provably empty at this `add_line_to` call".
+    #[must_use]
+    pub fn path_state_at(
+        &self,
+        object: &ObjectId,
+        file: FileId,
+        byte: u32,
+    ) -> Option<PathStateFact> {
+        let snapshot = self.state_at(file, byte)?;
+        let state = snapshot.heap.object(object)?;
+        let empty = match state.point_count.bounds() {
+            Some((_, Some(hi))) if hi <= 0.0 => Truth::Yes,
+            Some((Some(lo), _)) if lo >= 1.0 => Truth::No,
+            _ => Truth::Maybe,
+        };
+        Some(PathStateFact {
+            point_count: state.point_count.clone(),
+            curve_count: state.curve_count.clone(),
+            subpath_count: state.subpath_count.clone(),
+            empty,
+        })
+    }
+
+    /// Per-statement ownership classification of `object` (MLC111), in
+    /// program order: for every statement snapshot where the object
+    /// exists, whether it is in the scene family and whether it is a live
+    /// target of a play issued by that statement. A rule looks for
+    /// intervals where an updater-bearing object is provably in neither
+    /// (`Maybe` membership is never a violation interval).
+    #[must_use]
+    pub fn ownership_intervals(&self, object: &ObjectId) -> Vec<OwnershipInterval> {
+        let mut intervals = Vec::new();
+        for snapshot in &self.snapshots {
+            let Some(state) = snapshot.heap.object(object) else {
+                continue;
+            };
+            let mut animation_target = Presence::Absent;
+            for play in &self.plays {
+                let within = play.site.file == snapshot.site.file
+                    && play.site.start >= snapshot.site.start
+                    && play.site.end <= snapshot.site.end;
+                if !within {
+                    continue;
+                }
+                for played in &play.animations {
+                    let Some(animation) = &played.state else {
+                        continue;
+                    };
+                    for target in &animation.targets {
+                        match target.may_be_same(object) {
+                            Truth::Yes if play.certainty == Presence::Present => {
+                                animation_target = Presence::Present;
+                            }
+                            Truth::Yes | Truth::Maybe => {
+                                if animation_target != Presence::Present {
+                                    animation_target = Presence::Maybe;
+                                }
+                            }
+                            Truth::No => {}
+                        }
+                    }
+                }
+            }
+            let has_updaters = if state.updaters.is_empty() {
+                Truth::No
+            } else {
+                Truth::Maybe
+            };
+            intervals.push(OwnershipInterval {
+                site: snapshot.site,
+                in_family: state.family_membership,
+                animation_target,
+                has_updaters,
+            });
+        }
+        intervals
+    }
 }
 
 /// Lifecycle facts for every discovered Scene subclass.
@@ -366,10 +671,40 @@ impl SceneLifecycle {
 ///   [`PlayedAnimation::replacement_target`] are definitely the same id.
 /// - `MLR125`: [`SceneLifecycle::final_heap`] kind + children +
 ///   membership.
+///
+/// # Query map for the capability-pack rules (the follow-up wave)
+///
+/// - `MLC111`: [`SceneLifecycle::ownership_intervals`] per updater-bearing
+///   object (from [`SceneLifecycle::updaters`]); a violation interval
+///   needs `in_family == Absent` **and** `animation_target == Absent`
+///   plus a `Present`-certainty registration.
+/// - `MLC112`: [`UpdaterRegistration::body`] with
+///   [`UpdaterBodyFact::reads_frame_varying`] `Yes`,
+///   [`UpdaterBodyFact::uses_dt`] `No`, and the wait's
+///   [`PlayFact::dynamic_wait`] `No`.
+/// - `MLC123`: [`LifecycleFacts::callback_returns`] resolved via the
+///   `ApplyFunction` argument (function name or lambda span); fire only on
+///   [`ReturnFact::returns_mobject`] `No`.
+/// - `MLR116`: [`SceneLifecycle::path_state_at`] at an `add_line_to` /
+///   `close_path` call span; fire only on [`PathStateFact::empty`] `Yes`.
+/// - `MLP218`: [`UpdaterRegistration::body`] with `uses_dt == No`,
+///   `reads_frame_varying == No`, `calls_unknown == No`, and
+///   `pure_affine_on_target == Yes`.
+/// - `MLP221`: qualified-call literal facts
+///   (`frontend::index::LiteralFact::Tuple` / `List` on `t_range` /
+///   plot-step arguments).
+/// - `MLP227`: [`PlayFact::always_update_mobjects`] `Yes` with no
+///   time-based updater / scene updater / stop condition in the interval
+///   ([`PlayFact::dynamic_wait`] evidence) and a static
+///   [`SceneLifecycle::camera_kind`].
+/// - Renderer wave: [`SceneLifecycle::fixed_registrations`] +
+///   [`SceneLifecycle::camera_kind`].
 #[derive(Debug, Clone, Default)]
 pub struct LifecycleFacts {
     /// Per-scene lifecycle analyses, sorted by qualified scene name.
     pub scenes: Vec<SceneLifecycle>,
+    /// Return facts for every project callable and lambda (MLC123).
+    pub callback_returns: CallbackReturnFacts,
 }
 
 impl LifecycleFacts {
@@ -500,6 +835,19 @@ struct BuilderValue {
     channels_known: Truth,
 }
 
+/// Coarse classification of a literal constant value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LiteralValue {
+    /// A `True` / `False` literal.
+    Bool(bool),
+    /// An int / float literal.
+    Number,
+    /// A string / bytes literal.
+    Str,
+    /// The `None` literal.
+    NoneLit,
+}
+
 /// The abstract value of an expression.
 #[derive(Debug, Clone, PartialEq)]
 enum AbstractValue {
@@ -513,6 +861,8 @@ enum AbstractValue {
     Callable(CallbackRef, Option<CallableSignature>),
     /// The scene instance (`self` in scene methods).
     SelfScene,
+    /// A literal constant (definitely not a mobject / animation).
+    Literal(LiteralValue),
     /// Anything else.
     Unknown,
 }
@@ -718,12 +1068,22 @@ enum OpKind {
     SetSelfAttr {
         name: String,
         value: Option<ObjectId>,
+        literal_bool: Option<bool>,
     },
     UnknownMutation {
         values: Vec<ObjectId>,
         includes_scene: bool,
     },
     RendererDivergentMembership,
+}
+
+/// One observed `return` statement.
+#[derive(Debug, Clone)]
+struct ReturnObservation {
+    /// The returned value (`Unknown` for bare returns).
+    value: AbstractValue,
+    /// The statement was a bare `return` (no expression).
+    bare: bool,
 }
 
 #[derive(Debug, Default)]
@@ -736,7 +1096,11 @@ struct TraceSink {
     builders: BTreeMap<AllocationSite, AnimateBuilderFact>,
     target_requirements: Vec<TargetRequirementFact>,
     scene_removals: Vec<SceneRemovalFact>,
-    returns: Vec<(AbstractValue, Presence)>,
+    fixed_registrations: Vec<FixedRegistrationFact>,
+    returns: Vec<ReturnObservation>,
+    /// A reachable CFG path falls off the end of the body without a
+    /// `return` (paths ending in `raise` do not count).
+    fall_off_end: bool,
 }
 
 /// Per-block execution context while walking a CFG.
@@ -876,6 +1240,34 @@ impl<'a> Ctx<'a> {
             }
         }
         None
+    }
+
+    /// Whether the canonical class is (or reaches through the curated base
+    /// chain) `VMobject`.
+    fn is_vmobject_class(&self, class_id: &str) -> bool {
+        if class_id == VMOBJECT_ID {
+            return true;
+        }
+        if let Some(entry) = self.knowledge.and_then(|profile| profile.symbol(class_id)) {
+            if entry.kind == SymbolKind::Vmobject {
+                return true;
+            }
+        }
+        self.reaches_base(class_id, VMOBJECT_ID)
+    }
+
+    /// Whether the canonical class is (or reaches through the curated base
+    /// chain) `Mobject`.
+    fn is_mobject_class(&self, class_id: &str) -> bool {
+        if class_id == MOBJECT_ID {
+            return true;
+        }
+        if let Some(entry) = self.knowledge.and_then(|profile| profile.symbol(class_id)) {
+            if matches!(entry.kind, SymbolKind::Mobject | SymbolKind::Vmobject) {
+                return true;
+            }
+        }
+        self.reaches_base(class_id, MOBJECT_ID)
     }
 
     fn reaches_base(&self, class_id: &str, base: &str) -> bool {
@@ -1032,6 +1424,126 @@ impl ResolvedAnimEffects {
             requires_saved_state: self.requires_saved_state || other.requires_saved_state,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Path-state curation (MLR116; verified against
+// manim/mobject/types/vectorized_mobject.py and manim/mobject/mobject.py,
+// read-only).
+// ---------------------------------------------------------------------------
+
+/// Canonical id of `VMobject` / `Mobject`.
+const VMOBJECT_ID: &str = "manim.mobject.types.vectorized_mobject.VMobject";
+const MOBJECT_ID: &str = "manim.mobject.mobject.Mobject";
+
+/// Classes whose constructor provably leaves the *own* path empty:
+/// `Mobject.__init__` runs `reset_points()` and the base `generate_points()`
+/// is a no-op, and none of these override it (verified in `mobject.py` /
+/// `vectorized_mobject.py`).
+const EMPTY_PATH_CONSTRUCTORS: &[&str] = &[
+    MOBJECT_ID,
+    "manim.mobject.mobject.Group",
+    VMOBJECT_ID,
+    "manim.mobject.types.vectorized_mobject.VGroup",
+];
+
+/// Classes whose `generate_points` override provably creates a non-empty
+/// own path (Arc / Line / Polygram families; verified in geometry/*.py).
+const NONEMPTY_PATH_CONSTRUCTORS: &[&str] = &[
+    "manim.mobject.geometry.polygram.Square",
+    "manim.mobject.geometry.polygram.Rectangle",
+    "manim.mobject.geometry.arc.Circle",
+    "manim.mobject.geometry.arc.Dot",
+    "manim.mobject.geometry.line.Line",
+];
+
+/// Initial (point, curve, subpath) counts a curated constructor proves.
+/// `None` when the candidate set proves neither emptiness nor
+/// non-emptiness — counts then stay `Unknown` (project subclasses always
+/// land here: their `__init__` may build arbitrary paths).
+fn initial_path_counts(kind: &KindSet) -> Option<(Num, Num, Num)> {
+    let KindSet::Known(candidates) = kind else {
+        return None;
+    };
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates
+        .iter()
+        .all(|candidate| EMPTY_PATH_CONSTRUCTORS.contains(&candidate.as_str()))
+    {
+        return Some((Num::int(0), Num::int(0), Num::int(0)));
+    }
+    if candidates
+        .iter()
+        .all(|candidate| NONEMPTY_PATH_CONSTRUCTORS.contains(&candidate.as_str()))
+    {
+        let at_least_one = || Num::Interval {
+            lo: Some(1.0),
+            hi: None,
+        };
+        return Some((at_least_one(), at_least_one(), at_least_one()));
+    }
+    None
+}
+
+/// Seeds the path-count facts of a freshly constructed object. The
+/// `n_points_per_cubic_curve` fact is only exact when the call fact proves
+/// the default was used; the counts themselves are constructor facts and
+/// hold regardless.
+fn seed_path_counts(object: &mut MobjectState, kind: &KindSet, fact: Option<&QualifiedCall>) {
+    let Some((points, curves, subpaths)) = initial_path_counts(kind) else {
+        return;
+    };
+    object.point_count = points;
+    object.curve_count = curves;
+    object.subpath_count = subpaths;
+    let default_nppc = fact.is_some_and(|fact| {
+        !fact.has_star_star_kwargs && fact.keyword("n_points_per_cubic_curve").is_none()
+    });
+    object.points_per_curve = if default_nppc {
+        Num::int(4)
+    } else {
+        Num::Unknown
+    };
+}
+
+/// Copies duplicate the original's geometry: the path-count facts carry
+/// over to `copy()` / `generate_target()` / animation starting copies.
+fn clone_path_facts(copy: &mut MobjectState, original: &MobjectState) {
+    copy.point_count = original.point_count.clone();
+    copy.curve_count = original.curve_count.clone();
+    copy.subpath_count = original.subpath_count.clone();
+    copy.points_per_curve = original.points_per_curve.clone();
+}
+
+/// Element count of a literal list / tuple display (each element is one
+/// point-like for the `set_points` family). `None` for anything else,
+/// including displays with starred elements.
+fn display_element_count(expr: &ast::Expr) -> Option<i64> {
+    let elements = match expr {
+        ast::Expr::List(list) => &list.elts,
+        ast::Expr::Tuple(tuple) => &tuple.elts,
+        _ => return None,
+    };
+    if elements
+        .iter()
+        .any(|element| matches!(element, ast::Expr::Starred(_)))
+    {
+        return None;
+    }
+    i64::try_from(elements.len()).ok()
+}
+
+/// A literal non-negative integer argument (`resize_points(6)`).
+fn literal_int_arg(expr: &ast::Expr) -> Option<i64> {
+    let ast::Expr::Constant(constant) = expr else {
+        return None;
+    };
+    let ast::Constant::Int(value) = &constant.value else {
+        return None;
+    };
+    i64::try_from(value).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,6 +1851,12 @@ impl<'a> Machine<'a, '_> {
                 continue;
             };
             let out = self.exec_block(block, input);
+            if self.emit && matches!(block.terminator, Terminator::End) {
+                // A reachable block ends the body without `return`: the
+                // callable has a no-return path (paths ending in `raise`
+                // carry `Terminator::Raise` and do not count).
+                self.sink.fall_off_end = true;
+            }
             let is_exit = matches!(block.terminator, Terminator::Return(_) | Terminator::End);
             if is_exit {
                 exit = Some(match exit {
@@ -1370,11 +1888,15 @@ impl<'a> Machine<'a, '_> {
                 self.eval_expr(test, &mut state);
             }
             Terminator::Return(value) => {
+                let bare = value.is_none();
                 let returned = value.map_or(AbstractValue::Unknown, |expr| {
                     self.eval_expr(expr, &mut state)
                 });
                 if self.emit {
-                    self.sink.returns.push((returned, self.certainty()));
+                    self.sink.returns.push(ReturnObservation {
+                        value: returned,
+                        bare,
+                    });
                 }
             }
             _ => {}
@@ -1524,12 +2046,26 @@ impl<'a> Machine<'a, '_> {
                             }
                             _ => None,
                         };
+                        let literal_bool = match &value {
+                            AbstractValue::Literal(LiteralValue::Bool(flag)) => Some(*flag),
+                            _ => None,
+                        };
+                        if attribute.attr.as_str() == "always_update_mobjects" {
+                            // A literal write is an exact SceneState fact;
+                            // any other write degrades to Maybe instead of
+                            // being widened away (MLP227, DESIGN §3.3).
+                            let tracked = literal_bool.map_or(Truth::Maybe, Truth::from);
+                            if let Some(scene) = self.scene_state_mut(state) {
+                                scene.always_update_mobjects = tracked;
+                            }
+                        }
                         state.attrs.insert(attribute.attr.to_string(), value);
                         self.record(
                             self.site(attribute.range()),
                             OpKind::SetSelfAttr {
                                 name: attribute.attr.to_string(),
                                 value: recorded,
+                                literal_bool,
                             },
                         );
                         return;
@@ -1681,7 +2217,17 @@ impl<'a> Machine<'a, '_> {
                 self.eval_expr(&inner.value, state);
                 AbstractValue::Unknown
             }
-            ast::Expr::Constant(_) => AbstractValue::Unknown,
+            ast::Expr::Constant(constant) => match &constant.value {
+                ast::Constant::Bool(flag) => AbstractValue::Literal(LiteralValue::Bool(*flag)),
+                ast::Constant::Int(_) | ast::Constant::Float(_) | ast::Constant::Complex { .. } => {
+                    AbstractValue::Literal(LiteralValue::Number)
+                }
+                ast::Constant::Str(_) | ast::Constant::Bytes(_) => {
+                    AbstractValue::Literal(LiteralValue::Str)
+                }
+                ast::Constant::None => AbstractValue::Literal(LiteralValue::NoneLit),
+                ast::Constant::Ellipsis | ast::Constant::Tuple(_) => AbstractValue::Unknown,
+            },
         }
     }
 
@@ -2281,6 +2827,7 @@ impl<'a> Machine<'a, '_> {
             |object| {
                 let mut fresh = MobjectState::fresh(object.kind.clone());
                 fresh.copy_provenance = Some(CopyKind::GenerateTarget);
+                clone_path_facts(&mut fresh, object);
                 fresh
             },
         );
@@ -2376,6 +2923,9 @@ impl<'a> Machine<'a, '_> {
                 site,
                 host: host.map_or(UpdaterHost::Scene, |id| UpdaterHost::Mobject(id.clone())),
                 fact: fact.clone(),
+                // Body dataflow is classified after the scene run, once the
+                // callback bodies of the whole project are indexed.
+                body: UpdaterBodyFact::unknown(),
                 certainty: self.certainty(),
             });
         }
@@ -2482,6 +3032,7 @@ impl<'a> Machine<'a, '_> {
                 object.point_count = Num::Unknown;
                 object.curve_count = Num::Unknown;
                 object.subpath_count = Num::Unknown;
+                object.points_per_curve = Num::Unknown;
                 object.mutation_epoch += 1;
                 object.generated_target = object.generated_target.join(&GeneratedTarget::absent());
                 object.generated_target.presence =
@@ -2709,7 +3260,10 @@ impl<'a> Machine<'a, '_> {
         if all_mobject {
             self.eval_call_args(call, state);
             let kind = KindSet::Known(candidates.into_iter().collect());
-            let id = self.alloc_object(self.site(call.range()), kind, state);
+            let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
+            if let Some(object) = state.heap.object_mut(&id) {
+                seed_path_counts(object, &kind, fact);
+            }
             return AbstractValue::Object(id);
         }
         self.eval_args_and_widen(call, state);
@@ -2738,8 +3292,11 @@ impl<'a> Machine<'a, '_> {
             }
             SymbolKind::Mobject | SymbolKind::Vmobject => {
                 let positional = self.eval_call_args(call, state);
-                let id =
-                    self.alloc_object(self.site(call.range()), KindSet::single(candidate), state);
+                let kind = KindSet::single(candidate);
+                let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
+                if let Some(object) = state.heap.object_mut(&id) {
+                    seed_path_counts(object, &kind, fact);
+                }
                 // Container constructors adopt their positional mobject
                 // arguments as submobjects (exact curated identities).
                 if candidate == "manim.mobject.types.vectorized_mobject.VGroup"
@@ -3139,17 +3696,38 @@ impl<'a> Machine<'a, '_> {
                 SceneMembershipEffect::AddFixedInFrame | SceneMembershipEffect::AddFixedOrientation,
             ) => {
                 let fixed_in_frame = membership == Some(SceneMembershipEffect::AddFixedInFrame);
+                let fixed_kind = if fixed_in_frame {
+                    FixedKind::InFrame
+                } else {
+                    FixedKind::Orientation
+                };
+                let divergent = effects.renderer_divergent_membership == Some(true);
                 let positional = self.eval_call_args(call, state);
                 let objects = self.object_args(&positional, state);
                 // 3D fixed helpers auto-add to the scene (DESIGN §3.5).
                 self.scene_add(&objects, site, false, false, certainty, state);
                 for id in &objects {
                     if let Some(object) = state.heap.object_mut(id) {
-                        if fixed_in_frame {
-                            object.fixed_in_frame = Truth::Yes;
+                        let flag = if fixed_in_frame {
+                            &mut object.fixed_in_frame
                         } else {
-                            object.fixed_orientation = Truth::Yes;
-                        }
+                            &mut object.fixed_orientation
+                        };
+                        *flag = if certainty == Presence::Present {
+                            Truth::Yes
+                        } else {
+                            flag.join(Truth::Yes)
+                        };
+                    }
+                    if self.emit {
+                        self.sink.fixed_registrations.push(FixedRegistrationFact {
+                            site,
+                            object: id.clone(),
+                            kind: fixed_kind,
+                            action: FixedAction::Register,
+                            renderer_divergent: divergent,
+                            certainty,
+                        });
                     }
                 }
                 self_result()
@@ -3159,19 +3737,40 @@ impl<'a> Machine<'a, '_> {
                 | SceneMembershipEffect::RemoveFixedOrientation,
             ) => {
                 let fixed_in_frame = membership == Some(SceneMembershipEffect::RemoveFixedInFrame);
+                let fixed_kind = if fixed_in_frame {
+                    FixedKind::InFrame
+                } else {
+                    FixedKind::Orientation
+                };
+                let divergent = effects.renderer_divergent_membership == Some(true);
                 let positional = self.eval_call_args(call, state);
                 let objects = self.object_args(&positional, state);
                 for id in &objects {
                     if let Some(object) = state.heap.object_mut(id) {
-                        if fixed_in_frame {
-                            object.fixed_in_frame = Truth::No;
+                        let flag = if fixed_in_frame {
+                            &mut object.fixed_in_frame
                         } else {
-                            object.fixed_orientation = Truth::No;
-                        }
+                            &mut object.fixed_orientation
+                        };
+                        *flag = if certainty == Presence::Present {
+                            Truth::No
+                        } else {
+                            flag.join(Truth::No)
+                        };
                         // Membership after unfixing diverges between the
                         // renderers (DESIGN §3.5): never a certain fact.
                         object.scene_root_membership =
                             object.scene_root_membership.join(Presence::Maybe);
+                    }
+                    if self.emit {
+                        self.sink.fixed_registrations.push(FixedRegistrationFact {
+                            site,
+                            object: id.clone(),
+                            kind: fixed_kind,
+                            action: FixedAction::Remove,
+                            renderer_divergent: divergent,
+                            certainty,
+                        });
                     }
                 }
                 self.recompute_family(state);
@@ -3210,6 +3809,7 @@ impl<'a> Machine<'a, '_> {
                 | AbstractValue::Animation(_)
                 | AbstractValue::Builder(_)
                 | AbstractValue::Callable(..)
+                | AbstractValue::Literal(_)
                 | AbstractValue::SelfScene => has_unknown = true,
             }
         }
@@ -3285,6 +3885,12 @@ impl<'a> Machine<'a, '_> {
             }
         } else if let Some((canonical, entry)) = self.ctx.resolve_method(&kind, method) {
             return self.apply_mobject_method(id, &canonical, entry, call, state);
+        }
+        // Curated VMobject path-construction methods are modeled in-code
+        // (MLR116) — reached only when neither a project override nor a
+        // curated profile entry claimed the call above.
+        if let Some(result) = self.apply_path_method(id, &kind, method, call, state) {
+            return result;
         }
         self.eval_call_args(call, state);
         self.unknown_mutation(
@@ -3385,9 +3991,10 @@ impl<'a> Machine<'a, '_> {
                 |object| {
                     let mut fresh = MobjectState::fresh(object.kind.clone());
                     fresh.copy_provenance = Some(CopyKind::Copy);
-                    // A copy carries the original's updaters but no scene
-                    // membership.
+                    // A copy carries the original's updaters and geometry
+                    // but no scene membership.
                     fresh.updaters.clone_from(&object.updaters);
+                    clone_path_facts(&mut fresh, object);
                     fresh
                 },
             );
@@ -3437,6 +4044,154 @@ impl<'a> Machine<'a, '_> {
         }
     }
 
+    // -- VMobject path-construction methods (MLR116) ------------------------
+
+    /// Whether the receiver class is a (project or canonical) subclass of
+    /// `VMobject` (`vectorized`) / `Mobject` with a fully resolved chain.
+    /// For project classes the caller has already ruled out a project
+    /// override of the method (it would have dispatched to a summary).
+    fn path_receiver_is(&self, kind: &str, vectorized: bool) -> bool {
+        let check = |class_id: &str| {
+            if vectorized {
+                self.ctx.is_vmobject_class(class_id)
+            } else {
+                self.ctx.is_mobject_class(class_id)
+            }
+        };
+        if let Some(record) = self.ctx.index.classes.get(kind) {
+            record.bases_fully_resolved
+                && !record.reached_bases.is_empty()
+                && record.reached_bases.iter().all(|base| check(base))
+        } else {
+            check(kind)
+        }
+    }
+
+    /// Curated `VMobject` path-construction methods (MLR116; semantics
+    /// verified against `vectorized_mobject.py`): exact point-count
+    /// arithmetic where the current count and the points-per-curve fact
+    /// are exact integers, `Unknown` otherwise, plus a `PathTopology`
+    /// mutation. Returns `None` when the method is not a path method for
+    /// this receiver (the caller falls back to unknown-call widening).
+    fn apply_path_method(
+        &mut self,
+        id: &ObjectId,
+        kind: &str,
+        method: &str,
+        call: &'a ast::ExprCall,
+        state: &mut ExecState,
+    ) -> Option<AbstractValue> {
+        const PATH_METHODS: &[&str] = &[
+            "set_points",
+            "clear_points",
+            "append_points",
+            "start_new_path",
+            "add_line_to",
+            "add_cubic_bezier_curve_to",
+            "add_quadratic_bezier_curve_to",
+            "add_smooth_curve_to",
+            "add_points_as_corners",
+            "set_points_as_corners",
+            "set_points_smoothly",
+            "close_path",
+            "resize_points",
+        ];
+        let vmobject_method = PATH_METHODS.contains(&method) && self.path_receiver_is(kind, true);
+        let mobject_method = method == "reset_points" && self.path_receiver_is(kind, false);
+        if !vmobject_method && !mobject_method {
+            return None;
+        }
+        self.eval_call_args(call, state);
+        let site = self.site(call.range());
+
+        let (points, nppc) = state
+            .heap
+            .object(id)
+            .map_or((Num::Unknown, Num::Unknown), |object| {
+                (object.point_count.clone(), object.points_per_curve.clone())
+            });
+        let exact_int = |num: &Num| match num {
+            Num::Exact(crate::semantic::values::NumLit::Int(value)) => Some(*value),
+            _ => None,
+        };
+        let current = exact_int(&points);
+        let per_curve = exact_int(&nppc).filter(|count| *count > 0);
+        let first_arg = call.args.first();
+        let new_points = match method {
+            "clear_points" | "reset_points" => Num::int(0),
+            "set_points" => first_arg
+                .and_then(display_element_count)
+                .map_or(Num::Unknown, Num::int),
+            "append_points" => match (current, first_arg.and_then(display_element_count)) {
+                (Some(current), Some(count)) => Num::int(current + count),
+                _ => Num::Unknown,
+            },
+            "resize_points" => first_arg
+                .and_then(literal_int_arg)
+                .map_or(Num::Unknown, Num::int),
+            "start_new_path" => match (current, per_curve) {
+                // An unfinished curve is closed by repeating the last
+                // anchor `n - (k % n)` times, then the new point appends.
+                (Some(current), Some(per_curve)) => {
+                    let partial = current % per_curve;
+                    Num::int(if partial == 0 {
+                        current + 1
+                    } else {
+                        current + (per_curve - partial) + 1
+                    })
+                }
+                _ => Num::Unknown,
+            },
+            "add_line_to" | "add_cubic_bezier_curve_to" | "add_quadratic_bezier_curve_to" => {
+                match (current, per_curve) {
+                    // `has_new_path_started()` (`k % n == 1`): the started
+                    // curve completes with `n - 1` points; otherwise the
+                    // last anchor is duplicated first (`n` points). The
+                    // empty-path case raises at runtime
+                    // (`throw_error_if_no_points`, the MLR116 defect); the
+                    // post-state is modeled anyway and never observed.
+                    (Some(current), Some(per_curve)) => Num::int(if current % per_curve == 1 {
+                        current + (per_curve - 1)
+                    } else {
+                        current + per_curve
+                    }),
+                    _ => Num::Unknown,
+                }
+            }
+            "close_path" => match (current, per_curve) {
+                // An already-closed path adds nothing; an open path adds
+                // one closing curve — the count is the interval hull.
+                (Some(current), Some(per_curve)) => {
+                    Num::int(current).join(&Num::int(current + per_curve))
+                }
+                _ => Num::Unknown,
+            },
+            // add_smooth_curve_to / add_points_as_corners /
+            // set_points_as_corners / set_points_smoothly append a
+            // data-dependent number of points.
+            _ => Num::Unknown,
+        };
+        let curves = match (exact_int(&new_points), per_curve) {
+            (Some(points), Some(per_curve)) if points % per_curve == 0 => {
+                Num::int(points / per_curve)
+            }
+            _ => Num::Unknown,
+        };
+        if let Some(object) = state.heap.object_mut(id) {
+            object.point_count = new_points;
+            object.curve_count = curves;
+            // Subpath splits are not tracked (doc on `PathStateFact`).
+            object.subpath_count = Num::Unknown;
+        }
+        self.mutate(id, MutationKind::PathTopology, site, state);
+        let returns_self = !matches!(method, "clear_points" | "close_path");
+        Some(if returns_self {
+            AbstractValue::Object(id.clone())
+        } else {
+            AbstractValue::Unknown
+        })
+    }
+
     // -- super() dispatch ---------------------------------------------------
 
     fn dispatch_super(
@@ -3473,6 +4228,24 @@ impl<'a> Machine<'a, '_> {
         }
         // External base: curated effect if any, else the empty base
         // implementation (`Scene.__init__` / `setup` / `tear_down`).
+        if method == "__init__" && matches!(state.env.get("self"), Some(AbstractValue::SelfScene)) {
+            // `super().__init__(always_update_mobjects=...)` reaching the
+            // external Scene constructor: a literal kwarg is an exact
+            // SceneState fact, anything non-literal is Maybe (MLP227).
+            if let Some(fact) = fact {
+                if let Some(argument) = fact.keyword("always_update_mobjects") {
+                    let tracked = literal_bool(argument).map_or(Truth::Maybe, Truth::from);
+                    if let Some(scene) = self.scene_state_mut(state) {
+                        scene.always_update_mobjects = tracked;
+                    }
+                } else if fact.has_star_star_kwargs {
+                    if let Some(scene) = self.scene_state_mut(state) {
+                        scene.always_update_mobjects =
+                            scene.always_update_mobjects.join(Truth::Maybe);
+                    }
+                }
+            }
+        }
         let resolved = self
             .reached_bases
             .iter()
@@ -3596,6 +4369,19 @@ impl<'a> Machine<'a, '_> {
                         channels_known: Truth::No,
                     });
                     let _ = id;
+                }
+                AbstractValue::Literal(_) => {
+                    // A literal constant cannot be converted to an
+                    // animation either (MLC102 evidence).
+                    compiled.push(PlayedAnimation {
+                        site: arg_site,
+                        animation: None,
+                        state: None,
+                        replacement_target: None,
+                        from_builder: false,
+                        convertible: Truth::No,
+                        channels_known: Truth::No,
+                    });
                 }
                 _ => {
                     compiled.push(PlayedAnimation {
@@ -3759,6 +4545,7 @@ impl<'a> Machine<'a, '_> {
                     |object| {
                         let mut fresh = MobjectState::fresh(object.kind.clone());
                         fresh.copy_provenance = Some(CopyKind::AnimationStartingCopy);
+                        clone_path_facts(&mut fresh, object);
                         fresh
                     },
                 );
@@ -3878,6 +4665,11 @@ impl<'a> Machine<'a, '_> {
             scene.elapsed_time = scene.elapsed_time.add(&duration);
         }
         if self.emit {
+            let always_update = state
+                .heap
+                .scenes
+                .get(&self.scene_id)
+                .map_or(Truth::Maybe, |scene| scene.always_update_mobjects);
             self.sink.plays.push(PlayFact {
                 site: call_site,
                 play_group: PlayGroupId(group),
@@ -3887,6 +4679,7 @@ impl<'a> Machine<'a, '_> {
                 dynamic_wait: Truth::No,
                 has_stop_condition: false,
                 frozen_frame: None,
+                always_update_mobjects: always_update,
                 certainty,
             });
         }
@@ -3921,6 +4714,11 @@ impl<'a> Machine<'a, '_> {
             .scenes
             .get(&self.scene_id)
             .is_some_and(|scene| !scene.scene_updaters.is_empty());
+        let always_update = state
+            .heap
+            .scenes
+            .get(&self.scene_id)
+            .map_or(Truth::Maybe, |scene| scene.always_update_mobjects);
         let mut dynamic = if has_stop_condition || scene_has_updaters {
             Truth::Yes
         } else {
@@ -3950,10 +4748,17 @@ impl<'a> Machine<'a, '_> {
                     break;
                 }
             }
-            // `always_update_mobjects` assigned somewhere: unknown value.
-            if state.attrs.contains_key("always_update_mobjects") && dynamic == Truth::No {
-                dynamic = Truth::Maybe;
+        }
+        // Tracked `always_update_mobjects` (DESIGN §3.3): a literal True
+        // makes every wait dynamic; a non-literal write is a maybe-fact.
+        match always_update {
+            Truth::Yes => dynamic = Truth::Yes,
+            Truth::Maybe => {
+                if dynamic == Truth::No {
+                    dynamic = Truth::Maybe;
+                }
             }
+            Truth::No => {}
         }
 
         if let Some(scene) = self.scene_state_mut(state) {
@@ -3969,6 +4774,7 @@ impl<'a> Machine<'a, '_> {
                 dynamic_wait: dynamic,
                 has_stop_condition,
                 frozen_frame,
+                always_update_mobjects: always_update,
                 certainty: self.certainty(),
             });
         }
@@ -4075,6 +4881,7 @@ impl<'a> Machine<'a, '_> {
                 child_context.clone(),
                 self.summary_cardinality(event),
             )),
+            SummaryOperand::LiteralBool(flag) => AbstractValue::Literal(LiteralValue::Bool(*flag)),
             SummaryOperand::Opaque => AbstractValue::Unknown,
         }
     }
@@ -4124,9 +4931,12 @@ impl<'a> Machine<'a, '_> {
                     child_context.clone(),
                     self.summary_cardinality(event),
                 );
-                state
-                    .heap
-                    .insert_object(id.clone(), MobjectState::fresh(kind.clone()));
+                let mut fresh = MobjectState::fresh(kind.clone());
+                // Constructor path facts survive summary application (the
+                // kwargs of the original call are unavailable here, so the
+                // points-per-curve fact stays Unknown).
+                seed_path_counts(&mut fresh, kind, None);
+                state.heap.insert_object(id.clone(), fresh);
                 self.record(
                     event.site,
                     OpKind::Alloc {
@@ -4221,6 +5031,16 @@ impl<'a> Machine<'a, '_> {
             }
             SummaryEffect::Mutate { target, kind } => {
                 if let Some(id) = object_of(operand(self, target)) {
+                    if *kind == MutationKind::PathTopology {
+                        // A helper changed the path topology; the exact
+                        // arithmetic does not survive summarization, so the
+                        // counts widen instead of staying stale.
+                        if let Some(object) = state.heap.object_mut(&id) {
+                            object.point_count = Num::Unknown;
+                            object.curve_count = Num::Unknown;
+                            object.subpath_count = Num::Unknown;
+                        }
+                    }
                     self.mutate(&id, *kind, event.site, state);
                 }
             }
@@ -4298,6 +5118,19 @@ impl<'a> Machine<'a, '_> {
             SummaryEffect::SetSelfAttr { name, value } => {
                 if matches!(self_value, Some(AbstractValue::SelfScene)) {
                     let mapped = operand(self, value);
+                    if name == "always_update_mobjects" {
+                        let tracked = match &mapped {
+                            AbstractValue::Literal(LiteralValue::Bool(flag)) => Truth::from(*flag),
+                            _ => Truth::Maybe,
+                        };
+                        if let Some(scene) = self.scene_state_mut(state) {
+                            scene.always_update_mobjects = if combined == Presence::Present {
+                                tracked
+                            } else {
+                                scene.always_update_mobjects.join(tracked)
+                            };
+                        }
+                    }
                     let stored = if combined == Presence::Present {
                         mapped
                     } else {
@@ -4521,6 +5354,19 @@ pub fn analyze(
     let defs = DefMap::build(sources, index);
     let summaries = crate::semantic::summaries::build(sources, index, calls, knowledge, &defs);
     let ctx = Ctx::new(index, calls, knowledge, &defs, &summaries);
+
+    // Every lambda of the project, keyed by its source span: resolves
+    // updater callbacks and `ApplyFunction` arguments (MLC112 / MLC123).
+    let parsed = crate::frontend::parser::parsed_modules(sources);
+    let mut lambda_index: BTreeMap<AllocationSite, &ast::ExprLambda> = BTreeMap::new();
+    for module in &parsed {
+        let mut found = Vec::new();
+        collect_lambdas(&module.ast.body, &mut found);
+        for lambda in found {
+            lambda_index.insert(AllocationSite::new(module.file, lambda.range()), lambda);
+        }
+    }
+
     let mut scenes = Vec::new();
     for class_id in &index.scene_classes {
         let Some(record) = index.classes.get(class_id) else {
@@ -4528,7 +5374,39 @@ pub fn analyze(
         };
         scenes.push(run_scene(&ctx, record));
     }
-    LifecycleFacts { scenes }
+
+    // Updater-body dataflow classification (MLC112 / MLP218): resolve
+    // every registered callback body and attach its conservative fact.
+    for scene in &mut scenes {
+        for registration in &mut scene.updaters {
+            let scene_level = matches!(registration.host, UpdaterHost::Scene);
+            registration.body = classify_updater_callback(
+                &ctx,
+                &lambda_index,
+                scene_level,
+                &registration.fact.callback,
+            );
+        }
+    }
+
+    // Callback return facts (MLC123): every summarized project callable
+    // plus every lambda.
+    let mut callback_returns = CallbackReturnFacts::default();
+    for (name, summary) in &summaries.summaries {
+        callback_returns
+            .functions
+            .insert(name.clone(), summary.return_fact);
+    }
+    for (site, lambda) in &lambda_index {
+        callback_returns
+            .lambdas
+            .insert(*site, lambda_return_fact(&ctx, site.file, lambda));
+    }
+
+    LifecycleFacts {
+        scenes,
+        callback_returns,
+    }
 }
 
 const LIFECYCLE_PHASES: [(&str, InvocationContext); 4] = [
@@ -4537,6 +5415,40 @@ const LIFECYCLE_PHASES: [(&str, InvocationContext); 4] = [
     ("construct", InvocationContext::Construct),
     ("tear_down", InvocationContext::TearDown),
 ];
+
+/// Canonical scene base ids that decide the camera contract.
+const THREE_D_SCENE_ID: &str = "manim.scene.three_d_scene.ThreeDScene";
+const MOVING_CAMERA_SCENE_ID: &str = "manim.scene.moving_camera_scene.MovingCameraScene";
+const SCENE_ID: &str = "manim.scene.scene.Scene";
+
+/// The camera contract a scene class commits to (DESIGN §3.5), derived
+/// from its reached external bases through the curated base chain. An
+/// unresolved or mixed chain is `Unknown` — never guessed.
+fn scene_camera_kind(ctx: &Ctx<'_>, record: &ClassRecord) -> CameraKind {
+    if !record.bases_fully_resolved {
+        return CameraKind::Unknown;
+    }
+    let mut three_d = false;
+    let mut moving = false;
+    let mut plain = false;
+    for base in &record.reached_bases {
+        if ctx.reaches_base(base, THREE_D_SCENE_ID) {
+            three_d = true;
+        } else if ctx.reaches_base(base, MOVING_CAMERA_SCENE_ID) {
+            moving = true;
+        } else if ctx.reaches_base(base, SCENE_ID) {
+            plain = true;
+        }
+        // Non-scene mixins do not change the camera kind.
+    }
+    match (three_d, moving) {
+        (true, false) => CameraKind::ThreeD,
+        (false, true) => CameraKind::MovingCamera,
+        (false, false) if plain => CameraKind::Standard,
+        // Mixed 3D + moving chains and non-scene chains stay unresolved.
+        _ => CameraKind::Unknown,
+    }
+}
 
 fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
     let (mro, constructor_state_unknown) = linearize_project(ctx.index, &record.qualified_name);
@@ -4623,6 +5535,8 @@ fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
         builders: sink.builders,
         target_requirements: sink.target_requirements,
         scene_removals: sink.scene_removals,
+        camera_kind: scene_camera_kind(ctx, record),
+        fixed_registrations: sink.fixed_registrations,
         super_calls,
         final_heap: state.heap,
     }
@@ -4772,12 +5686,12 @@ pub(crate) fn summarize_callable(
 
     // Return alias: all return paths must agree.
     let mut returns: Option<SummaryReturn> = None;
-    for (value, _certainty) in &sink.returns {
-        let this = match value_operand(value) {
+    for observation in &sink.returns {
+        let this = match value_operand(&observation.value) {
             SummaryOperand::SelfRef => SummaryReturn::SelfValue,
             SummaryOperand::Param(position) => SummaryReturn::Param(position),
             SummaryOperand::Fresh(site) => SummaryReturn::Fresh(site),
-            SummaryOperand::Opaque => SummaryReturn::Unknown,
+            SummaryOperand::LiteralBool(_) | SummaryOperand::Opaque => SummaryReturn::Unknown,
         };
         returns = Some(match returns {
             None => this,
@@ -4790,11 +5704,53 @@ pub(crate) fn summarize_callable(
     // explicit return exists at all.
     let returns = returns.unwrap_or(SummaryReturn::Unknown);
 
+    // Return-path classification (MLC123): "no return on some path" is a
+    // definite No for `returns_mobject`; "returns an untracked value" is
+    // only Maybe. Parameter placeholders are bound as mobjects, so a
+    // returned parameter (or a fluent chain on one) counts as Yes — the
+    // assumption under which `ApplyFunction` invokes its callback.
+    let mut has_bare = false;
+    let mut any_definite_non_mobject = false;
+    let mut any_untracked = false;
+    let mut any_mobject = false;
+    for observation in &sink.returns {
+        if observation.bare {
+            has_bare = true;
+            continue;
+        }
+        match &observation.value {
+            AbstractValue::Object(_) => any_mobject = true,
+            AbstractValue::Unknown => any_untracked = true,
+            // Animations, builders, callables, the scene itself, and
+            // literal constants are definitely not mobjects.
+            AbstractValue::Animation(_)
+            | AbstractValue::Builder(_)
+            | AbstractValue::Callable(..)
+            | AbstractValue::SelfScene
+            | AbstractValue::Literal(_) => any_definite_non_mobject = true,
+        }
+    }
+    let returns_mobject = if has_bare || sink.fall_off_end || any_definite_non_mobject {
+        Truth::No
+    } else if any_mobject && !any_untracked {
+        Truth::Yes
+    } else {
+        // Untracked return values — or no normal return path at all (the
+        // body always raises): never a definite verdict.
+        Truth::Maybe
+    };
+    let return_fact = ReturnFact {
+        returns_mobject,
+        has_bare_return_path: Truth::from(has_bare),
+        has_no_return_path: Truth::from(sink.fall_off_end),
+    };
+
     MethodSummary {
         qualified_name: qualified_name.to_owned(),
         params,
         events,
         returns,
+        return_fact,
         converged: true,
     }
 }
@@ -4886,9 +5842,17 @@ fn translate_op(
                 requires_saved_state: *requires_saved_state,
             })
         }
-        OpKind::SetSelfAttr { name, value } => Some(SummaryEffect::SetSelfAttr {
+        OpKind::SetSelfAttr {
+            name,
+            value,
+            literal_bool,
+        } => Some(SummaryEffect::SetSelfAttr {
             name: name.clone(),
-            value: value.as_ref().map_or(SummaryOperand::Opaque, translate),
+            value: match (value, literal_bool) {
+                (Some(id), _) => translate(id),
+                (None, Some(flag)) => SummaryOperand::LiteralBool(*flag),
+                (None, None) => SummaryOperand::Opaque,
+            },
         }),
         OpKind::BeginPlay { .. }
         | OpKind::SuspendUpdater { .. }
@@ -4902,5 +5866,1135 @@ fn translate_op(
             values: values.iter().map(translate).collect(),
             includes_scene: *includes_scene,
         }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lambda collection (shared by updater-body classification and MLC123).
+// ---------------------------------------------------------------------------
+
+/// Collects every lambda expression under `stmts`, recursing through all
+/// nested statements and expressions (nested defs and lambdas included).
+fn collect_lambdas<'a>(stmts: &'a [ast::Stmt], out: &mut Vec<&'a ast::ExprLambda>) {
+    for stmt in stmts {
+        collect_lambdas_stmt(stmt, out);
+    }
+}
+
+fn collect_lambdas_args<'a>(args: &'a ast::Arguments, out: &mut Vec<&'a ast::ExprLambda>) {
+    for arg in args
+        .posonlyargs
+        .iter()
+        .chain(&args.args)
+        .chain(&args.kwonlyargs)
+    {
+        if let Some(default) = &arg.default {
+            collect_lambdas_expr(default, out);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines, reason = "one arm per statement kind")]
+fn collect_lambdas_stmt<'a>(stmt: &'a ast::Stmt, out: &mut Vec<&'a ast::ExprLambda>) {
+    match stmt {
+        ast::Stmt::FunctionDef(def) => {
+            for decorator in &def.decorator_list {
+                collect_lambdas_expr(decorator, out);
+            }
+            collect_lambdas_args(&def.args, out);
+            collect_lambdas(&def.body, out);
+        }
+        ast::Stmt::AsyncFunctionDef(def) => {
+            for decorator in &def.decorator_list {
+                collect_lambdas_expr(decorator, out);
+            }
+            collect_lambdas_args(&def.args, out);
+            collect_lambdas(&def.body, out);
+        }
+        ast::Stmt::ClassDef(def) => {
+            for decorator in &def.decorator_list {
+                collect_lambdas_expr(decorator, out);
+            }
+            for base in &def.bases {
+                collect_lambdas_expr(base, out);
+            }
+            for keyword in &def.keywords {
+                collect_lambdas_expr(&keyword.value, out);
+            }
+            collect_lambdas(&def.body, out);
+        }
+        ast::Stmt::Assign(inner) => {
+            for target in &inner.targets {
+                collect_lambdas_expr(target, out);
+            }
+            collect_lambdas_expr(&inner.value, out);
+        }
+        ast::Stmt::AnnAssign(inner) => {
+            collect_lambdas_expr(&inner.target, out);
+            if let Some(value) = &inner.value {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Stmt::AugAssign(inner) => {
+            collect_lambdas_expr(&inner.target, out);
+            collect_lambdas_expr(&inner.value, out);
+        }
+        ast::Stmt::Expr(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Stmt::Return(inner) => {
+            if let Some(value) = &inner.value {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Stmt::Raise(inner) => {
+            for part in [&inner.exc, &inner.cause].into_iter().flatten() {
+                collect_lambdas_expr(part, out);
+            }
+        }
+        ast::Stmt::Assert(inner) => {
+            collect_lambdas_expr(&inner.test, out);
+            if let Some(message) = &inner.msg {
+                collect_lambdas_expr(message, out);
+            }
+        }
+        ast::Stmt::Delete(inner) => {
+            for target in &inner.targets {
+                collect_lambdas_expr(target, out);
+            }
+        }
+        ast::Stmt::If(inner) => {
+            collect_lambdas_expr(&inner.test, out);
+            collect_lambdas(&inner.body, out);
+            collect_lambdas(&inner.orelse, out);
+        }
+        ast::Stmt::While(inner) => {
+            collect_lambdas_expr(&inner.test, out);
+            collect_lambdas(&inner.body, out);
+            collect_lambdas(&inner.orelse, out);
+        }
+        ast::Stmt::For(inner) => {
+            collect_lambdas_expr(&inner.target, out);
+            collect_lambdas_expr(&inner.iter, out);
+            collect_lambdas(&inner.body, out);
+            collect_lambdas(&inner.orelse, out);
+        }
+        ast::Stmt::AsyncFor(inner) => {
+            collect_lambdas_expr(&inner.target, out);
+            collect_lambdas_expr(&inner.iter, out);
+            collect_lambdas(&inner.body, out);
+            collect_lambdas(&inner.orelse, out);
+        }
+        ast::Stmt::With(inner) => {
+            for item in &inner.items {
+                collect_lambdas_expr(&item.context_expr, out);
+            }
+            collect_lambdas(&inner.body, out);
+        }
+        ast::Stmt::AsyncWith(inner) => {
+            for item in &inner.items {
+                collect_lambdas_expr(&item.context_expr, out);
+            }
+            collect_lambdas(&inner.body, out);
+        }
+        ast::Stmt::Try(inner) => {
+            collect_lambdas(&inner.body, out);
+            for handler in &inner.handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                if let Some(kind) = &handler.type_ {
+                    collect_lambdas_expr(kind, out);
+                }
+                collect_lambdas(&handler.body, out);
+            }
+            collect_lambdas(&inner.orelse, out);
+            collect_lambdas(&inner.finalbody, out);
+        }
+        ast::Stmt::TryStar(inner) => {
+            collect_lambdas(&inner.body, out);
+            for handler in &inner.handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                if let Some(kind) = &handler.type_ {
+                    collect_lambdas_expr(kind, out);
+                }
+                collect_lambdas(&handler.body, out);
+            }
+            collect_lambdas(&inner.orelse, out);
+            collect_lambdas(&inner.finalbody, out);
+        }
+        ast::Stmt::Match(inner) => {
+            collect_lambdas_expr(&inner.subject, out);
+            for case in &inner.cases {
+                if let Some(guard) = &case.guard {
+                    collect_lambdas_expr(guard, out);
+                }
+                collect_lambdas(&case.body, out);
+            }
+        }
+        ast::Stmt::Import(_)
+        | ast::Stmt::ImportFrom(_)
+        | ast::Stmt::Global(_)
+        | ast::Stmt::Nonlocal(_)
+        | ast::Stmt::TypeAlias(_)
+        | ast::Stmt::Pass(_)
+        | ast::Stmt::Break(_)
+        | ast::Stmt::Continue(_) => {}
+    }
+}
+
+#[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
+fn collect_lambdas_expr<'a>(expr: &'a ast::Expr, out: &mut Vec<&'a ast::ExprLambda>) {
+    match expr {
+        ast::Expr::Lambda(lambda) => {
+            out.push(lambda);
+            collect_lambdas_args(&lambda.args, out);
+            collect_lambdas_expr(&lambda.body, out);
+        }
+        ast::Expr::BoolOp(inner) => {
+            for value in &inner.values {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Expr::NamedExpr(inner) => {
+            collect_lambdas_expr(&inner.target, out);
+            collect_lambdas_expr(&inner.value, out);
+        }
+        ast::Expr::BinOp(inner) => {
+            collect_lambdas_expr(&inner.left, out);
+            collect_lambdas_expr(&inner.right, out);
+        }
+        ast::Expr::UnaryOp(inner) => collect_lambdas_expr(&inner.operand, out),
+        ast::Expr::IfExp(inner) => {
+            collect_lambdas_expr(&inner.test, out);
+            collect_lambdas_expr(&inner.body, out);
+            collect_lambdas_expr(&inner.orelse, out);
+        }
+        ast::Expr::Dict(inner) => {
+            for key in inner.keys.iter().flatten() {
+                collect_lambdas_expr(key, out);
+            }
+            for value in &inner.values {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Expr::Set(inner) => {
+            for element in &inner.elts {
+                collect_lambdas_expr(element, out);
+            }
+        }
+        ast::Expr::ListComp(inner) => {
+            collect_lambdas_expr(&inner.elt, out);
+            collect_lambdas_generators(&inner.generators, out);
+        }
+        ast::Expr::SetComp(inner) => {
+            collect_lambdas_expr(&inner.elt, out);
+            collect_lambdas_generators(&inner.generators, out);
+        }
+        ast::Expr::DictComp(inner) => {
+            collect_lambdas_expr(&inner.key, out);
+            collect_lambdas_expr(&inner.value, out);
+            collect_lambdas_generators(&inner.generators, out);
+        }
+        ast::Expr::GeneratorExp(inner) => {
+            collect_lambdas_expr(&inner.elt, out);
+            collect_lambdas_generators(&inner.generators, out);
+        }
+        ast::Expr::Await(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Expr::Yield(inner) => {
+            if let Some(value) = &inner.value {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Expr::YieldFrom(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Expr::Compare(inner) => {
+            collect_lambdas_expr(&inner.left, out);
+            for comparator in &inner.comparators {
+                collect_lambdas_expr(comparator, out);
+            }
+        }
+        ast::Expr::Call(inner) => {
+            collect_lambdas_expr(&inner.func, out);
+            for arg in &inner.args {
+                collect_lambdas_expr(arg, out);
+            }
+            for keyword in &inner.keywords {
+                collect_lambdas_expr(&keyword.value, out);
+            }
+        }
+        ast::Expr::FormattedValue(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Expr::JoinedStr(inner) => {
+            for value in &inner.values {
+                collect_lambdas_expr(value, out);
+            }
+        }
+        ast::Expr::Attribute(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Expr::Subscript(inner) => {
+            collect_lambdas_expr(&inner.value, out);
+            collect_lambdas_expr(&inner.slice, out);
+        }
+        ast::Expr::Starred(inner) => collect_lambdas_expr(&inner.value, out),
+        ast::Expr::List(inner) => {
+            for element in &inner.elts {
+                collect_lambdas_expr(element, out);
+            }
+        }
+        ast::Expr::Tuple(inner) => {
+            for element in &inner.elts {
+                collect_lambdas_expr(element, out);
+            }
+        }
+        ast::Expr::Slice(inner) => {
+            for part in [&inner.lower, &inner.upper, &inner.step]
+                .into_iter()
+                .flatten()
+            {
+                collect_lambdas_expr(part, out);
+            }
+        }
+        ast::Expr::Constant(_) | ast::Expr::Name(_) => {}
+    }
+}
+
+fn collect_lambdas_generators<'a>(
+    generators: &'a [ast::Comprehension],
+    out: &mut Vec<&'a ast::ExprLambda>,
+) {
+    for generator in generators {
+        collect_lambdas_expr(&generator.target, out);
+        collect_lambdas_expr(&generator.iter, out);
+        for condition in &generator.ifs {
+            collect_lambdas_expr(condition, out);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Updater-body dataflow classification (MLC112 / MLP218 / MLD301).
+// ---------------------------------------------------------------------------
+
+/// Methods on the updater parameter allowed by `pure_affine_on_target`.
+fn is_affine_or_setter(method: &str) -> bool {
+    matches!(method, "shift" | "rotate" | "scale" | "move_to") || method.starts_with("set_")
+}
+
+/// Curated frame-varying read sources, by canonical candidate id.
+/// `Yes`-evidence is reserved for provable reads (MLC112 fires on `Yes`);
+/// everything else stays `Maybe` at most.
+fn frame_varying_candidate(candidate: &str) -> bool {
+    (candidate.starts_with("manim.mobject.value_tracker.") && candidate.ends_with(".get_value"))
+        || (candidate.starts_with("random.") && candidate != "random.seed")
+        || candidate.starts_with("numpy.random.")
+        || matches!(
+            candidate,
+            "time.time"
+                | "time.monotonic"
+                | "time.perf_counter"
+                | "time.time_ns"
+                | "time.monotonic_ns"
+                | "time.perf_counter_ns"
+        )
+}
+
+/// Candidates that are provably pure, deterministic computations.
+fn pure_deterministic_candidate(candidate: &str) -> bool {
+    (candidate.starts_with("numpy.") && !candidate.starts_with("numpy.random."))
+        || candidate.starts_with("math.")
+}
+
+/// Accumulates occurrence evidence: `Yes` sticks, any `Maybe` degrades a
+/// `No`, and `No` + `No` stays `No`.
+fn bump(slot: &mut Truth, evidence: Truth) {
+    *slot = match (*slot, evidence) {
+        (Truth::Yes, _) | (_, Truth::Yes) => Truth::Yes,
+        (Truth::No, Truth::No) => Truth::No,
+        _ => Truth::Maybe,
+    };
+}
+
+/// The root name of a (possibly dotted / subscripted) expression.
+fn root_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Name(name) => Some(name.id.as_str()),
+        ast::Expr::Attribute(attribute) => root_name(&attribute.value),
+        ast::Expr::Subscript(subscript) => root_name(&subscript.value),
+        ast::Expr::Starred(starred) => root_name(&starred.value),
+        _ => None,
+    }
+}
+
+/// The body being classified.
+enum BodyRef<'a> {
+    /// A `def` body.
+    Stmts(&'a [ast::Stmt]),
+    /// A lambda body (one expression, evaluated unconditionally).
+    Expr(&'a ast::Expr),
+}
+
+/// Syntactic, conservative classifier over one updater callback body.
+struct BodyClassifier<'a, 'b> {
+    ctx: &'b Ctx<'a>,
+    file: FileId,
+    /// The updater's mobject parameter name (`None` for scene updaters or
+    /// while shadowed by a nested scope).
+    target: Option<String>,
+    /// The frame-delta parameter name (`None` while shadowed).
+    dt: Option<String>,
+    /// Depth inside nested callables defined in the body (their code may
+    /// or may not run per frame: evidence degrades to `Maybe`).
+    nested: u32,
+    /// Depth inside conditionally executed regions (branch arms, loop
+    /// bodies, handlers, short-circuit operands): a conditional read is
+    /// not a per-frame proof.
+    conditional: u32,
+    uses_dt: bool,
+    reads_frame_varying: Truth,
+    mutates_target: Truth,
+    /// Evidence of an operation outside the pure-affine allowlist.
+    disallowed: Truth,
+    calls_unknown: Truth,
+}
+
+impl BodyClassifier<'_, '_> {
+    fn evidence(&self) -> Truth {
+        if self.nested > 0 || self.conditional > 0 {
+            Truth::Maybe
+        } else {
+            Truth::Yes
+        }
+    }
+
+    fn walk_stmts(&mut self, stmts: &[ast::Stmt]) {
+        for stmt in stmts {
+            self.walk_stmt(stmt);
+        }
+    }
+
+    fn conditional_stmts(&mut self, stmts: &[ast::Stmt]) {
+        self.conditional += 1;
+        self.walk_stmts(stmts);
+        self.conditional -= 1;
+    }
+
+    fn conditional_expr(&mut self, expr: &ast::Expr) {
+        self.conditional += 1;
+        self.walk_expr(expr);
+        self.conditional -= 1;
+    }
+
+    /// Enters a nested callable scope, shadowing re-bound tracked names.
+    fn nested_scope(&mut self, params: &ast::Arguments, walk: impl FnOnce(&mut Self)) {
+        let mut bound: BTreeSet<String> = BTreeSet::new();
+        for arg in params
+            .posonlyargs
+            .iter()
+            .chain(&params.args)
+            .chain(&params.kwonlyargs)
+        {
+            bound.insert(arg.def.arg.to_string());
+        }
+        for arg in [&params.vararg, &params.kwarg].into_iter().flatten() {
+            bound.insert(arg.arg.to_string());
+        }
+        let saved_dt = self.dt.clone();
+        let saved_target = self.target.clone();
+        if self.dt.as_ref().is_some_and(|name| bound.contains(name)) {
+            self.dt = None;
+        }
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|name| bound.contains(name))
+        {
+            self.target = None;
+        }
+        self.nested += 1;
+        walk(self);
+        self.nested -= 1;
+        self.dt = saved_dt;
+        self.target = saved_target;
+    }
+
+    /// A write target of an assignment / deletion.
+    fn classify_store_target(&mut self, target: &ast::Expr) {
+        match target {
+            // Local rebinds are pure.
+            ast::Expr::Name(_) => {}
+            ast::Expr::Tuple(inner) => {
+                for element in &inner.elts {
+                    self.classify_store_target(element);
+                }
+            }
+            ast::Expr::List(inner) => {
+                for element in &inner.elts {
+                    self.classify_store_target(element);
+                }
+            }
+            ast::Expr::Starred(inner) => self.classify_store_target(&inner.value),
+            _ => {
+                // Attribute / subscript writes: a raw mutation of whatever
+                // the root binding refers to (e.g. `mob.points = ...`).
+                let evidence = self.evidence();
+                if root_name(target).is_some_and(|root| self.target.as_deref() == Some(root)) {
+                    bump(&mut self.mutates_target, evidence);
+                }
+                bump(&mut self.disallowed, evidence);
+                self.walk_expr(target);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one arm per statement kind")]
+    fn walk_stmt(&mut self, stmt: &ast::Stmt) {
+        match stmt {
+            ast::Stmt::Expr(inner) => self.walk_expr(&inner.value),
+            ast::Stmt::Return(inner) => {
+                if let Some(value) = &inner.value {
+                    self.walk_expr(value);
+                }
+            }
+            ast::Stmt::Assign(inner) => {
+                self.walk_expr(&inner.value);
+                for target in &inner.targets {
+                    self.classify_store_target(target);
+                }
+            }
+            ast::Stmt::AugAssign(inner) => {
+                self.walk_expr(&inner.value);
+                self.classify_store_target(&inner.target);
+            }
+            ast::Stmt::AnnAssign(inner) => {
+                if let Some(value) = &inner.value {
+                    self.walk_expr(value);
+                    self.classify_store_target(&inner.target);
+                }
+            }
+            ast::Stmt::If(inner) => {
+                self.walk_expr(&inner.test);
+                self.conditional_stmts(&inner.body);
+                self.conditional_stmts(&inner.orelse);
+            }
+            ast::Stmt::While(inner) => {
+                self.walk_expr(&inner.test);
+                self.conditional_stmts(&inner.body);
+                self.conditional_stmts(&inner.orelse);
+            }
+            ast::Stmt::For(inner) => {
+                self.walk_expr(&inner.iter);
+                self.conditional_stmts(&inner.body);
+                self.conditional_stmts(&inner.orelse);
+            }
+            ast::Stmt::AsyncFor(inner) => {
+                self.walk_expr(&inner.iter);
+                self.conditional_stmts(&inner.body);
+                self.conditional_stmts(&inner.orelse);
+            }
+            ast::Stmt::With(inner) => {
+                for item in &inner.items {
+                    self.walk_expr(&item.context_expr);
+                }
+                self.walk_stmts(&inner.body);
+            }
+            ast::Stmt::AsyncWith(inner) => {
+                for item in &inner.items {
+                    self.walk_expr(&item.context_expr);
+                }
+                self.walk_stmts(&inner.body);
+            }
+            ast::Stmt::Try(inner) => {
+                self.conditional_stmts(&inner.body);
+                for handler in &inner.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    if let Some(kind) = &handler.type_ {
+                        self.walk_expr(kind);
+                    }
+                    self.conditional_stmts(&handler.body);
+                }
+                self.conditional_stmts(&inner.orelse);
+                self.walk_stmts(&inner.finalbody);
+            }
+            ast::Stmt::TryStar(inner) => {
+                self.conditional_stmts(&inner.body);
+                for handler in &inner.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    if let Some(kind) = &handler.type_ {
+                        self.walk_expr(kind);
+                    }
+                    self.conditional_stmts(&handler.body);
+                }
+                self.conditional_stmts(&inner.orelse);
+                self.walk_stmts(&inner.finalbody);
+            }
+            ast::Stmt::Match(inner) => {
+                self.walk_expr(&inner.subject);
+                for case in &inner.cases {
+                    if let Some(guard) = &case.guard {
+                        self.conditional_expr(guard);
+                    }
+                    self.conditional_stmts(&case.body);
+                }
+            }
+            ast::Stmt::Raise(inner) => {
+                for part in [&inner.exc, &inner.cause].into_iter().flatten() {
+                    self.walk_expr(part);
+                }
+            }
+            ast::Stmt::Assert(inner) => {
+                self.walk_expr(&inner.test);
+                if let Some(message) = &inner.msg {
+                    self.walk_expr(message);
+                }
+            }
+            ast::Stmt::Delete(inner) => {
+                for target in &inner.targets {
+                    self.classify_store_target(target);
+                }
+            }
+            ast::Stmt::FunctionDef(def) => {
+                collect_defaults_walk(self, &def.args);
+                self.nested_scope(&def.args, |classifier| {
+                    classifier.walk_stmts(&def.body);
+                });
+            }
+            ast::Stmt::AsyncFunctionDef(def) => {
+                collect_defaults_walk(self, &def.args);
+                self.nested_scope(&def.args, |classifier| {
+                    classifier.walk_stmts(&def.body);
+                });
+            }
+            ast::Stmt::ClassDef(def) => {
+                // A class body executes at definition time; treat it as a
+                // nested (maybe-running) region.
+                self.nested += 1;
+                self.walk_stmts(&def.body);
+                self.nested -= 1;
+            }
+            ast::Stmt::Global(_) | ast::Stmt::Nonlocal(_) => {
+                // Declared intent to write enclosing-scope state.
+                bump(&mut self.disallowed, Truth::Maybe);
+            }
+            ast::Stmt::Import(_) | ast::Stmt::ImportFrom(_) => {
+                bump(&mut self.disallowed, Truth::Maybe);
+            }
+            ast::Stmt::TypeAlias(_)
+            | ast::Stmt::Pass(_)
+            | ast::Stmt::Break(_)
+            | ast::Stmt::Continue(_) => {}
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
+    fn walk_expr(&mut self, expr: &ast::Expr) {
+        match expr {
+            ast::Expr::Name(name) => {
+                if self.dt.as_deref() == Some(name.id.as_str()) {
+                    self.uses_dt = true;
+                }
+            }
+            ast::Expr::Call(call) => self.classify_call(call),
+            ast::Expr::Lambda(lambda) => {
+                collect_defaults_walk(self, &lambda.args);
+                self.nested_scope(&lambda.args, |classifier| {
+                    classifier.walk_expr(&lambda.body);
+                });
+            }
+            ast::Expr::BoolOp(inner) => {
+                let mut values = inner.values.iter();
+                if let Some(first) = values.next() {
+                    self.walk_expr(first);
+                }
+                for value in values {
+                    self.conditional_expr(value);
+                }
+            }
+            ast::Expr::NamedExpr(inner) => {
+                self.walk_expr(&inner.value);
+            }
+            ast::Expr::BinOp(inner) => {
+                self.walk_expr(&inner.left);
+                self.walk_expr(&inner.right);
+            }
+            ast::Expr::UnaryOp(inner) => self.walk_expr(&inner.operand),
+            ast::Expr::IfExp(inner) => {
+                self.walk_expr(&inner.test);
+                self.conditional_expr(&inner.body);
+                self.conditional_expr(&inner.orelse);
+            }
+            ast::Expr::Dict(inner) => {
+                for key in inner.keys.iter().flatten() {
+                    self.walk_expr(key);
+                }
+                for value in &inner.values {
+                    self.walk_expr(value);
+                }
+            }
+            ast::Expr::Set(inner) => {
+                for element in &inner.elts {
+                    self.walk_expr(element);
+                }
+            }
+            ast::Expr::ListComp(inner) => {
+                self.walk_generators(&inner.generators, &[&inner.elt]);
+            }
+            ast::Expr::SetComp(inner) => {
+                self.walk_generators(&inner.generators, &[&inner.elt]);
+            }
+            ast::Expr::DictComp(inner) => {
+                self.walk_generators(&inner.generators, &[&inner.key, &inner.value]);
+            }
+            ast::Expr::GeneratorExp(inner) => {
+                self.walk_generators(&inner.generators, &[&inner.elt]);
+            }
+            ast::Expr::Await(inner) => {
+                bump(&mut self.disallowed, Truth::Maybe);
+                self.walk_expr(&inner.value);
+            }
+            ast::Expr::Yield(inner) => {
+                bump(&mut self.disallowed, Truth::Maybe);
+                if let Some(value) = &inner.value {
+                    self.walk_expr(value);
+                }
+            }
+            ast::Expr::YieldFrom(inner) => {
+                bump(&mut self.disallowed, Truth::Maybe);
+                self.walk_expr(&inner.value);
+            }
+            ast::Expr::Compare(inner) => {
+                self.walk_expr(&inner.left);
+                for comparator in &inner.comparators {
+                    self.walk_expr(comparator);
+                }
+            }
+            ast::Expr::FormattedValue(inner) => self.walk_expr(&inner.value),
+            ast::Expr::JoinedStr(inner) => {
+                for value in &inner.values {
+                    self.walk_expr(value);
+                }
+            }
+            ast::Expr::Attribute(inner) => self.walk_expr(&inner.value),
+            ast::Expr::Subscript(inner) => {
+                self.walk_expr(&inner.value);
+                self.walk_expr(&inner.slice);
+            }
+            ast::Expr::Starred(inner) => self.walk_expr(&inner.value),
+            ast::Expr::List(inner) => {
+                for element in &inner.elts {
+                    self.walk_expr(element);
+                }
+            }
+            ast::Expr::Tuple(inner) => {
+                for element in &inner.elts {
+                    self.walk_expr(element);
+                }
+            }
+            ast::Expr::Slice(inner) => {
+                for part in [&inner.lower, &inner.upper, &inner.step]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.walk_expr(part);
+                }
+            }
+            ast::Expr::Constant(_) => {}
+        }
+    }
+
+    fn walk_generators(&mut self, generators: &[ast::Comprehension], elements: &[&ast::Expr]) {
+        // The first iterable evaluates unconditionally; everything else
+        // runs per element (0..n times).
+        let mut iterables = generators.iter().map(|generator| &generator.iter);
+        if let Some(first) = iterables.next() {
+            self.walk_expr(first);
+        }
+        for iterable in iterables {
+            self.conditional_expr(iterable);
+        }
+        // Comprehension targets shadow tracked names inside the element.
+        let mut bound: BTreeSet<String> = BTreeSet::new();
+        for generator in generators {
+            crate::frontend::names::collect_target_names(&generator.target, &mut bound);
+        }
+        let saved_dt = self.dt.clone();
+        let saved_target = self.target.clone();
+        if self.dt.as_ref().is_some_and(|name| bound.contains(name)) {
+            self.dt = None;
+        }
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|name| bound.contains(name))
+        {
+            self.target = None;
+        }
+        for generator in generators {
+            for condition in &generator.ifs {
+                self.conditional_expr(condition);
+            }
+        }
+        for element in elements {
+            self.conditional_expr(element);
+        }
+        self.dt = saved_dt;
+        self.target = saved_target;
+    }
+
+    /// The updater parameter appearing as an argument of a call whose
+    /// effects are not modeled: the callee may mutate it.
+    fn check_target_escape(&mut self, call: &ast::ExprCall) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        let mentions = call
+            .args
+            .iter()
+            .chain(call.keywords.iter().map(|keyword| &keyword.value))
+            .any(|argument| root_name(argument) == Some(target.as_str()));
+        if mentions {
+            bump(&mut self.mutates_target, Truth::Maybe);
+            bump(&mut self.disallowed, Truth::Maybe);
+        }
+    }
+
+    fn walk_call_args(&mut self, call: &ast::ExprCall) {
+        for argument in &call.args {
+            self.walk_expr(argument);
+        }
+        for keyword in &call.keywords {
+            self.walk_expr(&keyword.value);
+        }
+    }
+
+    fn classify_call(&mut self, call: &ast::ExprCall) {
+        let evidence = self.evidence();
+        // Method call on the updater's mobject parameter.
+        if let ast::Expr::Attribute(attribute) = call.func.as_ref() {
+            if let ast::Expr::Name(base) = attribute.value.as_ref() {
+                if self.target.as_deref() == Some(base.id.as_str()) {
+                    let method = attribute.attr.as_str();
+                    if is_affine_or_setter(method) {
+                        bump(&mut self.mutates_target, evidence);
+                    } else if method.starts_with("get_") || method == "copy" {
+                        // Curated read convention: `get_*` / `copy` do not
+                        // mutate the receiver.
+                    } else if mutator_channels(&format!("target.{method}")).is_some()
+                        || matches!(
+                            method,
+                            "become"
+                                | "add"
+                                | "remove"
+                                | "add_updater"
+                                | "remove_updater"
+                                | "clear_updaters"
+                                | "generate_target"
+                                | "save_state"
+                                | "restore"
+                        )
+                    {
+                        // A curated mutator outside the affine allowlist.
+                        bump(&mut self.mutates_target, evidence);
+                        bump(&mut self.disallowed, evidence);
+                    } else {
+                        // Unrecognized method on the target parameter.
+                        bump(&mut self.mutates_target, Truth::Maybe);
+                        bump(&mut self.calls_unknown, evidence);
+                        bump(&mut self.disallowed, Truth::Maybe);
+                    }
+                    self.walk_call_args(call);
+                    return;
+                }
+            }
+        }
+        // A callee the frontend resolved to candidates.
+        let candidates = self
+            .ctx
+            .fact(self.file, call.range())
+            .map(|fact| fact.candidates.clone())
+            .filter(|candidates| !candidates.is_empty());
+        if let Some(candidates) = candidates {
+            if candidates
+                .iter()
+                .all(|candidate| frame_varying_candidate(candidate))
+            {
+                bump(&mut self.reads_frame_varying, evidence);
+            } else if candidates
+                .iter()
+                .any(|candidate| frame_varying_candidate(candidate))
+            {
+                bump(&mut self.reads_frame_varying, Truth::Maybe);
+                bump(&mut self.disallowed, Truth::Maybe);
+            } else if candidates
+                .iter()
+                .all(|candidate| pure_deterministic_candidate(candidate))
+            {
+                // Pure computation: no reads, no effects.
+            } else {
+                // Resolvable, but its effects are not modeled here: not an
+                // unknown call, yet also not provably frame-invariant or
+                // pure-affine.
+                bump(&mut self.reads_frame_varying, Truth::Maybe);
+                bump(&mut self.disallowed, Truth::Maybe);
+            }
+            self.check_target_escape(call);
+            self.walk_expr(&call.func);
+            self.walk_call_args(call);
+            return;
+        }
+        // No candidates: a builtin or an unresolvable callee.
+        if let ast::Expr::Name(name) = call.func.as_ref() {
+            let name = name.id.as_str();
+            if name == "next" {
+                // Iterator advancement reads (and moves) external state.
+                bump(&mut self.reads_frame_varying, evidence);
+                bump(&mut self.disallowed, Truth::Maybe);
+                self.check_target_escape(call);
+                self.walk_call_args(call);
+                return;
+            }
+            if PURE_BUILTINS.contains(&name) {
+                self.walk_call_args(call);
+                return;
+            }
+        }
+        bump(&mut self.calls_unknown, evidence);
+        bump(&mut self.disallowed, Truth::Maybe);
+        self.check_target_escape(call);
+        self.walk_expr(&call.func);
+        self.walk_call_args(call);
+    }
+
+    fn finish(self, has_dt_param: bool) -> UpdaterBodyFact {
+        let uses_dt = if has_dt_param {
+            Truth::from(self.uses_dt)
+        } else {
+            Truth::No
+        };
+        let calls_unknown = self.calls_unknown;
+        // "Any call to an unresolvable function → everything downstream
+        // Maybe": an unknown callee may read frame-varying state or reach
+        // the target through another alias.
+        let degrade = |value: Truth| {
+            if calls_unknown == Truth::No || value == Truth::Yes {
+                value
+            } else {
+                Truth::Maybe
+            }
+        };
+        let pure_affine_on_target = match self.disallowed {
+            Truth::No => Truth::Yes,
+            Truth::Maybe => Truth::Maybe,
+            Truth::Yes => Truth::No,
+        };
+        UpdaterBodyFact {
+            uses_dt,
+            reads_frame_varying: degrade(self.reads_frame_varying),
+            mutates_target: degrade(self.mutates_target),
+            pure_affine_on_target,
+            calls_unknown,
+        }
+    }
+}
+
+/// Walks the default expressions of a nested callable at the *current*
+/// scope (defaults evaluate at definition time).
+fn collect_defaults_walk(classifier: &mut BodyClassifier<'_, '_>, args: &ast::Arguments) {
+    for arg in args
+        .posonlyargs
+        .iter()
+        .chain(&args.args)
+        .chain(&args.kwonlyargs)
+    {
+        if let Some(default) = &arg.default {
+            classifier.walk_expr(default);
+        }
+    }
+}
+
+/// Classifies one callback body.
+fn classify_body(
+    ctx: &Ctx<'_>,
+    file: FileId,
+    args: &ast::Arguments,
+    scene_level: bool,
+    body: &BodyRef<'_>,
+) -> UpdaterBodyFact {
+    let positional: Vec<String> = args
+        .posonlyargs
+        .iter()
+        .chain(&args.args)
+        .map(|arg| arg.def.arg.to_string())
+        .collect();
+    let (target, dt) = if scene_level {
+        // Scene updaters always receive exactly `(dt)` (DESIGN §3.3).
+        (None, positional.first().cloned())
+    } else {
+        let dt = args
+            .posonlyargs
+            .iter()
+            .chain(&args.args)
+            .chain(&args.kwonlyargs)
+            .map(|arg| arg.def.arg.as_str())
+            .find(|name| *name == "dt")
+            .map(str::to_owned);
+        (positional.first().cloned(), dt)
+    };
+    let has_dt_param = dt.is_some();
+    let mut classifier = BodyClassifier {
+        ctx,
+        file,
+        target,
+        dt,
+        nested: 0,
+        conditional: 0,
+        uses_dt: false,
+        reads_frame_varying: Truth::No,
+        mutates_target: Truth::No,
+        disallowed: Truth::No,
+        calls_unknown: Truth::No,
+    };
+    match body {
+        BodyRef::Stmts(stmts) => classifier.walk_stmts(stmts),
+        BodyRef::Expr(expr) => classifier.walk_expr(expr),
+    }
+    classifier.finish(has_dt_param)
+}
+
+/// Resolves a registered updater callback to its body and classifies it;
+/// unresolvable callbacks stay all-`Maybe`.
+fn classify_updater_callback(
+    ctx: &Ctx<'_>,
+    lambdas: &BTreeMap<AllocationSite, &ast::ExprLambda>,
+    scene_level: bool,
+    callback: &CallbackRef,
+) -> UpdaterBodyFact {
+    match callback {
+        CallbackRef::Named(qualified) => match ctx.defs.defs.get(qualified) {
+            Some(def) => classify_body(
+                ctx,
+                def.file,
+                def.args,
+                scene_level,
+                &BodyRef::Stmts(def.body),
+            ),
+            None => UpdaterBodyFact::unknown(),
+        },
+        CallbackRef::Lambda(site) => match lambdas.get(site) {
+            Some(lambda) => classify_body(
+                ctx,
+                site.file,
+                &lambda.args,
+                scene_level,
+                &BodyRef::Expr(&lambda.body),
+            ),
+            None => UpdaterBodyFact::unknown(),
+        },
+        CallbackRef::Unknown => UpdaterBodyFact::unknown(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lambda return facts (MLC123).
+// ---------------------------------------------------------------------------
+
+/// The return fact of one lambda: a lambda always returns its body
+/// expression, so bare-return and no-return paths are definite `No`s and
+/// only the mobject-ness of the body is classified.
+fn lambda_return_fact(ctx: &Ctx<'_>, file: FileId, lambda: &ast::ExprLambda) -> ReturnFact {
+    let param = lambda
+        .args
+        .posonlyargs
+        .iter()
+        .chain(&lambda.args.args)
+        .next()
+        .map(|arg| arg.def.arg.to_string());
+    ReturnFact {
+        returns_mobject: classify_mobject_expr(ctx, file, param.as_deref(), &lambda.body),
+        has_bare_return_path: Truth::No,
+        has_no_return_path: Truth::No,
+    }
+}
+
+/// Whether an expression's value is a mobject, assuming the first
+/// parameter (`param`) is one (the `ApplyFunction` callback contract).
+fn classify_mobject_expr(
+    ctx: &Ctx<'_>,
+    file: FileId,
+    param: Option<&str>,
+    expr: &ast::Expr,
+) -> Truth {
+    match expr {
+        // Literals, displays, strings, and nested lambdas are definitely
+        // not mobjects.
+        ast::Expr::Constant(_)
+        | ast::Expr::JoinedStr(_)
+        | ast::Expr::Dict(_)
+        | ast::Expr::Set(_)
+        | ast::Expr::List(_)
+        | ast::Expr::Tuple(_)
+        | ast::Expr::ListComp(_)
+        | ast::Expr::SetComp(_)
+        | ast::Expr::DictComp(_)
+        | ast::Expr::GeneratorExp(_)
+        | ast::Expr::Lambda(_)
+        | ast::Expr::Compare(_)
+        | ast::Expr::BoolOp(_) => Truth::No,
+        ast::Expr::Name(name) if param == Some(name.id.as_str()) => Truth::Yes,
+        ast::Expr::IfExp(inner) => {
+            let then_arm = classify_mobject_expr(ctx, file, param, &inner.body);
+            let else_arm = classify_mobject_expr(ctx, file, param, &inner.orelse);
+            match (then_arm, else_arm) {
+                (Truth::Yes, Truth::Yes) => Truth::Yes,
+                (Truth::No, _) | (_, Truth::No) => Truth::No,
+                _ => Truth::Maybe,
+            }
+        }
+        ast::Expr::Call(call) => {
+            let Some(fact) = ctx.fact(file, call.range()) else {
+                return Truth::Maybe;
+            };
+            if fact.candidates.is_empty() {
+                return Truth::Maybe;
+            }
+            let mobject_candidate = |candidate: &str| {
+                ctx.index.mobject_classes.contains(candidate)
+                    || ctx
+                        .knowledge
+                        .and_then(|profile| profile.symbol(candidate))
+                        .is_some_and(|entry| {
+                            matches!(entry.kind, SymbolKind::Mobject | SymbolKind::Vmobject)
+                        })
+            };
+            if fact
+                .candidates
+                .iter()
+                .all(|candidate| mobject_candidate(candidate))
+            {
+                return Truth::Yes;
+            }
+            // A single project callable: delegate to its summary fact.
+            if fact.candidates.len() == 1 {
+                let candidate = fact.candidates.iter().next().expect("len checked");
+                if let Some(summary) = ctx.summaries.get(candidate) {
+                    return summary.return_fact.returns_mobject;
+                }
+            }
+            let non_mobject_candidate = |candidate: &str| {
+                ctx.index.animation_classes.contains(candidate)
+                    || ctx
+                        .knowledge
+                        .and_then(|profile| profile.symbol(candidate))
+                        .is_some_and(|entry| {
+                            matches!(
+                                entry.kind,
+                                SymbolKind::Animation | SymbolKind::Scene | SymbolKind::Camera
+                            )
+                        })
+            };
+            if fact
+                .candidates
+                .iter()
+                .all(|candidate| non_mobject_candidate(candidate))
+            {
+                Truth::No
+            } else {
+                Truth::Maybe
+            }
+        }
+        _ => Truth::Maybe,
     }
 }

@@ -137,12 +137,18 @@ pub struct MobjectState {
     pub updating_suspended: Truth,
     /// Expanded family member count.
     pub family_size: Num,
-    /// Point count.
+    /// Own-path point count (the object's own `points` array, not the
+    /// family total). `Exact(0)` only when the constructor provably starts
+    /// with an empty path (curated; `VMobject()` yes, `Square()` no).
     pub point_count: Num,
     /// Bezier curve count.
     pub curve_count: Num,
     /// Subpath count.
     pub subpath_count: Num,
+    /// Points per cubic curve (`n_points_per_cubic_curve`, default 4).
+    /// Exact only when the construction provably used the default; path
+    /// arithmetic that depends on it stays `Unknown` otherwise.
+    pub points_per_curve: Num,
     /// Monotonic mutation counter (bumped on every observed mutation).
     pub mutation_epoch: u64,
     /// `generate_target()` state.
@@ -177,6 +183,7 @@ impl MobjectState {
             point_count: Num::Unknown,
             curve_count: Num::Unknown,
             subpath_count: Num::Unknown,
+            points_per_curve: Num::Unknown,
             mutation_epoch: 0,
             generated_target: GeneratedTarget::absent(),
             saved_state: Presence::Absent,
@@ -210,6 +217,7 @@ impl MobjectState {
             point_count: self.point_count.join(&other.point_count),
             curve_count: self.curve_count.join(&other.curve_count),
             subpath_count: self.subpath_count.join(&other.subpath_count),
+            points_per_curve: self.points_per_curve.join(&other.points_per_curve),
             mutation_epoch: self.mutation_epoch.max(other.mutation_epoch),
             generated_target: self.generated_target.join(&other.generated_target),
             saved_state: self.saved_state.join(other.saved_state),
@@ -234,6 +242,7 @@ impl MobjectState {
         widened.point_count = self.point_count.widen(&next.point_count);
         widened.curve_count = self.curve_count.widen(&next.curve_count);
         widened.subpath_count = self.subpath_count.widen(&next.subpath_count);
+        widened.points_per_curve = self.points_per_curve.widen(&next.points_per_curve);
         widened
     }
 
@@ -450,6 +459,12 @@ pub struct SceneState {
     pub active_updater_owners: BTreeSet<ObjectId>,
     /// Animations currently playing.
     pub active_animations: BTreeSet<ObjectId>,
+    /// Tracked value of `self.always_update_mobjects` (DESIGN §3.3):
+    /// `No` is the Manim default, a literal assignment (or a literal
+    /// `super().__init__(always_update_mobjects=...)` kwarg) sets it
+    /// exactly, and any non-literal write degrades it to `Maybe` — the
+    /// fact is never silently widened away (MLP227).
+    pub always_update_mobjects: Truth,
 }
 
 impl SceneState {
@@ -465,6 +480,7 @@ impl SceneState {
             scene_updaters: BTreeSet::new(),
             active_updater_owners: BTreeSet::new(),
             active_animations: BTreeSet::new(),
+            always_update_mobjects: Truth::No,
         }
     }
 
@@ -492,6 +508,9 @@ impl SceneState {
                 .union(&other.active_animations)
                 .cloned()
                 .collect(),
+            always_update_mobjects: self
+                .always_update_mobjects
+                .join(other.always_update_mobjects),
         }
     }
 
