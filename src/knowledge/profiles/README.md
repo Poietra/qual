@@ -45,6 +45,47 @@ sources only — no assets, docs, or build metadata.
 - `SingleStringMathTex` is star-exported (`tex_mobject.__all__`); the
   export entry backs the already-curated symbol so the `MLR103` / `MLR115`
   constructor lists see explicit imports of it.
+- **Generator-backlog widening (wave 6).** The star surfaces of
+  `manim.utils.color.manim_colors` (all 89 color constants),
+  `manim.utils.color.core`, `manim.constants` (completed), the
+  `manim.animation.transform` star-exports, and `manim.utils.bezier` are
+  curated from `sync_manim_knowledge` evidence: kinds, bases, and
+  signature params are machine-verified; no effects were invented.
+  Non-mobject classes (`ManimColor`, `HSV`, `RGBA`,
+  `RandomColorGenerator`, the `constants.py` enum types) are curated as
+  `constant`: a known module-level name whose call yields Unknown —
+  adding a dedicated class kind is not needed by any rule.
+- **Transform-family chain-inheritance soundness.** An `animation` entry
+  with curated `bases` lets the interpreter chain-inherit
+  introducer/remover/cleanup facts, so bases are only curated where the
+  subclass keeps its ancestors' played-mobject and cleanup contract.
+  Deliberate exceptions (kind curated, bases omitted, reason in each
+  entry note): `TransformFromCopy` (constructor swaps its arguments),
+  `FadeTransform` (cleanup removes the played group and appends the
+  target — neither plain Transform cleanup nor an order-preserving
+  replacement), `CyclicReplace` (wraps `*mobjects` into a played `Group`,
+  so positional args are family members, not roots). `Swap` keeps its
+  `CyclicReplace` base (that chain carries no facts).
+  `TransformAnimations` is **not curated at all**: its positional
+  arguments are animations, and curating it as an `animation` would turn
+  on composition modeling that joins child introducer facts into a wrong
+  certainty about the end animation's target (only the start animation's
+  mobject is played, `transform.py TransformAnimations.__init__`).
+- **`Mobject.align_data` stays uncurated on purpose.** Curated `method`
+  dispatch evaluates call arguments without widening them, and
+  `align_data` mutates the point data of its mobject *argument*
+  (`mobject.py Mobject.align_data`); leaving it uncurated keeps the
+  unknown-call widening of both receiver and argument. The other
+  family/geometry getters (`get_family`, `family_members_with_points`,
+  `get_all_points`, `get_arc_length`) are pure and carry
+  `returns_self: false` as a positive no-mutation fact;
+  `VMobject.insert_n_curves` returns `self` (machine-verified).
+- **`Axes.plot`** is curated as a method entry on `Axes` (defined on
+  `CoordinateSystem`, `coordinate_systems.py CoordinateSystem.plot`),
+  and `Axes.bases` carries both source bases (`VGroup`,
+  `CoordinateSystem`) so chain resolution can reach future
+  `CoordinateSystem` helpers; `ParametricFunction` is curated with its
+  constructor signature for `MLP221`.
 - **`font_size` mutation is constructor-only in `MLR115` on purpose.** The
   Text/TeX families expose no font-size *method*: the runtime mutator is
   the `font_size` **property setter** (`text_mobject.py Text.font_size`,

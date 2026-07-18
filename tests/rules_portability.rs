@@ -364,8 +364,49 @@ fn mld304_fires_only_when_the_run_targets_both_renderers() {
     let divergent = find(&diagnostics, "invalid.py", "MLD304", 0);
     assert!(divergent.message.contains("cairo"));
     assert!(divergent.message.contains("opengl"));
+    // Deepened evidence: the affected registry and the certain
+    // registration site of the removed object.
+    assert_eq!(
+        divergent.evidence.get("registry").map(ToString::to_string),
+        Some("[\"fixed_in_frame\"]".to_owned())
+    );
+    assert_eq!(divergent.related_locations.len(), 1);
+    assert!(divergent.related_locations[0].message.contains("fixed"));
 
     // A single-renderer run never asks for renderer guards.
+    let (_project, single) = run_fixture("MLD304", MLD304_PYPROJECT);
+    assert!(
+        single.is_empty(),
+        "single-renderer run must be silent: {single:?}"
+    );
+}
+
+#[test]
+fn mld304_flags_unguarded_moving_camera_frame_use_in_multi_renderer_runs() {
+    let (project, diagnostics) = run_fixture_with_profile("MLD304", MLD304_PYPROJECT, Some("all"));
+    // Only the unconditional straight-line `self.camera.frame` use fires;
+    // guarded, post-branch, frameless, mixed-contract, and plain-Scene
+    // cases stay silent.
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "camera.py",
+        &[warning_medium("MLD304", "self.camera.frame")],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let camera = find(&diagnostics, "camera.py", "MLD304", 0);
+    assert!(camera.message.contains("MovingCameraScene"));
+    assert_eq!(
+        camera.evidence.get("camera").map(ToString::to_string),
+        Some("\"moving_camera\"".to_owned())
+    );
+    assert_eq!(
+        camera.evidence.get("attribute").map(ToString::to_string),
+        Some("\"self.camera.frame\"".to_owned())
+    );
+
+    // A single-renderer run never fires the camera leg either.
     let (_project, single) = run_fixture("MLD304", MLD304_PYPROJECT);
     assert!(
         single.is_empty(),

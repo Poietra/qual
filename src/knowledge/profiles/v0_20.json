@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "upstream_0_20",
   "manim_version": ">=0.20,<0.21",
-  "source_digest": "sha256:bb39270c22cca868b0d9097e92b8f5a34d92c70a904dc2c191d05f5aa83a98fb",
+  "source_digest": "sha256:6c7379d3c3f93825b205d4fa9da1115067ef934657fa8eebec1a30e89aac3237",
   "base_profile": null,
   "symbols": {
     "manim.animation.animation.Animation": {
@@ -159,16 +159,56 @@
       "accepted_target": "Mobject",
       "note": "Transform that rotates the live mobject about a point or edge (rotation.py Rotate)."
     },
+    "manim.animation.transform.ApplyComplexFunction": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyMethod"]
+    },
     "manim.animation.transform.ApplyFunction": {
       "kind": "animation",
       "bases": ["manim.animation.transform.Transform"],
       "accepted_target": "Mobject",
       "note": "create_target() calls function(mobject.copy()) and raises TypeError unless the function returns a Mobject (transform.py ApplyFunction.create_target)."
     },
+    "manim.animation.transform.ApplyMatrix": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyPointwiseFunction"]
+    },
     "manim.animation.transform.ApplyMethod": {
       "kind": "animation",
       "bases": ["manim.animation.transform.Transform"],
       "note": "Takes an un-called bound mobject method plus its arguments; passing the result of calling the method is a runtime error (transform.py ApplyMethod)."
+    },
+    "manim.animation.transform.ApplyPointwiseFunction": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyMethod"]
+    },
+    "manim.animation.transform.ApplyPointwiseFunctionToCenter": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyPointwiseFunction"]
+    },
+    "manim.animation.transform.ClockwiseTransform": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"]
+    },
+    "manim.animation.transform.CounterclockwiseTransform": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.Transform"]
+    },
+    "manim.animation.transform.CyclicReplace": {
+      "kind": "animation",
+      "note": "Wraps its *mobjects into a Group and plays the group, so the positional arguments are family members, not scene roots; bases intentionally uncurated so Transform chain facts are not inherited (transform.py CyclicReplace.__init__)."
+    },
+    "manim.animation.transform.FadeToColor": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyMethod"]
+    },
+    "manim.animation.transform.FadeTransform": {
+      "kind": "animation",
+      "note": "clean_up_from_scene diverges from Transform: it removes the played group and adds the target at the end of the display list (transform.py FadeTransform.clean_up_from_scene); bases intentionally uncurated so Transform cleanup facts are not inherited."
+    },
+    "manim.animation.transform.FadeTransformPieces": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.FadeTransform"]
     },
     "manim.animation.transform.MoveToTarget": {
       "kind": "animation",
@@ -198,6 +238,19 @@
       },
       "note": "ApplyMethod over mobject.restore; requires a prior save_state() on every path (transform.py Restore, mobject.py Mobject.restore)."
     },
+    "manim.animation.transform.ScaleInPlace": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ApplyMethod"]
+    },
+    "manim.animation.transform.ShrinkToCenter": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.ScaleInPlace"]
+    },
+    "manim.animation.transform.Swap": {
+      "kind": "animation",
+      "bases": ["manim.animation.transform.CyclicReplace"],
+      "note": "Alias of CyclicReplace for two mobjects (transform.py Swap)."
+    },
     "manim.animation.transform.Transform": {
       "kind": "animation",
       "bases": ["manim.animation.animation.Animation"],
@@ -207,6 +260,10 @@
         "suspends_updaters": true
       },
       "note": "The live source mobject takes the target's shape; the target copy is not added to the Scene (transform.py Transform.begin/clean_up_from_scene, DESIGN 3.2)."
+    },
+    "manim.animation.transform.TransformFromCopy": {
+      "kind": "animation",
+      "note": "The constructor swaps its arguments (super().__init__(target_mobject, mobject)), so the first positional argument is not the played mobject; bases intentionally uncurated so Animation auto-add facts are not inherited (transform.py TransformFromCopy.__init__)."
     },
     "manim.animation.transform_matching_parts.TransformMatchingAbstractBase": {
       "kind": "animation",
@@ -270,21 +327,130 @@
       "kind": "camera",
       "note": "Cairo 3D camera holding phi/theta/zoom trackers and fixed-object registries (three_d_camera.py ThreeDCamera)."
     },
+    "manim.constants.BOLD": {
+      "kind": "constant"
+    },
+    "manim.constants.BOOK": {
+      "kind": "constant"
+    },
+    "manim.constants.CAIRO_ANTIALIAS_MODES": {
+      "kind": "constant"
+    },
+    "manim.constants.CHOOSE_NUMBER_MESSAGE": {
+      "kind": "constant"
+    },
+    "manim.constants.CONTEXT_SETTINGS": {
+      "kind": "constant"
+    },
+    "manim.constants.CTRL_VALUE": {
+      "kind": "constant"
+    },
+    "manim.constants.CapStyleType": {
+      "kind": "constant",
+      "note": "Enum class of cap styles (constants.py CapStyleType)."
+    },
+    "manim.constants.DEFAULT_ARROW_TIP_LENGTH": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_DASH_LENGTH": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_DOT_RADIUS": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_FONT_SIZE": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_MOBJECT_TO_EDGE_BUFFER": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_POINTWISE_FUNCTION_RUN_TIME": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_POINT_DENSITY_1D": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_POINT_DENSITY_2D": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_QUALITY": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_SMALL_DOT_RADIUS": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_STROKE_WIDTH": {
+      "kind": "constant"
+    },
+    "manim.constants.DEFAULT_WAIT_TIME": {
+      "kind": "constant"
+    },
     "manim.constants.DEGREES": {
       "kind": "constant",
       "note": "TAU / 360; multiply degree literals by this scalar."
+    },
+    "manim.constants.DL": {
+      "kind": "constant",
+      "note": "Unit vector DOWN + LEFT (-1, -1, 0)."
     },
     "manim.constants.DOWN": {
       "kind": "constant",
       "note": "Unit vector (0, -1, 0)."
     },
+    "manim.constants.DR": {
+      "kind": "constant",
+      "note": "Unit vector DOWN + RIGHT (1, -1, 0)."
+    },
+    "manim.constants.EPILOG": {
+      "kind": "constant"
+    },
+    "manim.constants.HEAVY": {
+      "kind": "constant"
+    },
     "manim.constants.IN": {
       "kind": "constant",
       "note": "Unit vector (0, 0, -1)."
     },
+    "manim.constants.INVALID_NUMBER_MESSAGE": {
+      "kind": "constant"
+    },
+    "manim.constants.ITALIC": {
+      "kind": "constant"
+    },
+    "manim.constants.LARGE_BUFF": {
+      "kind": "constant"
+    },
     "manim.constants.LEFT": {
       "kind": "constant",
       "note": "Unit vector (-1, 0, 0)."
+    },
+    "manim.constants.LIGHT": {
+      "kind": "constant"
+    },
+    "manim.constants.LineJointType": {
+      "kind": "constant",
+      "note": "Enum class of line joint styles (constants.py LineJointType)."
+    },
+    "manim.constants.MEDIUM": {
+      "kind": "constant"
+    },
+    "manim.constants.MED_LARGE_BUFF": {
+      "kind": "constant"
+    },
+    "manim.constants.MED_SMALL_BUFF": {
+      "kind": "constant"
+    },
+    "manim.constants.NORMAL": {
+      "kind": "constant"
+    },
+    "manim.constants.NO_SCENE_MESSAGE": {
+      "kind": "constant"
+    },
+    "manim.constants.OBLIQUE": {
+      "kind": "constant"
     },
     "manim.constants.ORIGIN": {
       "kind": "constant",
@@ -298,17 +464,89 @@
       "kind": "constant",
       "note": "np.pi scalar."
     },
+    "manim.constants.QUALITIES": {
+      "kind": "constant"
+    },
+    "manim.constants.RESAMPLING_ALGORITHMS": {
+      "kind": "constant"
+    },
     "manim.constants.RIGHT": {
       "kind": "constant",
       "note": "Unit vector (1, 0, 0)."
+    },
+    "manim.constants.RendererType": {
+      "kind": "constant",
+      "note": "Enum class of renderer names, values \"cairo\" / \"opengl\" (constants.py RendererType)."
+    },
+    "manim.constants.SCALE_FACTOR_PER_FONT_POINT": {
+      "kind": "constant"
+    },
+    "manim.constants.SCENE_NOT_FOUND_MESSAGE": {
+      "kind": "constant"
+    },
+    "manim.constants.SEMIBOLD": {
+      "kind": "constant"
+    },
+    "manim.constants.SEMILIGHT": {
+      "kind": "constant"
+    },
+    "manim.constants.SHIFT_VALUE": {
+      "kind": "constant"
+    },
+    "manim.constants.SMALL_BUFF": {
+      "kind": "constant"
+    },
+    "manim.constants.START_X": {
+      "kind": "constant"
+    },
+    "manim.constants.START_Y": {
+      "kind": "constant"
     },
     "manim.constants.TAU": {
       "kind": "constant",
       "note": "2 * PI scalar."
     },
+    "manim.constants.THIN": {
+      "kind": "constant"
+    },
+    "manim.constants.UL": {
+      "kind": "constant",
+      "note": "Unit vector UP + LEFT (-1, 1, 0)."
+    },
+    "manim.constants.ULTRABOLD": {
+      "kind": "constant"
+    },
+    "manim.constants.ULTRAHEAVY": {
+      "kind": "constant"
+    },
+    "manim.constants.ULTRALIGHT": {
+      "kind": "constant"
+    },
     "manim.constants.UP": {
       "kind": "constant",
       "note": "Unit vector (0, 1, 0)."
+    },
+    "manim.constants.UR": {
+      "kind": "constant",
+      "note": "Unit vector UP + RIGHT (1, 1, 0)."
+    },
+    "manim.constants.VIDEO_ENCODERS": {
+      "kind": "constant"
+    },
+    "manim.constants.X264_PRESETS": {
+      "kind": "constant"
+    },
+    "manim.constants.X_AXIS": {
+      "kind": "constant",
+      "note": "Unit vector (1, 0, 0) as a rotation axis."
+    },
+    "manim.constants.Y_AXIS": {
+      "kind": "constant",
+      "note": "Unit vector (0, 1, 0) as a rotation axis."
+    },
+    "manim.constants.Z_AXIS": {
+      "kind": "constant",
+      "note": "Unit vector (0, 0, 1) as a rotation axis."
     },
     "manim.mobject.geometry.arc.Arc": {
       "kind": "vmobject",
@@ -353,12 +591,42 @@
     },
     "manim.mobject.graphing.coordinate_systems.Axes": {
       "kind": "vmobject",
-      "bases": ["manim.mobject.types.vectorized_mobject.VGroup"],
+      "bases": ["manim.mobject.types.vectorized_mobject.VGroup", "manim.mobject.graphing.coordinate_systems.CoordinateSystem"],
       "note": "VGroup + CoordinateSystem; plot/axis helpers construct new VMobjects (coordinate_systems.py Axes)."
+    },
+    "manim.mobject.graphing.coordinate_systems.Axes.plot": {
+      "kind": "method",
+      "returns_self": false,
+      "signature": {
+        "params": [
+          {"name": "function", "required": true},
+          {"name": "x_range"},
+          {"name": "use_vectorized"},
+          {"name": "colorscale"},
+          {"name": "colorscale_axis"}
+        ]
+      },
+      "note": "Defined on CoordinateSystem; returns a new ParametricFunction sampled from `function`, never the axes (coordinate_systems.py CoordinateSystem.plot, MLP221)."
     },
     "manim.mobject.graphing.coordinate_systems.NumberPlane": {
       "kind": "vmobject",
       "bases": ["manim.mobject.graphing.coordinate_systems.Axes"]
+    },
+    "manim.mobject.graphing.functions.ParametricFunction": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "signature": {
+        "params": [
+          {"name": "function", "required": true},
+          {"name": "t_range"},
+          {"name": "scaling"},
+          {"name": "dt"},
+          {"name": "discontinuities"},
+          {"name": "use_smoothing"},
+          {"name": "use_vectorized"}
+        ]
+      },
+      "note": "Samples `function` over t_range at construction; the callable runs per generate_points call, not per frame (graphing/functions.py ParametricFunction, MLP221)."
     },
     "manim.mobject.mobject.Group": {
       "kind": "mobject",
@@ -410,6 +678,11 @@
       "returns_self": false,
       "note": "Returns a new deepcopy with a fresh identity; the clone is not in the Scene even if the original was (mobject.py Mobject.copy)."
     },
+    "manim.mobject.mobject.Mobject.family_members_with_points": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Returns the list of family members with points, never self (mobject.py Mobject.family_members_with_points)."
+    },
     "manim.mobject.mobject.Mobject.generate_target": {
       "kind": "method",
       "effects": {
@@ -417,6 +690,21 @@
       },
       "returns_self": false,
       "note": "Stores a copy in mobject.target and returns that copy, not self (mobject.py Mobject.generate_target)."
+    },
+    "manim.mobject.mobject.Mobject.get_all_points": {
+      "kind": "method",
+      "returns_self": false,
+      "note": "Returns the merged points array of the family, never self (mobject.py Mobject.get_all_points)."
+    },
+    "manim.mobject.mobject.Mobject.get_family": {
+      "kind": "method",
+      "returns_self": false,
+      "signature": {
+        "params": [
+          {"name": "recurse"}
+        ]
+      },
+      "note": "Returns the flattened family list, never self (mobject.py Mobject.get_family)."
     },
     "manim.mobject.mobject.Mobject.move_to": {
       "kind": "method",
@@ -547,6 +835,26 @@
       "renderer": {
         "note": "Point storage is renderer-specific: Cairo stores cubic Bezier curves as 4 points per curve, OpenGL quadratic as 3 points per curve; raw .points access that assumes one layout is not portable (DESIGN 3.6)."
       }
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject.get_arc_length": {
+      "kind": "method",
+      "returns_self": false,
+      "signature": {
+        "params": [
+          {"name": "sample_points_per_curve"}
+        ]
+      },
+      "note": "Returns the sampled arc length as a float, never self (vectorized_mobject.py VMobject.get_arc_length)."
+    },
+    "manim.mobject.types.vectorized_mobject.VMobject.insert_n_curves": {
+      "kind": "method",
+      "returns_self": true,
+      "signature": {
+        "params": [
+          {"name": "n", "required": true}
+        ]
+      },
+      "note": "Subdivides curves in place and returns self; part of the align cost surface (vectorized_mobject.py VMobject.insert_n_curves, DESIGN 14)."
     },
     "manim.mobject.types.vectorized_mobject.VMobject.set_fill": {
       "kind": "method",
@@ -808,59 +1116,577 @@
     "manim.scene.three_d_scene.ThreeDScene.stop_ambient_camera_rotation": {
       "kind": "method",
       "returns_self": false
+    },
+    "manim.utils.bezier.bezier": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.bezier_remap": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.get_smooth_cubic_bezier_handle_points": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.integer_interpolate": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.interpolate": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.inverse_interpolate": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.is_closed": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.match_interpolate": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.mid": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.partial_bezier_points": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.point_lies_on_bezier": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.proportions_along_bezier_curve_for_point": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.split_bezier": {
+      "kind": "function"
+    },
+    "manim.utils.bezier.subdivide_bezier": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.HSV": {
+      "kind": "constant"
+    },
+    "manim.utils.color.core.ManimColor": {
+      "kind": "constant",
+      "note": "Internal color type; constructors and to_*/from_* converters return colors, never mobjects (color/core.py ManimColor)."
+    },
+    "manim.utils.color.core.ParsableManimColor": {
+      "kind": "constant"
+    },
+    "manim.utils.color.core.RGBA": {
+      "kind": "constant"
+    },
+    "manim.utils.color.core.RandomColorGenerator": {
+      "kind": "constant"
+    },
+    "manim.utils.color.core.average_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.color_gradient": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.color_to_int_rgb": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.color_to_int_rgba": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.color_to_rgb": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.color_to_rgba": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.get_shaded_rgb": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.hex_to_rgb": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.interpolate_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.invert_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.random_bright_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.random_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.rgb_to_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.rgb_to_hex": {
+      "kind": "function"
+    },
+    "manim.utils.color.core.rgba_to_color": {
+      "kind": "function"
+    },
+    "manim.utils.color.manim_colors.BLACK": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.BLUE_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARKER_GRAY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARKER_GREY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARK_BLUE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARK_BROWN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARK_GRAY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.DARK_GREY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GOLD_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_BROWN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GRAY_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREEN_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_BROWN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.GREY_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHTER_GRAY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHTER_GREY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHT_BROWN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHT_GRAY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHT_GREY": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LIGHT_PINK": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LOGO_BLACK": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LOGO_BLUE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LOGO_GREEN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LOGO_RED": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.LOGO_WHITE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.MAROON_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.ORANGE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PINK": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_BLUE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_CYAN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_GREEN": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_MAGENTA": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_RED": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURE_YELLOW": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.PURPLE_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.RED_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.TEAL_E": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.WHITE": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW_A": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW_B": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW_C": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW_D": {
+      "kind": "constant"
+    },
+    "manim.utils.color.manim_colors.YELLOW_E": {
+      "kind": "constant"
     }
   },
   "deleted_symbols": [],
   "exports": {
     "Animation": "manim.animation.animation.Animation",
     "AnimationGroup": "manim.animation.composition.AnimationGroup",
+    "ApplyComplexFunction": "manim.animation.transform.ApplyComplexFunction",
     "ApplyFunction": "manim.animation.transform.ApplyFunction",
+    "ApplyMatrix": "manim.animation.transform.ApplyMatrix",
     "ApplyMethod": "manim.animation.transform.ApplyMethod",
+    "ApplyPointwiseFunction": "manim.animation.transform.ApplyPointwiseFunction",
+    "ApplyPointwiseFunctionToCenter": "manim.animation.transform.ApplyPointwiseFunctionToCenter",
     "Arc": "manim.mobject.geometry.arc.Arc",
     "Arrow": "manim.mobject.geometry.line.Arrow",
     "Axes": "manim.mobject.graphing.coordinate_systems.Axes",
+    "BLACK": "manim.utils.color.manim_colors.BLACK",
+    "BLUE": "manim.utils.color.manim_colors.BLUE",
+    "BLUE_A": "manim.utils.color.manim_colors.BLUE_A",
+    "BLUE_B": "manim.utils.color.manim_colors.BLUE_B",
+    "BLUE_C": "manim.utils.color.manim_colors.BLUE_C",
+    "BLUE_D": "manim.utils.color.manim_colors.BLUE_D",
+    "BLUE_E": "manim.utils.color.manim_colors.BLUE_E",
+    "BOLD": "manim.constants.BOLD",
+    "BOOK": "manim.constants.BOOK",
+    "CAIRO_ANTIALIAS_MODES": "manim.constants.CAIRO_ANTIALIAS_MODES",
+    "CHOOSE_NUMBER_MESSAGE": "manim.constants.CHOOSE_NUMBER_MESSAGE",
+    "CONTEXT_SETTINGS": "manim.constants.CONTEXT_SETTINGS",
+    "CTRL_VALUE": "manim.constants.CTRL_VALUE",
+    "CapStyleType": "manim.constants.CapStyleType",
     "Circle": "manim.mobject.geometry.arc.Circle",
+    "ClockwiseTransform": "manim.animation.transform.ClockwiseTransform",
+    "CounterclockwiseTransform": "manim.animation.transform.CounterclockwiseTransform",
     "Create": "manim.animation.creation.Create",
+    "CyclicReplace": "manim.animation.transform.CyclicReplace",
+    "DARKER_GRAY": "manim.utils.color.manim_colors.DARKER_GRAY",
+    "DARKER_GREY": "manim.utils.color.manim_colors.DARKER_GREY",
+    "DARK_BLUE": "manim.utils.color.manim_colors.DARK_BLUE",
+    "DARK_BROWN": "manim.utils.color.manim_colors.DARK_BROWN",
+    "DARK_GRAY": "manim.utils.color.manim_colors.DARK_GRAY",
+    "DARK_GREY": "manim.utils.color.manim_colors.DARK_GREY",
+    "DEFAULT_ARROW_TIP_LENGTH": "manim.constants.DEFAULT_ARROW_TIP_LENGTH",
+    "DEFAULT_DASH_LENGTH": "manim.constants.DEFAULT_DASH_LENGTH",
+    "DEFAULT_DOT_RADIUS": "manim.constants.DEFAULT_DOT_RADIUS",
+    "DEFAULT_FONT_SIZE": "manim.constants.DEFAULT_FONT_SIZE",
+    "DEFAULT_MOBJECT_TO_EDGE_BUFFER": "manim.constants.DEFAULT_MOBJECT_TO_EDGE_BUFFER",
+    "DEFAULT_MOBJECT_TO_MOBJECT_BUFFER": "manim.constants.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER",
+    "DEFAULT_POINTWISE_FUNCTION_RUN_TIME": "manim.constants.DEFAULT_POINTWISE_FUNCTION_RUN_TIME",
+    "DEFAULT_POINT_DENSITY_1D": "manim.constants.DEFAULT_POINT_DENSITY_1D",
+    "DEFAULT_POINT_DENSITY_2D": "manim.constants.DEFAULT_POINT_DENSITY_2D",
+    "DEFAULT_QUALITY": "manim.constants.DEFAULT_QUALITY",
+    "DEFAULT_SMALL_DOT_RADIUS": "manim.constants.DEFAULT_SMALL_DOT_RADIUS",
+    "DEFAULT_STROKE_WIDTH": "manim.constants.DEFAULT_STROKE_WIDTH",
+    "DEFAULT_WAIT_TIME": "manim.constants.DEFAULT_WAIT_TIME",
     "DEGREES": "manim.constants.DEGREES",
+    "DL": "manim.constants.DL",
     "DOWN": "manim.constants.DOWN",
+    "DR": "manim.constants.DR",
     "DecimalNumber": "manim.mobject.text.numbers.DecimalNumber",
     "Dot": "manim.mobject.geometry.arc.Dot",
     "DrawBorderThenFill": "manim.animation.creation.DrawBorderThenFill",
+    "EPILOG": "manim.constants.EPILOG",
     "FadeIn": "manim.animation.fading.FadeIn",
     "FadeOut": "manim.animation.fading.FadeOut",
+    "FadeToColor": "manim.animation.transform.FadeToColor",
+    "FadeTransform": "manim.animation.transform.FadeTransform",
+    "FadeTransformPieces": "manim.animation.transform.FadeTransformPieces",
+    "GOLD": "manim.utils.color.manim_colors.GOLD",
+    "GOLD_A": "manim.utils.color.manim_colors.GOLD_A",
+    "GOLD_B": "manim.utils.color.manim_colors.GOLD_B",
+    "GOLD_C": "manim.utils.color.manim_colors.GOLD_C",
+    "GOLD_D": "manim.utils.color.manim_colors.GOLD_D",
+    "GOLD_E": "manim.utils.color.manim_colors.GOLD_E",
+    "GRAY": "manim.utils.color.manim_colors.GRAY",
+    "GRAY_A": "manim.utils.color.manim_colors.GRAY_A",
+    "GRAY_B": "manim.utils.color.manim_colors.GRAY_B",
+    "GRAY_BROWN": "manim.utils.color.manim_colors.GRAY_BROWN",
+    "GRAY_C": "manim.utils.color.manim_colors.GRAY_C",
+    "GRAY_D": "manim.utils.color.manim_colors.GRAY_D",
+    "GRAY_E": "manim.utils.color.manim_colors.GRAY_E",
+    "GREEN": "manim.utils.color.manim_colors.GREEN",
+    "GREEN_A": "manim.utils.color.manim_colors.GREEN_A",
+    "GREEN_B": "manim.utils.color.manim_colors.GREEN_B",
+    "GREEN_C": "manim.utils.color.manim_colors.GREEN_C",
+    "GREEN_D": "manim.utils.color.manim_colors.GREEN_D",
+    "GREEN_E": "manim.utils.color.manim_colors.GREEN_E",
+    "GREY": "manim.utils.color.manim_colors.GREY",
+    "GREY_A": "manim.utils.color.manim_colors.GREY_A",
+    "GREY_B": "manim.utils.color.manim_colors.GREY_B",
+    "GREY_BROWN": "manim.utils.color.manim_colors.GREY_BROWN",
+    "GREY_C": "manim.utils.color.manim_colors.GREY_C",
+    "GREY_D": "manim.utils.color.manim_colors.GREY_D",
+    "GREY_E": "manim.utils.color.manim_colors.GREY_E",
+    "Group": "manim.mobject.mobject.Group",
     "GrowFromCenter": "manim.animation.growing.GrowFromCenter",
     "GrowFromPoint": "manim.animation.growing.GrowFromPoint",
-    "Group": "manim.mobject.mobject.Group",
+    "HEAVY": "manim.constants.HEAVY",
+    "HSV": "manim.utils.color.core.HSV",
     "IN": "manim.constants.IN",
+    "INVALID_NUMBER_MESSAGE": "manim.constants.INVALID_NUMBER_MESSAGE",
+    "ITALIC": "manim.constants.ITALIC",
     "ImageMobject": "manim.mobject.types.image_mobject.ImageMobject",
+    "LARGE_BUFF": "manim.constants.LARGE_BUFF",
     "LEFT": "manim.constants.LEFT",
+    "LIGHT": "manim.constants.LIGHT",
+    "LIGHTER_GRAY": "manim.utils.color.manim_colors.LIGHTER_GRAY",
+    "LIGHTER_GREY": "manim.utils.color.manim_colors.LIGHTER_GREY",
+    "LIGHT_BROWN": "manim.utils.color.manim_colors.LIGHT_BROWN",
+    "LIGHT_GRAY": "manim.utils.color.manim_colors.LIGHT_GRAY",
+    "LIGHT_GREY": "manim.utils.color.manim_colors.LIGHT_GREY",
+    "LIGHT_PINK": "manim.utils.color.manim_colors.LIGHT_PINK",
+    "LOGO_BLACK": "manim.utils.color.manim_colors.LOGO_BLACK",
+    "LOGO_BLUE": "manim.utils.color.manim_colors.LOGO_BLUE",
+    "LOGO_GREEN": "manim.utils.color.manim_colors.LOGO_GREEN",
+    "LOGO_RED": "manim.utils.color.manim_colors.LOGO_RED",
+    "LOGO_WHITE": "manim.utils.color.manim_colors.LOGO_WHITE",
     "LaggedStart": "manim.animation.composition.LaggedStart",
     "Line": "manim.mobject.geometry.line.Line",
+    "LineJointType": "manim.constants.LineJointType",
+    "MAROON": "manim.utils.color.manim_colors.MAROON",
+    "MAROON_A": "manim.utils.color.manim_colors.MAROON_A",
+    "MAROON_B": "manim.utils.color.manim_colors.MAROON_B",
+    "MAROON_C": "manim.utils.color.manim_colors.MAROON_C",
+    "MAROON_D": "manim.utils.color.manim_colors.MAROON_D",
+    "MAROON_E": "manim.utils.color.manim_colors.MAROON_E",
+    "MEDIUM": "manim.constants.MEDIUM",
+    "MED_LARGE_BUFF": "manim.constants.MED_LARGE_BUFF",
+    "MED_SMALL_BUFF": "manim.constants.MED_SMALL_BUFF",
+    "ManimColor": "manim.utils.color.core.ManimColor",
     "MarkupText": "manim.mobject.text.text_mobject.MarkupText",
     "MathTex": "manim.mobject.text.tex_mobject.MathTex",
     "Mobject": "manim.mobject.mobject.Mobject",
     "MoveToTarget": "manim.animation.transform.MoveToTarget",
     "MovingCamera": "manim.camera.moving_camera.MovingCamera",
     "MovingCameraScene": "manim.scene.moving_camera_scene.MovingCameraScene",
+    "NORMAL": "manim.constants.NORMAL",
+    "NO_SCENE_MESSAGE": "manim.constants.NO_SCENE_MESSAGE",
     "NumberPlane": "manim.mobject.graphing.coordinate_systems.NumberPlane",
+    "OBLIQUE": "manim.constants.OBLIQUE",
+    "ORANGE": "manim.utils.color.manim_colors.ORANGE",
     "ORIGIN": "manim.constants.ORIGIN",
     "OUT": "manim.constants.OUT",
     "PI": "manim.constants.PI",
+    "PINK": "manim.utils.color.manim_colors.PINK",
+    "PURE_BLUE": "manim.utils.color.manim_colors.PURE_BLUE",
+    "PURE_CYAN": "manim.utils.color.manim_colors.PURE_CYAN",
+    "PURE_GREEN": "manim.utils.color.manim_colors.PURE_GREEN",
+    "PURE_MAGENTA": "manim.utils.color.manim_colors.PURE_MAGENTA",
+    "PURE_RED": "manim.utils.color.manim_colors.PURE_RED",
+    "PURE_YELLOW": "manim.utils.color.manim_colors.PURE_YELLOW",
+    "PURPLE": "manim.utils.color.manim_colors.PURPLE",
+    "PURPLE_A": "manim.utils.color.manim_colors.PURPLE_A",
+    "PURPLE_B": "manim.utils.color.manim_colors.PURPLE_B",
+    "PURPLE_C": "manim.utils.color.manim_colors.PURPLE_C",
+    "PURPLE_D": "manim.utils.color.manim_colors.PURPLE_D",
+    "PURPLE_E": "manim.utils.color.manim_colors.PURPLE_E",
+    "ParametricFunction": "manim.mobject.graphing.functions.ParametricFunction",
+    "ParsableManimColor": "manim.utils.color.core.ParsableManimColor",
     "Polygon": "manim.mobject.geometry.polygram.Polygon",
     "Polygram": "manim.mobject.geometry.polygram.Polygram",
+    "QUALITIES": "manim.constants.QUALITIES",
+    "RED": "manim.utils.color.manim_colors.RED",
+    "RED_A": "manim.utils.color.manim_colors.RED_A",
+    "RED_B": "manim.utils.color.manim_colors.RED_B",
+    "RED_C": "manim.utils.color.manim_colors.RED_C",
+    "RED_D": "manim.utils.color.manim_colors.RED_D",
+    "RED_E": "manim.utils.color.manim_colors.RED_E",
+    "RESAMPLING_ALGORITHMS": "manim.constants.RESAMPLING_ALGORITHMS",
+    "RGBA": "manim.utils.color.core.RGBA",
     "RIGHT": "manim.constants.RIGHT",
+    "RandomColorGenerator": "manim.utils.color.core.RandomColorGenerator",
     "Rectangle": "manim.mobject.geometry.polygram.Rectangle",
+    "RendererType": "manim.constants.RendererType",
     "ReplacementTransform": "manim.animation.transform.ReplacementTransform",
     "Restore": "manim.animation.transform.Restore",
     "Rotate": "manim.animation.rotation.Rotate",
+    "SCALE_FACTOR_PER_FONT_POINT": "manim.constants.SCALE_FACTOR_PER_FONT_POINT",
+    "SCENE_NOT_FOUND_MESSAGE": "manim.constants.SCENE_NOT_FOUND_MESSAGE",
+    "SEMIBOLD": "manim.constants.SEMIBOLD",
+    "SEMILIGHT": "manim.constants.SEMILIGHT",
+    "SHIFT_VALUE": "manim.constants.SHIFT_VALUE",
+    "SMALL_BUFF": "manim.constants.SMALL_BUFF",
+    "START_X": "manim.constants.START_X",
+    "START_Y": "manim.constants.START_Y",
     "SVGMobject": "manim.mobject.svg.svg_mobject.SVGMobject",
+    "ScaleInPlace": "manim.animation.transform.ScaleInPlace",
     "Scene": "manim.scene.scene.Scene",
     "ShowPartial": "manim.animation.creation.ShowPartial",
+    "ShrinkToCenter": "manim.animation.transform.ShrinkToCenter",
     "SingleStringMathTex": "manim.mobject.text.tex_mobject.SingleStringMathTex",
     "Square": "manim.mobject.geometry.polygram.Square",
     "Succession": "manim.animation.composition.Succession",
     "Surface": "manim.mobject.three_d.three_dimensions.Surface",
+    "Swap": "manim.animation.transform.Swap",
     "TAU": "manim.constants.TAU",
+    "TEAL": "manim.utils.color.manim_colors.TEAL",
+    "TEAL_A": "manim.utils.color.manim_colors.TEAL_A",
+    "TEAL_B": "manim.utils.color.manim_colors.TEAL_B",
+    "TEAL_C": "manim.utils.color.manim_colors.TEAL_C",
+    "TEAL_D": "manim.utils.color.manim_colors.TEAL_D",
+    "TEAL_E": "manim.utils.color.manim_colors.TEAL_E",
+    "THIN": "manim.constants.THIN",
     "Tex": "manim.mobject.text.tex_mobject.Tex",
     "Text": "manim.mobject.text.text_mobject.Text",
     "ThreeDCamera": "manim.camera.three_d_camera.ThreeDCamera",
@@ -868,19 +1694,66 @@
     "TipableVMobject": "manim.mobject.geometry.arc.TipableVMobject",
     "TracedPath": "manim.animation.changing.TracedPath",
     "Transform": "manim.animation.transform.Transform",
+    "TransformFromCopy": "manim.animation.transform.TransformFromCopy",
     "TransformMatchingShapes": "manim.animation.transform_matching_parts.TransformMatchingShapes",
     "TransformMatchingTex": "manim.animation.transform_matching_parts.TransformMatchingTex",
+    "UL": "manim.constants.UL",
+    "ULTRABOLD": "manim.constants.ULTRABOLD",
+    "ULTRAHEAVY": "manim.constants.ULTRAHEAVY",
+    "ULTRALIGHT": "manim.constants.ULTRALIGHT",
     "UP": "manim.constants.UP",
+    "UR": "manim.constants.UR",
     "Uncreate": "manim.animation.creation.Uncreate",
     "Unwrite": "manim.animation.creation.Unwrite",
     "UpdateFromAlphaFunc": "manim.animation.updaters.update.UpdateFromAlphaFunc",
     "UpdateFromFunc": "manim.animation.updaters.update.UpdateFromFunc",
     "VGroup": "manim.mobject.types.vectorized_mobject.VGroup",
+    "VIDEO_ENCODERS": "manim.constants.VIDEO_ENCODERS",
     "VMobject": "manim.mobject.types.vectorized_mobject.VMobject",
     "ValueTracker": "manim.mobject.value_tracker.ValueTracker",
+    "WHITE": "manim.utils.color.manim_colors.WHITE",
     "Wait": "manim.animation.animation.Wait",
     "Write": "manim.animation.creation.Write",
+    "X264_PRESETS": "manim.constants.X264_PRESETS",
+    "X_AXIS": "manim.constants.X_AXIS",
+    "YELLOW": "manim.utils.color.manim_colors.YELLOW",
+    "YELLOW_A": "manim.utils.color.manim_colors.YELLOW_A",
+    "YELLOW_B": "manim.utils.color.manim_colors.YELLOW_B",
+    "YELLOW_C": "manim.utils.color.manim_colors.YELLOW_C",
+    "YELLOW_D": "manim.utils.color.manim_colors.YELLOW_D",
+    "YELLOW_E": "manim.utils.color.manim_colors.YELLOW_E",
+    "Y_AXIS": "manim.constants.Y_AXIS",
+    "Z_AXIS": "manim.constants.Z_AXIS",
     "always_redraw": "manim.animation.updaters.mobject_update_utils.always_redraw",
-    "register_font": "manim.mobject.text.text_mobject.register_font"
+    "average_color": "manim.utils.color.core.average_color",
+    "bezier": "manim.utils.bezier.bezier",
+    "bezier_remap": "manim.utils.bezier.bezier_remap",
+    "color_gradient": "manim.utils.color.core.color_gradient",
+    "color_to_int_rgb": "manim.utils.color.core.color_to_int_rgb",
+    "color_to_int_rgba": "manim.utils.color.core.color_to_int_rgba",
+    "color_to_rgb": "manim.utils.color.core.color_to_rgb",
+    "color_to_rgba": "manim.utils.color.core.color_to_rgba",
+    "get_shaded_rgb": "manim.utils.color.core.get_shaded_rgb",
+    "get_smooth_cubic_bezier_handle_points": "manim.utils.bezier.get_smooth_cubic_bezier_handle_points",
+    "hex_to_rgb": "manim.utils.color.core.hex_to_rgb",
+    "integer_interpolate": "manim.utils.bezier.integer_interpolate",
+    "interpolate": "manim.utils.bezier.interpolate",
+    "interpolate_color": "manim.utils.color.core.interpolate_color",
+    "inverse_interpolate": "manim.utils.bezier.inverse_interpolate",
+    "invert_color": "manim.utils.color.core.invert_color",
+    "is_closed": "manim.utils.bezier.is_closed",
+    "match_interpolate": "manim.utils.bezier.match_interpolate",
+    "mid": "manim.utils.bezier.mid",
+    "partial_bezier_points": "manim.utils.bezier.partial_bezier_points",
+    "point_lies_on_bezier": "manim.utils.bezier.point_lies_on_bezier",
+    "proportions_along_bezier_curve_for_point": "manim.utils.bezier.proportions_along_bezier_curve_for_point",
+    "random_bright_color": "manim.utils.color.core.random_bright_color",
+    "random_color": "manim.utils.color.core.random_color",
+    "register_font": "manim.mobject.text.text_mobject.register_font",
+    "rgb_to_color": "manim.utils.color.core.rgb_to_color",
+    "rgb_to_hex": "manim.utils.color.core.rgb_to_hex",
+    "rgba_to_color": "manim.utils.color.core.rgba_to_color",
+    "split_bezier": "manim.utils.bezier.split_bezier",
+    "subdivide_bezier": "manim.utils.bezier.subdivide_bezier"
   }
 }

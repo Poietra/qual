@@ -187,6 +187,214 @@ fn exports_all_resolve_to_curated_symbols() {
 }
 
 #[test]
+fn color_constant_surface_is_exported() {
+    // The full manim_colors star surface (89 names) plus the color core
+    // types resolve so `from manim import RED, ManimColor` never falls
+    // back to Unknown (generator backlog, machine-verified exports).
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for constant in [
+        "RED",
+        "BLUE",
+        "GREEN",
+        "YELLOW",
+        "WHITE",
+        "BLACK",
+        "GRAY_A",
+        "GREY_A",
+        "TEAL_E",
+        "LOGO_BLUE",
+        "PURE_RED",
+        "DARK_BROWN",
+    ] {
+        let (id, entry) = profile.resolve_export(constant).expect(constant);
+        assert!(id.starts_with("manim.utils.color.manim_colors."), "{id}");
+        assert_eq!(entry.kind, SymbolKind::Constant, "{constant}");
+    }
+    // Core color types are curated as inert constants (calling them never
+    // yields a mobject), converters as functions.
+    for name in ["ManimColor", "HSV", "RGBA", "ParsableManimColor"] {
+        let (_, entry) = profile.resolve_export(name).expect(name);
+        assert_eq!(entry.kind, SymbolKind::Constant, "{name}");
+    }
+    for name in [
+        "average_color",
+        "color_gradient",
+        "interpolate_color",
+        "rgb_to_color",
+    ] {
+        let (_, entry) = profile.resolve_export(name).expect(name);
+        assert_eq!(entry.kind, SymbolKind::Function, "{name}");
+    }
+}
+
+#[test]
+fn constants_module_surface_is_complete() {
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for constant in [
+        "UL",
+        "UR",
+        "DL",
+        "DR",
+        "X_AXIS",
+        "Y_AXIS",
+        "Z_AXIS",
+        "DEFAULT_FONT_SIZE",
+        "DEFAULT_STROKE_WIDTH",
+        "SMALL_BUFF",
+        "LARGE_BUFF",
+        "BOLD",
+        "ITALIC",
+        "QUALITIES",
+        "CapStyleType",
+        "LineJointType",
+        "RendererType",
+    ] {
+        let (id, entry) = profile.resolve_export(constant).expect(constant);
+        assert!(id.starts_with("manim.constants."), "{id}");
+        assert_eq!(entry.kind, SymbolKind::Constant, "{constant}");
+    }
+}
+
+#[test]
+fn transform_star_exports_are_animations_with_verified_bases() {
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for (name, base) in [
+        ("FadeToColor", "manim.animation.transform.ApplyMethod"),
+        ("ScaleInPlace", "manim.animation.transform.ApplyMethod"),
+        ("ShrinkToCenter", "manim.animation.transform.ScaleInPlace"),
+        ("ClockwiseTransform", "manim.animation.transform.Transform"),
+        (
+            "CounterclockwiseTransform",
+            "manim.animation.transform.Transform",
+        ),
+        (
+            "ApplyPointwiseFunction",
+            "manim.animation.transform.ApplyMethod",
+        ),
+    ] {
+        let (_, entry) = profile.resolve_export(name).expect(name);
+        assert_eq!(entry.kind, SymbolKind::Animation, "{name}");
+        assert_eq!(entry.bases, vec![base.to_owned()], "{name}");
+    }
+    // Chain-inheritance soundness: classes that swap or wrap their played
+    // mobject keep their bases uncurated so Animation auto-add / Transform
+    // cleanup facts are never inherited as certainties.
+    for name in [
+        "TransformFromCopy",
+        "FadeTransform",
+        "CyclicReplace",
+        "Swap",
+    ] {
+        let (_, entry) = profile.resolve_export(name).expect(name);
+        assert_eq!(entry.kind, SymbolKind::Animation, "{name}");
+        assert!(entry.effects.is_none(), "{name} must not invent effects");
+    }
+    for name in ["TransformFromCopy", "FadeTransform", "CyclicReplace"] {
+        let (_, entry) = profile.resolve_export(name).expect(name);
+        assert!(entry.bases.is_empty(), "{name} bases stay uncurated");
+    }
+    // TransformAnimations is deliberately not curated: composition
+    // modeling would join child introducer facts into a wrong certainty
+    // (profiles/README.md).
+    assert!(profile.resolve_export("TransformAnimations").is_none());
+    assert!(
+        profile
+            .symbol("manim.animation.transform.TransformAnimations")
+            .is_none()
+    );
+}
+
+#[test]
+fn bezier_helpers_are_exported_functions() {
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for name in [
+        "bezier",
+        "bezier_remap",
+        "interpolate",
+        "inverse_interpolate",
+        "integer_interpolate",
+        "match_interpolate",
+        "is_closed",
+        "split_bezier",
+        "subdivide_bezier",
+    ] {
+        let (id, entry) = profile.resolve_export(name).expect(name);
+        assert!(id.starts_with("manim.utils.bezier."), "{id}");
+        assert_eq!(entry.kind, SymbolKind::Function, "{name}");
+    }
+}
+
+#[test]
+fn parametric_function_and_axes_plot_are_curated() {
+    // MLP221 groundwork: both the class and the plot helper carry
+    // machine-verified kinds, bases, and signature facts.
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    let (id, entry) = profile
+        .resolve_export("ParametricFunction")
+        .expect("ParametricFunction exported");
+    assert_eq!(id, "manim.mobject.graphing.functions.ParametricFunction");
+    assert_eq!(entry.kind, SymbolKind::Vmobject);
+    assert_eq!(
+        entry.bases,
+        vec!["manim.mobject.types.vectorized_mobject.VMobject".to_owned()]
+    );
+    let signature = entry.signature.as_ref().expect("signature curated");
+    assert_eq!(
+        signature.params.first().map(|p| p.name.as_str()),
+        Some("function")
+    );
+    assert!(signature.params.first().is_some_and(|p| p.required));
+
+    // Axes reaches CoordinateSystem so `axes.plot` resolves via the chain.
+    let axes = profile
+        .symbol("manim.mobject.graphing.coordinate_systems.Axes")
+        .expect("Axes curated");
+    assert!(
+        axes.bases
+            .contains(&"manim.mobject.graphing.coordinate_systems.CoordinateSystem".to_owned())
+    );
+    let plot = profile
+        .symbol("manim.mobject.graphing.coordinate_systems.Axes.plot")
+        .expect("Axes.plot curated");
+    assert_eq!(plot.kind, SymbolKind::Method);
+    assert_eq!(plot.returns_self, Some(false));
+    let signature = plot.signature.as_ref().expect("signature curated");
+    assert_eq!(
+        signature.params.first().map(|p| p.name.as_str()),
+        Some("function")
+    );
+}
+
+#[test]
+fn family_getters_and_insert_n_curves_are_curated_methods() {
+    // MLP202/203 receiver-resolution scope: family/geometry getters are
+    // positive no-mutation facts, insert_n_curves is a fluent mutator.
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for method in [
+        "manim.mobject.mobject.Mobject.get_family",
+        "manim.mobject.mobject.Mobject.family_members_with_points",
+        "manim.mobject.mobject.Mobject.get_all_points",
+        "manim.mobject.types.vectorized_mobject.VMobject.get_arc_length",
+    ] {
+        let entry = profile.symbol(method).expect(method);
+        assert_eq!(entry.kind, SymbolKind::Method, "{method}");
+        assert_eq!(entry.returns_self, Some(false), "{method}");
+    }
+    let insert = profile
+        .symbol("manim.mobject.types.vectorized_mobject.VMobject.insert_n_curves")
+        .expect("insert_n_curves curated");
+    assert_eq!(insert.returns_self, Some(true));
+    // align_data mutates its mobject *argument*, which curated method
+    // dispatch would stop widening: it stays uncurated on purpose
+    // (profiles/README.md).
+    assert!(
+        profile
+            .symbol("manim.mobject.mobject.Mobject.align_data")
+            .is_none()
+    );
+}
+
+#[test]
 fn fixed_in_frame_removal_is_renderer_divergent() {
     let profile = knowledge::load(UPSTREAM).expect("load");
     let entry = profile

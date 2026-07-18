@@ -6,28 +6,43 @@
 //! that explicitly targets a single renderer must not be asked for
 //! renderer guards (DESIGN §7.4 prose).
 //!
-//! The implemented case is the fixed-object unfix divergence the
-//! lifecycle interpreter proves: `ThreeDScene.remove_fixed_in_frame_mobjects`
-//! / `remove_fixed_orientation_mobjects` only unregister the camera fix
-//! under Cairo but also `Scene.remove` the object under OpenGL
-//! (DESIGN §3.5), traced as a `RendererRequirement` /
-//! `DivergesBetweenRenderers` event. The rule fires only on events with
-//! all-paths certainty: any branch around the call (a renderer guard
-//! included) joins to `Maybe` and stays silent — guarded code is never
-//! flagged.
+//! Two divergence families are implemented, both on certainty facts only:
+//!
+//! - **Fixed-object removal** (`ThreeDScene.remove_fixed_in_frame_mobjects`
+//!   / `remove_fixed_orientation_mobjects`): Cairo only unregisters the
+//!   camera fix, the OpenGL branch also `Scene.remove`s the object
+//!   (DESIGN §3.5), traced by the lifecycle interpreter as a
+//!   `RendererRequirement` / `DivergesBetweenRenderers` event. The rule
+//!   fires only on events with all-paths certainty: any branch around the
+//!   call (a renderer guard included) joins to `Maybe` and stays silent.
+//!   `SceneLifecycle::fixed_registrations` enriches the diagnostic with
+//!   the affected registry and the certain registration site.
+//! - **Camera-frame semantics** (`MovingCameraScene`): under Cairo
+//!   `self.camera` is a `MovingCamera` with an animatable `frame`
+//!   mobject and `auto_zoom`; the OpenGL renderer ignores `camera_class`
+//!   and installs an `OpenGLCamera` without that contract
+//!   (`scene.py Scene.__init__`, `moving_camera_scene.py`; the curated
+//!   `MovingCameraScene` renderer facts carry the incompatibility). The
+//!   rule fires only when the scene's camera kind is *proven*
+//!   `MovingCamera` (fully resolved bases) **and** `self.camera.frame` /
+//!   `self.camera.auto_zoom` is reached on a straight-line statement of
+//!   `construct` — any enclosing branch, loop, early return, or helper
+//!   indirection means the use is not all-paths and stays silent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 use serde_json::json;
 
-use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
-use crate::rules::base::{Rule, RuleContext};
+use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
+use crate::rules::base::{CameraKind, FixedAction, FixedKind, Rule, RuleContext};
 use crate::semantic::events::{Event, RendererRequirementKind};
+use crate::semantic::interpreter::SceneLifecycle;
 use crate::semantic::values::Presence;
 use crate::source::FileId;
 
-use super::build_diagnostic;
+use super::{build_diagnostic, dotted_parts};
 
 pub(super) const MLD304: RuleMetadata = RuleMetadata {
     id: "MLD304",
@@ -40,6 +55,10 @@ pub(super) const MLD304: RuleMetadata = RuleMetadata {
     required_capabilities: &["qualified-calls", "lifecycle"],
     supersedes: &[],
 };
+
+/// Canonical id of the curated `MovingCameraScene` entry carrying the
+/// renderer-compat divergence fact.
+const MOVING_CAMERA_SCENE_ID: &str = "manim.scene.moving_camera_scene.MovingCameraScene";
 
 pub(super) struct UnguardedRendererDivergence;
 
@@ -58,55 +77,410 @@ impl Rule for UnguardedRendererDivergence {
         if renderers.len() < 2 {
             return Vec::new();
         }
-        let profiles = context.config().active_profile_names();
         let renderer_names: Vec<String> = renderers.into_iter().collect();
         let mut reported: BTreeSet<(FileId, u32, u32)> = BTreeSet::new();
         let mut diagnostics = Vec::new();
         for scene in &context.lifecycle_facts().scenes {
-            for traced in &scene.events {
-                let Event::RendererRequirement(requirement) = &traced.event else {
-                    continue;
-                };
-                if requirement.kind != RendererRequirementKind::DivergesBetweenRenderers {
-                    continue;
-                }
-                // A branch around the call (renderer guard or otherwise)
-                // joins the certainty to Maybe: stay silent.
-                if traced.certainty != Presence::Present {
-                    continue;
-                }
-                if !reported.insert((traced.site.file, traced.site.start, traced.site.end)) {
-                    continue;
-                }
-                let file = context.sources().file(traced.site.file);
-                let range = TextRange::new(traced.site.start.into(), traced.site.end.into());
-                let mut evidence = BTreeMap::new();
-                evidence.insert("scene".to_owned(), json!(scene.qualified_name.clone()));
-                evidence.insert("note".to_owned(), json!(requirement.note.clone()));
-                evidence.insert("renderers".to_owned(), json!(renderer_names.clone()));
-                diagnostics.push(build_diagnostic(
-                    &MLD304,
-                    file,
-                    range,
-                    Confidence::Medium,
-                    format!(
-                        "This call's scene-membership effect diverges between the \
-                         renderers this run targets ({renderers}) and is reached without \
-                         a renderer guard",
-                        renderers = renderer_names.join(", "),
-                    ),
-                    "Unfixing a fixed object only unregisters the camera fix under \
-                     Cairo, but the OpenGL branch additionally removes the object from \
-                     the Scene (DESIGN 3.5). Rendering the same scene with both \
-                     renderers therefore produces different membership after this call. \
-                     Follow it with an explicit Scene.add / Scene.remove to pin the \
-                     intended state, or guard the call by renderer.",
-                    evidence,
-                    profiles.clone(),
-                    None,
-                ));
-            }
+            fixed_removal_diagnostics(
+                context,
+                scene,
+                &renderer_names,
+                &mut reported,
+                &mut diagnostics,
+            );
+            camera_frame_diagnostics(
+                context,
+                scene,
+                &renderer_names,
+                &mut reported,
+                &mut diagnostics,
+            );
         }
         diagnostics
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Leg 1: fixed-object removal divergence (DESIGN §3.5).
+// ---------------------------------------------------------------------------
+
+fn fixed_removal_diagnostics(
+    context: &RuleContext<'_>,
+    scene: &SceneLifecycle,
+    renderer_names: &[String],
+    reported: &mut BTreeSet<(FileId, u32, u32)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let profiles = context.config().active_profile_names();
+    for traced in &scene.events {
+        let Event::RendererRequirement(requirement) = &traced.event else {
+            continue;
+        };
+        if requirement.kind != RendererRequirementKind::DivergesBetweenRenderers {
+            continue;
+        }
+        // A branch around the call (renderer guard or otherwise)
+        // joins the certainty to Maybe: stay silent.
+        if traced.certainty != Presence::Present {
+            continue;
+        }
+        if !reported.insert((traced.site.file, traced.site.start, traced.site.end)) {
+            continue;
+        }
+        let file = context.sources().file(traced.site.file);
+        let range = TextRange::new(traced.site.start.into(), traced.site.end.into());
+        let mut evidence = BTreeMap::new();
+        evidence.insert("scene".to_owned(), json!(scene.qualified_name.clone()));
+        evidence.insert("note".to_owned(), json!(requirement.note.clone()));
+        evidence.insert("renderers".to_owned(), json!(renderer_names));
+
+        // Deepening: the fixed-registration facts at the same site name
+        // the affected registry and point back at the certain
+        // registration site of each removed object.
+        let mut registries: BTreeSet<&str> = BTreeSet::new();
+        let mut registration_sites: BTreeSet<(FileId, u32, u32)> = BTreeSet::new();
+        for removal in &scene.fixed_registrations {
+            if removal.site != traced.site
+                || removal.action != FixedAction::Remove
+                || !removal.renderer_divergent
+            {
+                continue;
+            }
+            registries.insert(match removal.kind {
+                FixedKind::InFrame => "fixed_in_frame",
+                FixedKind::Orientation => "fixed_orientation",
+            });
+            for registration in &scene.fixed_registrations {
+                if registration.action == FixedAction::Register
+                    && registration.object == removal.object
+                    && registration.certainty == Presence::Present
+                    && registration.site.start < removal.site.start
+                {
+                    registration_sites.insert((
+                        registration.site.file,
+                        registration.site.start,
+                        registration.site.end,
+                    ));
+                }
+            }
+        }
+        if !registries.is_empty() {
+            evidence.insert(
+                "registry".to_owned(),
+                json!(registries.iter().copied().collect::<Vec<_>>()),
+            );
+        }
+        let mut diagnostic = build_diagnostic(
+            &MLD304,
+            file,
+            range,
+            Confidence::Medium,
+            format!(
+                "This call's scene-membership effect diverges between the \
+                 renderers this run targets ({renderers}) and is reached without \
+                 a renderer guard",
+                renderers = renderer_names.join(", "),
+            ),
+            "Unfixing a fixed object only unregisters the camera fix under \
+             Cairo, but the OpenGL branch additionally removes the object from \
+             the Scene (DESIGN 3.5). Rendering the same scene with both \
+             renderers therefore produces different membership after this call. \
+             Follow it with an explicit Scene.add / Scene.remove to pin the \
+             intended state, or guard the call by renderer.",
+            evidence,
+            profiles.clone(),
+            None,
+        );
+        for (site_file, start, end) in registration_sites {
+            let related = context.sources().file(site_file);
+            diagnostic.related_locations.push(RelatedLocation {
+                path: related.relative_path().to_owned(),
+                span: related.span_of_range(TextRange::new(start.into(), end.into())),
+                message: "the object was fixed (and auto-added) here".to_owned(),
+            });
+        }
+        diagnostics.push(diagnostic);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Leg 2: MovingCameraScene camera-frame semantics (DESIGN §3.5, §7.4).
+// ---------------------------------------------------------------------------
+
+fn camera_frame_diagnostics(
+    context: &RuleContext<'_>,
+    scene: &SceneLifecycle,
+    renderer_names: &[String],
+    reported: &mut BTreeSet<(FileId, u32, u32)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Certainty gate 1: the camera contract is proven MovingCamera
+    // (fully resolved bases; `Unknown` is never guessed).
+    if scene.camera_kind != CameraKind::MovingCamera {
+        return;
+    }
+    // Certainty gate 2: the divergence is a curated positive fact on the
+    // knowledge profile, never assumed.
+    let divergent = context
+        .knowledge()
+        .and_then(|profile| profile.symbol(MOVING_CAMERA_SCENE_ID))
+        .and_then(|entry| entry.renderer.as_ref())
+        .is_some_and(|compat| compat.cairo == Some(true) && compat.opengl == Some(false));
+    if !divergent {
+        return;
+    }
+    // Certainty gate 3: a MovingCamera-only attribute is reached on a
+    // straight-line statement of this scene's `construct`.
+    let Some((file_id, attribute, range)) = first_certain_camera_use(context, scene) else {
+        return;
+    };
+    if !reported.insert((file_id, range.start().into(), range.end().into())) {
+        return;
+    }
+    let file = context.sources().file(file_id);
+    let mut evidence = BTreeMap::new();
+    evidence.insert("scene".to_owned(), json!(scene.qualified_name.clone()));
+    evidence.insert("camera".to_owned(), json!("moving_camera"));
+    evidence.insert("attribute".to_owned(), json!(attribute));
+    evidence.insert("renderers".to_owned(), json!(renderer_names));
+    diagnostics.push(build_diagnostic(
+        &MLD304,
+        file,
+        range,
+        Confidence::Medium,
+        format!(
+            "This MovingCameraScene's camera-frame semantics diverge between \
+             the renderers this run targets ({renderers}); `{attribute}` is \
+             reached without a renderer guard",
+            renderers = renderer_names.join(", "),
+        ),
+        "Under Cairo, `self.camera` on a MovingCameraScene is a MovingCamera \
+         whose `frame` is an animatable mobject (and `auto_zoom` exists); the \
+         OpenGL renderer ignores `camera_class` and installs an OpenGLCamera \
+         without that contract (scene.py Scene.__init__, \
+         moving_camera_scene.py). Rendering this scene with both renderers \
+         therefore diverges at this access. Restrict the scene to a \
+         Cairo-only profile, or guard the camera-frame path by renderer.",
+        evidence,
+        context.config().active_profile_names().clone(),
+        None,
+    ));
+}
+
+/// The first `self.camera.frame` / `self.camera.auto_zoom` reference that
+/// is certainly evaluated when the scene renders: on a straight-line
+/// prefix of the `construct` body (the first branch, loop, `try`, `with`,
+/// nested definition, or return/raise ends the certain prefix), outside
+/// lambda bodies, comprehensions, conditional expression branches, and
+/// short-circuit tails. `self` must not be rebound inside `construct`.
+fn first_certain_camera_use(
+    context: &RuleContext<'_>,
+    scene: &SceneLifecycle,
+) -> Option<(FileId, &'static str, TextRange)> {
+    // The first MRO class defining `construct` owns the executed body.
+    let (record, construct_range) = scene.mro.iter().find_map(|class| {
+        let record = context.project_index().classes.get(class)?;
+        let range = record.methods.get("construct")?;
+        Some((record, *range))
+    })?;
+    let file = context.sources().file(record.file);
+    let module = file.ast()?;
+    let mut construct: Option<&ast::StmtFunctionDef> = None;
+    super::each_statement(&module.body, &mut |stmt| {
+        if let ast::Stmt::FunctionDef(def) = stmt {
+            if def.range() == construct_range && def.name.as_str() == "construct" {
+                construct = Some(def);
+            }
+        }
+    });
+    let construct = construct?;
+    if binds_self(&construct.body) {
+        return None;
+    }
+    let mut found: Option<(&'static str, TextRange)> = None;
+    'stmts: for stmt in &construct.body {
+        let exprs: Vec<&ast::Expr> = match stmt {
+            ast::Stmt::Assign(inner) => {
+                let mut exprs = vec![inner.value.as_ref()];
+                exprs.extend(inner.targets.iter());
+                exprs
+            }
+            ast::Stmt::AnnAssign(inner) => match &inner.value {
+                Some(value) => vec![value.as_ref(), inner.target.as_ref()],
+                None => Vec::new(),
+            },
+            ast::Stmt::AugAssign(inner) => vec![inner.value.as_ref(), inner.target.as_ref()],
+            ast::Stmt::Expr(inner) => vec![inner.value.as_ref()],
+            ast::Stmt::Pass(_) | ast::Stmt::Import(_) | ast::Stmt::ImportFrom(_) => Vec::new(),
+            // Anything that can branch, loop, raise, return, or defer
+            // execution ends the certain straight-line prefix.
+            _ => break 'stmts,
+        };
+        for expr in exprs {
+            walk_certain(expr, &mut |certain| {
+                if found.is_some() {
+                    return;
+                }
+                if let Some(parts) = dotted_parts(certain) {
+                    let strs: Vec<&str> = parts.iter().map(String::as_str).collect();
+                    if strs == ["self", "camera", "frame"] {
+                        found = Some(("self.camera.frame", certain.range()));
+                    } else if strs == ["self", "camera", "auto_zoom"] {
+                        found = Some(("self.camera.auto_zoom", certain.range()));
+                    }
+                }
+            });
+            if found.is_some() {
+                break 'stmts;
+            }
+        }
+    }
+    found.map(|(attribute, range)| (record.file, attribute, range))
+}
+
+/// Whether any statement in `construct` (at any nesting depth) rebinds the
+/// name `self`: assignments, loop targets, or `with ... as` targets. A
+/// rebound `self` means `self.camera` is no longer certainly the scene.
+fn binds_self(body: &[ast::Stmt]) -> bool {
+    let mut bound = false;
+    super::each_statement(body, &mut |stmt| {
+        let mut names = BTreeSet::new();
+        match stmt {
+            ast::Stmt::Assign(inner) => {
+                for target in &inner.targets {
+                    super::collect_target_names(target, &mut names);
+                }
+            }
+            ast::Stmt::AnnAssign(inner) => super::collect_target_names(&inner.target, &mut names),
+            ast::Stmt::AugAssign(inner) => super::collect_target_names(&inner.target, &mut names),
+            ast::Stmt::For(inner) => super::collect_target_names(&inner.target, &mut names),
+            ast::Stmt::AsyncFor(inner) => super::collect_target_names(&inner.target, &mut names),
+            ast::Stmt::With(inner) => {
+                for item in &inner.items {
+                    if let Some(vars) = &item.optional_vars {
+                        super::collect_target_names(vars, &mut names);
+                    }
+                }
+            }
+            ast::Stmt::AsyncWith(inner) => {
+                for item in &inner.items {
+                    if let Some(vars) = &item.optional_vars {
+                        super::collect_target_names(vars, &mut names);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if names.contains("self") {
+            bound = true;
+        }
+    });
+    bound
+}
+
+/// Visits `expr` and the subexpressions that are certainly evaluated
+/// whenever `expr` is: skips lambda bodies (deferred), comprehensions
+/// (zero-iteration), conditional-expression branches, and short-circuit
+/// tails. Conservative by construction — anything skipped only means
+/// silence.
+fn walk_certain<'a>(expr: &'a ast::Expr, visit: &mut dyn FnMut(&'a ast::Expr)) {
+    visit(expr);
+    match expr {
+        // Only the first operand of a short-circuit chain is certain.
+        ast::Expr::BoolOp(inner) => {
+            if let Some(first) = inner.values.first() {
+                walk_certain(first, visit);
+            }
+        }
+        // Only the test of a conditional expression is certain.
+        ast::Expr::IfExp(inner) => walk_certain(&inner.test, visit),
+        // Lambda bodies are deferred; comprehension parts may run zero
+        // times. Both subtrees are skipped entirely, like leaves.
+        ast::Expr::Lambda(_)
+        | ast::Expr::ListComp(_)
+        | ast::Expr::SetComp(_)
+        | ast::Expr::DictComp(_)
+        | ast::Expr::GeneratorExp(_)
+        | ast::Expr::Constant(_)
+        | ast::Expr::Name(_) => {}
+        ast::Expr::NamedExpr(inner) => {
+            walk_certain(&inner.target, visit);
+            walk_certain(&inner.value, visit);
+        }
+        ast::Expr::BinOp(inner) => {
+            walk_certain(&inner.left, visit);
+            walk_certain(&inner.right, visit);
+        }
+        ast::Expr::UnaryOp(inner) => walk_certain(&inner.operand, visit),
+        ast::Expr::Dict(inner) => {
+            for key in inner.keys.iter().flatten() {
+                walk_certain(key, visit);
+            }
+            for value in &inner.values {
+                walk_certain(value, visit);
+            }
+        }
+        ast::Expr::Set(inner) => {
+            for element in &inner.elts {
+                walk_certain(element, visit);
+            }
+        }
+        ast::Expr::Await(inner) => walk_certain(&inner.value, visit),
+        ast::Expr::Yield(inner) => {
+            if let Some(value) = &inner.value {
+                walk_certain(value, visit);
+            }
+        }
+        ast::Expr::YieldFrom(inner) => walk_certain(&inner.value, visit),
+        ast::Expr::Compare(inner) => {
+            walk_certain(&inner.left, visit);
+            for comparator in &inner.comparators {
+                walk_certain(comparator, visit);
+            }
+        }
+        ast::Expr::Call(inner) => {
+            walk_certain(&inner.func, visit);
+            for argument in &inner.args {
+                walk_certain(argument, visit);
+            }
+            for keyword in &inner.keywords {
+                walk_certain(&keyword.value, visit);
+            }
+        }
+        ast::Expr::FormattedValue(inner) => {
+            walk_certain(&inner.value, visit);
+            if let Some(spec) = &inner.format_spec {
+                walk_certain(spec, visit);
+            }
+        }
+        ast::Expr::JoinedStr(inner) => {
+            for value in &inner.values {
+                walk_certain(value, visit);
+            }
+        }
+        ast::Expr::Attribute(inner) => walk_certain(&inner.value, visit),
+        ast::Expr::Subscript(inner) => {
+            walk_certain(&inner.value, visit);
+            walk_certain(&inner.slice, visit);
+        }
+        ast::Expr::Starred(inner) => walk_certain(&inner.value, visit),
+        ast::Expr::List(inner) => {
+            for element in &inner.elts {
+                walk_certain(element, visit);
+            }
+        }
+        ast::Expr::Tuple(inner) => {
+            for element in &inner.elts {
+                walk_certain(element, visit);
+            }
+        }
+        ast::Expr::Slice(inner) => {
+            for part in [&inner.lower, &inner.upper, &inner.step]
+                .into_iter()
+                .flatten()
+            {
+                walk_certain(part, visit);
+            }
+        }
     }
 }
