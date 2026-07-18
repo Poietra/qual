@@ -14,6 +14,7 @@
 //! (e.g. `local_0_20_1_4d25c031`) are added later as separate files that
 //! replace whole symbol entries of their base.
 
+pub mod generator;
 pub mod model;
 
 use std::collections::BTreeMap;

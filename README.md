@@ -393,7 +393,19 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-All four gates must pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+All four gates must pass.
+
+Knowledge-profile maintenance: the `sync_manim_knowledge` binary statically
+reads a Manim checkout, generates reviewable profile candidates, and checks
+the shipped profile for drift (exit 1 on contradictions) — see
+[src/knowledge/profiles/README.md](src/knowledge/profiles/README.md):
+
+```bash
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff
+cargo test --test knowledge_drift -- --ignored   # layer-9 drift gate
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 repository layout, the step-by-step guide to adding a rule, and the
 invariants every change must keep. `DESIGN.md` is authoritative; changes to
 public contracts must update it, its schema tests, and the rule docs

@@ -54,6 +54,35 @@ sources only — no assets, docs, or build metadata.
   exactly the silent-failure surface the rule must cover, and no curated
   font-size mutator method exists to add.
 
+## Candidate generation and drift check
+
+`sync_manim_knowledge` (DESIGN §5.4; `src/bin/sync_manim_knowledge.rs`,
+library API in `crate::knowledge::generator`) statically reads a Manim
+checkout — never importing or executing it — and extracts what a parser can
+safely know: public classes and base chains, method definitions,
+returns-`self` evidence, `__all__` lists, and the star-export closure of
+`manim/__init__.py`.
+
+```sh
+# reviewable candidates (byte-identical for identical input)
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --emit candidates.json
+
+# drift check against the shipped profile (default upstream_0_20);
+# exit 1 when the profile contradicts the source
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff --report drift.json
+```
+
+Every generated entry is marked `"generated": true`; curated-only semantic
+fields (`effects`, introducer / remover, renderer notes) are never emitted —
+the generator does not invent semantics. The diff reports (a) curated
+symbols missing from the source, (b) curated `bases` / `returns_self` /
+`exports` facts the source contradicts (the DESIGN §11.2 layer-9 gate,
+also run by `cargo test --test knowledge_drift -- --ignored`), and
+(c) per-module coverage gaps. Unverifiable facts stay warnings. A
+`source_digest` mismatch is informational only; the digest itself follows
+the manifest recipe above. Humans review candidates and edit profiles by
+hand — the tool never writes into this directory.
+
 ## Review rules
 
 - Profiles are generated/curated from static Manim source, reviewed by a
