@@ -255,9 +255,12 @@ numbers** — they are built from rule ID, relative path, qualified scene name,
 and a surrounding token hash — so inserting unrelated lines elsewhere in a
 file does not invalidate entries. The `scene` field records the qualified
 enclosing Scene class (empty outside any scene), so identical findings in
-different scenes get distinct fingerprints; baselines written before scene
-attribution (with an empty `scene`) still match as a wildcard. A corrupt
-or wrong-schema baseline file exits 2 with a clear message.
+different scenes get distinct fingerprints. Written files carry a
+`scene_attribution: "attributed"` provenance marker: their empty `scene`
+means literally "outside any Scene" and matches exactly. Baselines written
+before scene attribution (no marker) are still read, and only there an
+empty `scene` matches as a wildcard. A corrupt or wrong-schema baseline
+file exits 2 with a clear message.
 
 ## Autofix
 

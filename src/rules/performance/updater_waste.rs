@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use rustpython_parser::ast::{self, Ranged};
 use serde_json::{Value, json};
 
-use crate::cost::estimator::{frames_across_profiles, num_bounds_json};
+use crate::cost::estimator::{num_bounds_json, sum_frames_across_profiles, sum_seconds};
 use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
 use crate::render_order::{
     DisplayOrder, MovingReason, SuffixFact, inputs_at_play, moving_scope_at_play,
@@ -848,8 +848,6 @@ fn live_span<'p>(
     host: &ObjectId,
 ) -> Option<LiveSpan<'p>> {
     let cut = lifetime_cut(scene, registration);
-    let mut lower = 0.0_f64;
-    let mut upper = Some(0.0_f64);
     let mut plays = Vec::new();
     for play in &scene.plays {
         if play.site.file != registration.site.file
@@ -880,21 +878,9 @@ fn live_span<'p>(
             continue;
         }
         plays.push(play);
-        if let Some(bound) = play.duration.lower_bound() {
-            lower += bound;
-        }
-        upper = match (upper, play.duration.upper_bound()) {
-            (Some(current), Some(bound)) => Some(current + bound),
-            _ => None,
-        };
     }
-    (!plays.is_empty()).then_some(LiveSpan {
-        plays,
-        seconds: Num::Interval {
-            lo: Some(lower),
-            hi: upper,
-        },
-    })
+    let seconds = sum_seconds(plays.iter().map(|play| &play.duration));
+    (!plays.is_empty()).then_some(LiveSpan { plays, seconds })
 }
 
 impl Rule for LongLivedUpdater {
@@ -928,7 +914,12 @@ impl Rule for LongLivedUpdater {
                 if seconds_lower < MLP219_MIN_LIVE_SECONDS {
                     continue;
                 }
-                let frames = frames_across_profiles(&span.seconds, context.active_profiles());
+                // Per-play frame grids: ceil each play's duration, then
+                // sum (never ceil the summed seconds).
+                let frames = sum_frames_across_profiles(
+                    span.plays.iter().map(|play| &play.duration),
+                    context.active_profiles(),
+                );
                 let file = context.sources().file(registration.site.file);
                 let mut evidence = BTreeMap::new();
                 evidence.insert("scene".to_owned(), json!(scene.qualified_name));

@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use crate::cost::estimator::{frames_across_profiles, num_bounds_json};
+use crate::cost::estimator::{num_bounds_json, sum_frames_across_profiles, sum_seconds};
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::frontend::index::LiteralFact;
 use crate::rules::base::{Rule, RuleContext};
-use crate::semantic::interpreter::{PlayKind, SceneLifecycle};
+use crate::semantic::interpreter::{PlayFact, PlayKind, SceneLifecycle};
 use crate::semantic::values::{AllocationSite, Cardinality, Num, ObjectId, Presence, Truth};
 
 use super::support::{
@@ -99,16 +99,22 @@ impl Rule for UnboundedTracedPath {
             if object.cardinality != Cardinality::Singleton {
                 continue;
             }
-            let Some(span) = alive_span_seconds(scene, &object) else {
+            let alive = alive_plays(scene, &object);
+            if alive.is_empty() {
                 continue;
-            };
+            }
+            let span = sum_seconds(alive.iter().map(|play| &play.duration));
             let Some(span_lower) = span.lower_bound() else {
                 continue;
             };
             if span_lower < MLP220_LONG_SPAN_SECONDS {
                 continue;
             }
-            let frames = frames_across_profiles(&span, profiles);
+            // One traced point per updater call, one call per rendered
+            // frame — and each play renders its own frame grid, so the
+            // per-play ceils are summed (never the summed seconds ceiled).
+            let frames =
+                sum_frames_across_profiles(alive.iter().map(|play| &play.duration), profiles);
             let file = context.sources().file(call.file);
             let mut evidence = BTreeMap::new();
             evidence.insert("resolved".to_owned(), Value::String(TRACED_PATH.to_owned()));
@@ -156,17 +162,12 @@ impl Rule for UnboundedTracedPath {
     }
 }
 
-/// Seconds of plays during which `object` is provably alive and updating:
-/// in the scene family at the play site, not a target of the play's
-/// animations (targets get their updaters suspended), and — for waits —
-/// only provably dynamic waits (a frozen wait runs no updaters).
-///
-/// Plays with unknown durations contribute nothing to the lower bound and
-/// open the upper bound; the result is `None` when no play qualifies.
-fn alive_span_seconds(scene: &SceneLifecycle, object: &ObjectId) -> Option<Num> {
-    let mut lower = 0.0_f64;
-    let mut upper = Some(0.0_f64);
-    let mut counted = false;
+/// Plays during which `object` is provably alive and updating: in the
+/// scene family at the play site, not a target of the play's animations
+/// (targets get their updaters suspended), and — for waits — only provably
+/// dynamic waits (a frozen wait runs no updaters).
+fn alive_plays<'p>(scene: &'p SceneLifecycle, object: &ObjectId) -> Vec<&'p PlayFact> {
+    let mut plays = Vec::new();
     for play in &scene.plays {
         if play.certainty != Presence::Present {
             continue;
@@ -191,17 +192,7 @@ fn alive_span_seconds(scene: &SceneLifecycle, object: &ObjectId) -> Option<Num> 
         if targets_object {
             continue;
         }
-        counted = true;
-        if let Some(bound) = play.duration.lower_bound() {
-            lower += bound;
-        }
-        upper = match (upper, play.duration.upper_bound()) {
-            (Some(current), Some(bound)) => Some(current + bound),
-            _ => None,
-        };
+        plays.push(play);
     }
-    counted.then_some(Num::Interval {
-        lo: Some(lower),
-        hi: upper,
-    })
+    plays
 }

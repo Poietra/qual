@@ -9,7 +9,9 @@ use serde_json::json;
 use manim_lint::application::manim_surface;
 use manim_lint::config::model::{Platform, RenderProfile, Renderer};
 use manim_lint::cost::contexts::HotEntryKind;
-use manim_lint::cost::estimator::{frames_for_duration, symbolic_frames};
+use manim_lint::cost::estimator::{
+    frames_for_duration, sum_frames_across_profiles, symbolic_frames,
+};
 use manim_lint::cost::model::{frame_buffer_bytes, pixel_frames};
 use manim_lint::cost::thresholds::{
     LARGE_FAMILY_GATE, LARGE_POINTS_GATE, PER_FRAME_ALLOCATION_GATE,
@@ -1022,4 +1024,139 @@ fn nonliteral_suspend_kwarg_degrades_to_maybe_execution() {
         "unknown suspension never proves absence either"
     );
     assert_eq!(cost.proven_frames_for_call(math_tex), None);
+}
+
+// ---------------------------------------------------------------------------
+// Per-play frame math (Manim renders one `np.arange` grid per play, scene.py
+// `get_time_progression`): ceil applies per play, then the counts sum.
+// ---------------------------------------------------------------------------
+
+/// Two 1 ms plays at 60 fps render 1 + 1 = 2 frames — never
+/// `ceil(0.002 × 60) = 1` from summing the durations first.
+#[test]
+fn frame_totals_apply_ceil_per_play_then_sum() {
+    let profiles = [render_profile(60.0)];
+    let durations = [Num::float(0.001), Num::float(0.001)];
+    assert_eq!(
+        sum_frames_across_profiles(durations.iter(), &profiles),
+        Num::Interval {
+            lo: Some(2.0),
+            hi: Some(2.0),
+        }
+    );
+    // An unknown duration contributes nothing below and opens the total
+    // above — no fabricated count either way.
+    let mixed = [Num::float(2.0), Num::Unknown];
+    assert_eq!(
+        sum_frames_across_profiles(mixed.iter(), &profiles),
+        Num::Interval {
+            lo: Some(120.0),
+            hi: None,
+        }
+    );
+}
+
+/// The end-to-end 1 ms × 2 case: both sub-second plays prove the
+/// callback's execution and each renders its own single-frame grid.
+const TWO_SHORT_PLAYS_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.play(FadeIn(square), run_time=0.001)
+        self.play(FadeIn(square), run_time=0.001)
+";
+
+#[test]
+fn two_millisecond_plays_prove_two_frames_not_one() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", TWO_SHORT_PLAYS_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 2, "both short plays prove");
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(2.0),
+            hi: Some(2.0),
+        }),
+        "each play renders its own frame grid: 1 + 1 frames"
+    );
+}
+
+/// A play inside a literal `range(3)` loop repeats its frame grid three
+/// times: the loop play is branch-dependent (maybe), so it widens only
+/// the upper bound — but multiplied by the trip count, never counted
+/// once (DESIGN §4.1: unknowns and repetitions must not underestimate).
+const LITERAL_LOOP_PLAY_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.play(FadeIn(square), run_time=1)
+        for _ in range(3):
+            self.play(FadeIn(square), run_time=2)
+";
+
+#[test]
+fn literal_range_loop_multiplies_the_play_frames() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", LITERAL_LOOP_PLAY_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1, "the straight-line play proves");
+    assert_eq!(execution.maybe.len(), 1, "the loop play is a maybe");
+    // 60 proven frames; the loop play adds up to 3 × 120 frames above.
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(60.0),
+            hi: Some(420.0),
+        })
+    );
+}
+
+/// An unknown trip count opens the upper bound instead of pretending the
+/// looped play runs once.
+const UNKNOWN_LOOP_PLAY_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.play(FadeIn(square), run_time=1)
+        for _ in unknowable():
+            self.play(FadeIn(square), run_time=2)
+";
+
+#[test]
+fn unknown_loop_trip_count_opens_the_upper_bound() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", UNKNOWN_LOOP_PLAY_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(60.0),
+            hi: None,
+        }),
+        "an unbounded repetition count must not stay at one play's frames"
+    );
 }

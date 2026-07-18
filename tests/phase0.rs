@@ -399,6 +399,39 @@ fn target_python_gate_emits_mlc000_without_stopping_the_file() {
     assert_eq!(report.exit, ExitStatus::Failure, "MLC000 is an error");
 }
 
+/// An unreadable directory inside the scanned tree is a hard error (exit
+/// 2), never silently skipped: skipping would claim "checked" for files
+/// the walk never saw.
+#[cfg(unix)]
+#[test]
+fn unreadable_directory_is_an_io_error_not_a_silent_skip() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path());
+    let locked = project.path().join("scenes/locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("hidden.py"), "x = 1\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Under root (or similar) the permission bits do not deny access and
+    // there is nothing to observe.
+    let permissions_enforced = std::fs::read_dir(&locked).is_err();
+    // Restore permissions before asserting so the tempdir always cleans
+    // up, even when the check below panics.
+    let result = check(&args_for(project.path(), OutputFormat::Concise));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !permissions_enforced {
+        eprintln!("skipping: directory permissions are not enforced here");
+        return;
+    }
+    let error = result.expect_err("an unreadable directory must abort the scan");
+    assert!(
+        matches!(error, application::ApplicationError::Io { ref path, .. }
+            if path.ends_with("scenes/locked")),
+        "unexpected error: {error}"
+    );
+}
+
 #[test]
 fn smoke_fixture_project_checks_end_to_end() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke");

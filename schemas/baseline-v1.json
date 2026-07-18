@@ -2,12 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://manim-lint.dev/schemas/baseline-v1.json",
   "title": "manim-lint baseline v1",
-  "description": "Known-diagnostic fingerprints (DESIGN 8.3). A fingerprint never contains line numbers: it is rule ID + relative path + qualified Scene name + surrounding token hash, so inserting unrelated lines elsewhere in a file does not invalidate entries. Entries are sorted and each entry hides at most one matching diagnostic. Compatibility: an entry whose scene is the empty string matches a diagnostic regardless of its computed scene (baselines written before scene attribution store \"\" everywhere); a non-empty scene only matches that scene.",
+  "description": "Known-diagnostic fingerprints (DESIGN 8.3). A fingerprint never contains line numbers: it is rule ID + relative path + qualified Scene name + surrounding token hash, so inserting unrelated lines elsewhere in a file does not invalidate entries. Entries are sorted and each entry hides at most one matching diagnostic. Provenance: files written with scene attribution carry scene_attribution: \"attributed\" — their empty scene means literally outside any Scene class and matches exactly. Files without the marker are legacy pre-attribution baselines (they stored \"\" everywhere), and only there does an empty stored scene match a diagnostic regardless of its computed scene (wildcard). A non-empty scene always matches only that scene. The marker is additive, so schema_version stays 1: legacy documents remain valid and entry shapes are unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "entries"],
   "properties": {
     "schema_version": { "const": 1 },
+    "scene_attribution": {
+      "const": "attributed",
+      "description": "Provenance marker, always written by attributing builds. Present: entries were computed with scene attribution and an empty scene matches exactly (outside any Scene). Absent: legacy pre-attribution baseline whose empty scenes match as wildcards."
+    },
     "entries": {
       "type": "array",
       "items": { "$ref": "#/$defs/entry" }
@@ -29,7 +33,7 @@
         },
         "scene": {
           "type": "string",
-          "description": "Qualified name of the discovered Scene class enclosing the diagnostic, or \"\" outside every Scene. When stored, \"\" additionally matches any computed scene (wildcard for pre-attribution baselines)"
+          "description": "Qualified name of the discovered Scene class enclosing the diagnostic, or \"\" outside every Scene. Only in a legacy file without the scene_attribution marker does a stored \"\" additionally match any computed scene (wildcard)"
         },
         "token_hash": {
           "type": "string",

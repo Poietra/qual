@@ -66,6 +66,61 @@ pub fn frames_across_profiles(duration: &Num, profiles: &[RenderProfile]) -> Num
     estimates.fold(first, |joined, next| joined.join(&next))
 }
 
+/// Frame total of a sequence of plays: each play renders its **own** frame
+/// grid (`np.arange(0, run_time, 1/frame_rate)` in scene.py
+/// `get_time_progression`), so `ceil(duration × fps)` applies per play and
+/// the per-play counts are summed — never applied once to the summed
+/// duration, which undercounts sequences of short plays (two 1 ms plays at
+/// 60 fps render 1 + 1 = 2 frames, not `ceil(0.002 × 60) = 1`).
+///
+/// A duration without a lower bound contributes `0` below; a missing upper
+/// bound opens the total above — no fabricated count either way (DESIGN
+/// §15 invariant 9).
+#[must_use]
+pub fn sum_frames_across_profiles<'d>(
+    durations: impl IntoIterator<Item = &'d Num>,
+    profiles: &[RenderProfile],
+) -> Num {
+    let mut lower = 0.0_f64;
+    let mut upper = Some(0.0_f64);
+    for duration in durations {
+        let frames = frames_across_profiles(duration, profiles);
+        if let Some(bound) = frames.lower_bound() {
+            lower += bound;
+        }
+        upper = match (upper, frames.upper_bound()) {
+            (Some(current), Some(bound)) => Some(current + bound),
+            _ => None,
+        };
+    }
+    Num::Interval {
+        lo: Some(lower),
+        hi: upper,
+    }
+}
+
+/// Interval sum of durations in seconds: known lower bounds add up (an
+/// unknown duration contributes `0` below) and any missing upper bound
+/// opens the total above.
+#[must_use]
+pub fn sum_seconds<'d>(durations: impl IntoIterator<Item = &'d Num>) -> Num {
+    let mut lower = 0.0_f64;
+    let mut upper = Some(0.0_f64);
+    for duration in durations {
+        if let Some(bound) = duration.lower_bound() {
+            lower += bound;
+        }
+        upper = match (upper, duration.upper_bound()) {
+            (Some(current), Some(bound)) => Some(current + bound),
+            _ => None,
+        };
+    }
+    Num::Interval {
+        lo: Some(lower),
+        hi: upper,
+    }
+}
+
 /// A positive literal duration in seconds carried by one argument.
 ///
 /// Non-positive and non-numeric literals yield `None` (invalid durations

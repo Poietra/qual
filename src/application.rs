@@ -838,14 +838,20 @@ fn walk_directory(
     if !visited.insert(canonical) {
         return Ok(());
     }
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|source| ApplicationError::Io {
+    // Per-entry read errors surface as ApplicationError (exit 2), exactly
+    // like a directory that cannot be opened at all: silently skipping an
+    // unreadable entry would claim "checked" for files never seen.
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|source| ApplicationError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| ApplicationError::Io {
             path: dir.to_path_buf(),
             source,
-        })?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+        })?;
+        entries.push(entry.path());
+    }
     entries.sort();
 
     for entry in entries {

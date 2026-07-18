@@ -174,7 +174,7 @@ manim-lint check . --write-baseline .manim-lint-baseline.json  # 今日の検出
 manim-lint check . --baseline .manim-lint-baseline.json        # 新規の検出だけを報告
 ```
 
-baseline の指紋(`schemas/baseline-v1.json`)は **行番号を含みません** — ルール ID、相対パス、修飾された Scene 名、周辺トークンのハッシュから作られるため、ファイル内の無関係な行の追加でエントリが失効しません。`scene` フィールドには修飾された囲み Scene クラス名が記録され(Scene の外では空)、別々の Scene にある同一の検出は異なる指紋になります。Scene 帰属導入前に書かれた baseline(`scene` が空)はワイルドカードとして引き続きマッチします。破損した、あるいはスキーマの合わない baseline ファイルは明確なメッセージとともに exit 2 になります。
+baseline の指紋(`schemas/baseline-v1.json`)は **行番号を含みません** — ルール ID、相対パス、修飾された Scene 名、周辺トークンのハッシュから作られるため、ファイル内の無関係な行の追加でエントリが失効しません。`scene` フィールドには修飾された囲み Scene クラス名が記録され(Scene の外では空)、別々の Scene にある同一の検出は異なる指紋になります。書き出されるファイルには来歴マーカー `scene_attribution: "attributed"` が付き、そのファイルでは空の `scene` は文字どおり「どの Scene の外」を意味して厳密に一致します。Scene 帰属導入前に書かれた baseline(マーカーなし)も引き続き読み込め、その場合に限り空の `scene` がワイルドカードとしてマッチします。破損した、あるいはスキーマの合わない baseline ファイルは明確なメッセージとともに exit 2 になります。
 
 ## 自動修正(autofix)
 

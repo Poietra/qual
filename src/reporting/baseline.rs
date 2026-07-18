@@ -14,16 +14,27 @@
 //! each side, so inserting unrelated lines elsewhere in the file does not
 //! invalidate the entries.
 //!
-//! # Compatibility: the empty scene as a wildcard
+//! # Provenance: legacy wildcard vs. attributed empty scenes
 //!
 //! Baselines written before scene attribution existed store `scene: ""` for
-//! every entry. So that those files keep suppressing, matching treats a
-//! *stored* empty scene as a wildcard: it matches a diagnostic regardless
-//! of its computed scene (an exact scene match is always consumed first).
-//! A stored non-empty scene only matches that same computed scene.
+//! every entry and carry no `scene_attribution` marker. So that those files
+//! keep suppressing, matching treats their stored empty scene as a
+//! wildcard: it matches a diagnostic regardless of its computed scene (an
+//! exact scene match is always consumed first). A stored non-empty scene
+//! only matches that same computed scene.
+//!
+//! Files written by this build always carry
+//! `"scene_attribution": "attributed"`. In an attributed file an empty
+//! scene means *literally outside any Scene class* and matches exactly —
+//! a module-level entry can no longer wildcard-suppress a same-fingerprint
+//! diagnostic inside a scene. The marker is additive, so `schema_version`
+//! stays 1: legacy files (no marker) remain valid v1 documents and keep
+//! their wildcard reading; new files add one optional field without
+//! changing any entry shape.
 //!
 //! The on-disk format is JSON matching `schemas/baseline-v1.json`:
-//! `schema_version` 1 plus a sorted entry list, serialized byte-stably.
+//! `schema_version` 1, the attribution marker, plus a sorted entry list,
+//! serialized byte-stably.
 
 use std::collections::BTreeMap;
 
@@ -37,6 +48,11 @@ use crate::source::{SourceFile, SourceManager};
 /// Schema version written to and required from baseline files.
 pub const SCHEMA_VERSION: u64 = 1;
 
+/// Value of the `scene_attribution` provenance marker written by this
+/// build: entries were computed with scene attribution, so an empty scene
+/// means "outside any Scene" and matches exactly (module docs).
+pub const SCENE_ATTRIBUTION: &str = "attributed";
+
 /// One baseline fingerprint entry (`schemas/baseline-v1.json`).
 ///
 /// The derived ordering (field declaration order) is the sort order of the
@@ -48,8 +64,9 @@ pub struct BaselineEntry {
     /// Project-relative POSIX path of the diagnosed file.
     pub path: String,
     /// Qualified name of the discovered Scene class enclosing the
-    /// diagnostic, or `""` outside every Scene. A *stored* `""` also acts
-    /// as a wildcard when matching, for baselines written before scene
+    /// diagnostic, or `""` outside every Scene. In a file **without** the
+    /// `scene_attribution` marker a stored `""` additionally acts as a
+    /// wildcard when matching, for baselines written before scene
     /// attribution existed (module docs).
     pub scene: String,
     /// Hash of the surrounding tokens: `fnv1a64:` plus 16 hex digits.
@@ -114,6 +131,10 @@ impl SceneSpans {
 #[derive(Debug, Serialize, Deserialize)]
 struct BaselineDocument {
     schema_version: u64,
+    /// Provenance marker ([`SCENE_ATTRIBUTION`]): absent in legacy
+    /// pre-attribution files, whose empty scenes match as wildcards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scene_attribution: Option<String>,
     entries: Vec<BaselineEntry>,
 }
 
@@ -122,6 +143,9 @@ struct BaselineDocument {
 pub struct Baseline {
     /// Fingerprint multiset: each entry hides at most one diagnostic.
     counts: BTreeMap<BaselineEntry, usize>,
+    /// `true` for legacy files without the `scene_attribution` marker:
+    /// their stored empty scenes match any computed scene (module docs).
+    wildcard_empty_scene: bool,
 }
 
 impl Baseline {
@@ -130,8 +154,9 @@ impl Baseline {
     /// # Errors
     ///
     /// Returns a human-readable message when the text is not valid JSON for
-    /// the baseline document shape or declares a different `schema_version`;
-    /// callers map this to exit code 2.
+    /// the baseline document shape, declares a different `schema_version`,
+    /// or carries an unrecognized `scene_attribution` value; callers map
+    /// this to exit code 2.
     pub fn parse(text: &str) -> Result<Self, String> {
         let document: BaselineDocument = serde_json::from_str(text)
             .map_err(|error| format!("not a valid baseline file: {error}"))?;
@@ -141,11 +166,25 @@ impl Baseline {
                 document.schema_version
             ));
         }
+        let wildcard_empty_scene = match document.scene_attribution.as_deref() {
+            // Legacy pre-attribution file: empty scenes are wildcards.
+            None => true,
+            Some(SCENE_ATTRIBUTION) => false,
+            Some(other) => {
+                return Err(format!(
+                    "unsupported baseline scene_attribution {other:?} \
+                     (this build reads {SCENE_ATTRIBUTION:?} or an absent marker)"
+                ));
+            }
+        };
         let mut counts: BTreeMap<BaselineEntry, usize> = BTreeMap::new();
         for entry in document.entries {
             *counts.entry(entry).or_default() += 1;
         }
-        Ok(Self { counts })
+        Ok(Self {
+            counts,
+            wildcard_empty_scene,
+        })
     }
 
     /// Number of fingerprint entries (duplicates included).
@@ -165,9 +204,12 @@ impl Baseline {
     ///
     /// Each entry hides at most one diagnostic: duplicated code producing
     /// the same fingerprint twice needs two entries to hide both. An exact
-    /// scene match is consumed first; a stored empty scene then matches
+    /// scene match is consumed first; **only** in a legacy file without
+    /// the `scene_attribution` marker does a stored empty scene then match
     /// any computed scene (wildcard compatibility with baselines written
-    /// before scene attribution, see the module docs).
+    /// before scene attribution, see the module docs). In an attributed
+    /// file an empty scene matches exactly the diagnostics outside every
+    /// Scene, never one inside a scene.
     #[must_use]
     pub fn filter(
         &self,
@@ -183,7 +225,7 @@ impl Baseline {
                 if consume(&mut remaining, &entry) {
                     return false;
                 }
-                if !entry.scene.is_empty() {
+                if self.wildcard_empty_scene && !entry.scene.is_empty() {
                     let legacy = BaselineEntry {
                         scene: String::new(),
                         ..entry
@@ -210,7 +252,8 @@ fn consume(remaining: &mut BTreeMap<BaselineEntry, usize>, entry: &BaselineEntry
 }
 
 /// Renders the baseline document for the given diagnostics: schema version
-/// 1, sorted entries, byte-stable, terminated by one newline.
+/// 1, the `scene_attribution` provenance marker, sorted entries,
+/// byte-stable, terminated by one newline.
 #[must_use]
 pub fn render(diagnostics: &[Diagnostic], sources: &SourceManager, scenes: &SceneSpans) -> String {
     let mut entries: Vec<BaselineEntry> = diagnostics
@@ -220,6 +263,7 @@ pub fn render(diagnostics: &[Diagnostic], sources: &SourceManager, scenes: &Scen
     entries.sort();
     let document = BaselineDocument {
         schema_version: SCHEMA_VERSION,
+        scene_attribution: Some(SCENE_ATTRIBUTION.to_owned()),
         entries,
     };
     let mut output =
@@ -417,15 +461,69 @@ mod tests {
         assert_eq!(outside.scene, "", "line 6 is outside the Scene span");
     }
 
+    /// Strips the `scene_attribution` marker, producing the exact document
+    /// a pre-attribution build would have written.
+    fn as_legacy(rendered: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(rendered).expect("valid JSON");
+        let removed = value
+            .as_object_mut()
+            .expect("baseline document is an object")
+            .remove("scene_attribution");
+        assert!(removed.is_some(), "the writer always emits the marker");
+        serde_json::to_string(&value).expect("re-serialization cannot fail")
+    }
+
     #[test]
-    fn stored_empty_scene_matches_any_computed_scene() {
-        // A baseline written before scene attribution stores `scene: ""`;
-        // it must keep suppressing a diagnostic now attributed to a Scene.
+    fn legacy_stored_empty_scene_matches_any_computed_scene() {
+        // A baseline written before scene attribution stores `scene: ""`
+        // and no `scene_attribution` marker; it must keep suppressing a
+        // diagnostic now attributed to a Scene.
         let sources = sources_from("target = 3\n");
-        let legacy = render(&[diagnostic_at(1)], &sources, &SceneSpans::default());
+        let legacy = as_legacy(&render(
+            &[diagnostic_at(1)],
+            &sources,
+            &SceneSpans::default(),
+        ));
         let baseline = Baseline::parse(&legacy).expect("valid baseline");
         let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &demo_scene_spans());
         assert!(survivors.is_empty(), "legacy empty scene is a wildcard");
+    }
+
+    #[test]
+    fn attributed_empty_scene_never_suppresses_an_in_scene_diagnostic() {
+        // The same document *with* the marker: its module-level entry
+        // (`scene: ""`) is a literal "outside any Scene" fact and must not
+        // wildcard-suppress the same fingerprint inside a scene.
+        let sources = sources_from("target = 3\n");
+        let written = render(&[diagnostic_at(1)], &sources, &SceneSpans::default());
+        assert!(written.contains("\"scene_attribution\": \"attributed\""));
+        let baseline = Baseline::parse(&written).expect("valid baseline");
+        let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &demo_scene_spans());
+        assert_eq!(
+            survivors.len(),
+            1,
+            "an attributed module-level entry must not hide an in-scene diagnostic"
+        );
+    }
+
+    #[test]
+    fn attributed_empty_scene_round_trips_for_module_level_diagnostics() {
+        // Outside any Scene the attributed empty scene still matches
+        // exactly: write and re-filter with the same (empty) attribution.
+        let sources = sources_from("target = 3\n");
+        let written = render(&[diagnostic_at(1)], &sources, &SceneSpans::default());
+        let baseline = Baseline::parse(&written).expect("valid baseline");
+        let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &SceneSpans::default());
+        assert!(survivors.is_empty(), "exact empty-scene match round-trips");
+    }
+
+    #[test]
+    fn unknown_scene_attribution_is_rejected() {
+        let error = Baseline::parse(
+            r#"{"schema_version": 1, "scene_attribution": "guessed", "entries": []}"#,
+        )
+        .expect_err("unknown marker must be rejected");
+        assert!(error.contains("scene_attribution"));
     }
 
     #[test]

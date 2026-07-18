@@ -50,11 +50,14 @@ pub enum CfgStmt<'a> {
     PatternBind(&'a ast::Pattern),
 }
 
-/// How likely the body of a loop header is to execute at least twice.
+/// What is known about a loop header's iteration count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopIteration {
-    /// A literal bound proves at least two iterations (`range(3)`).
-    AtLeastTwice,
+    /// A literal `range(...)` iterable proves the trip count exactly
+    /// (`range(3)` → 3; `range(5, 2)` → 0). The count is still only an
+    /// *upper* bound on body executions — `break` / `return` / `raise`
+    /// can end the loop early.
+    Literal(i64),
     /// The iteration count is not statically known.
     Unknown,
 }
@@ -113,6 +116,14 @@ pub struct BasicBlock<'a> {
     /// [`crate::semantic::values::Cardinality::Many`]; other loop blocks
     /// only get `MaybeMany` (DESIGN §5.5).
     pub in_definite_loop: bool,
+    /// Upper bound on how many times this block executes per run of the
+    /// function body, from the enclosing loops' trip counts: `Some(1)`
+    /// outside loops, the product of the literal `range(...)` counts when
+    /// every enclosing loop has one (early exits can only reduce it), and
+    /// `None` when any enclosing loop's trip count is unknown — never `1`
+    /// for an unknown count (DESIGN §4.1: unknowns must not underestimate).
+    /// Loop headers execute one extra time (the exit test).
+    pub repetitions: Option<i64>,
 }
 
 /// The control-flow graph of one function body.
@@ -208,6 +219,11 @@ struct Builder<'a> {
     loop_depth: u32,
     cond_depth: u32,
     definite_loops: u32,
+    /// Running upper bound on per-body-run executions of blocks created
+    /// now: the product of the enclosing loops' literal trip counts
+    /// (`Some(1)` outside loops), `None` once any enclosing loop's count
+    /// is unknown or the product overflows.
+    repetition_bound: Option<i64>,
     /// Set once the current block ended in `return` / `raise` / `break` /
     /// `continue`; subsequent statements go into an unreachable block.
     finished: bool,
@@ -222,6 +238,7 @@ impl<'a> Builder<'a> {
             loop_depth: 0,
             cond_depth: 0,
             definite_loops: 0,
+            repetition_bound: Some(1),
             finished: false,
         }
     }
@@ -237,6 +254,7 @@ impl<'a> Builder<'a> {
             is_loop_header: false,
             iteration: LoopIteration::Unknown,
             in_definite_loop: self.definite_loops > 0,
+            repetitions: self.repetition_bound,
         });
         id
     }
@@ -416,11 +434,28 @@ impl<'a> Builder<'a> {
         let header = self.new_block();
         self.blocks[header.0].is_loop_header = true;
         self.blocks[header.0].iteration = iteration;
+        // The outer repetition bound multiplied by this loop's trip count;
+        // an unknown count (or overflow) opens the bound.
+        let outer_repetitions = self.repetition_bound;
+        let body_repetitions = match iteration {
+            LoopIteration::Literal(count) => {
+                outer_repetitions.and_then(|bound| bound.checked_mul(count))
+            }
+            LoopIteration::Unknown => None,
+        };
+        // The header itself runs once more than the body (the exit test).
+        self.blocks[header.0].repetitions = match iteration {
+            LoopIteration::Literal(count) => {
+                outer_repetitions.and_then(|bound| bound.checked_mul(count.saturating_add(1)))
+            }
+            LoopIteration::Unknown => None,
+        };
         self.seal(Terminator::Jump(header));
 
-        let definite = iteration == LoopIteration::AtLeastTwice;
+        let definite = matches!(iteration, LoopIteration::Literal(count) if count >= 2);
         self.cond_depth += 1;
         self.loop_depth += 1;
+        self.repetition_bound = body_repetitions;
         if definite {
             self.definite_loops += 1;
         }
@@ -428,6 +463,7 @@ impl<'a> Builder<'a> {
         if definite {
             self.definite_loops -= 1;
         }
+        self.repetition_bound = outer_repetitions;
         self.loop_depth -= 1;
         let orelse_block = if orelse.is_empty() {
             None
@@ -446,6 +482,7 @@ impl<'a> Builder<'a> {
         self.loop_stack.push(LoopFrame { header, after });
         self.cond_depth += 1;
         self.loop_depth += 1;
+        self.repetition_bound = body_repetitions;
         if definite {
             self.definite_loops += 1;
         }
@@ -458,6 +495,7 @@ impl<'a> Builder<'a> {
         if definite {
             self.definite_loops -= 1;
         }
+        self.repetition_bound = outer_repetitions;
         self.loop_depth -= 1;
         self.loop_stack.pop();
 
@@ -558,7 +596,9 @@ fn pattern_irrefutable(pattern: &ast::Pattern) -> bool {
     }
 }
 
-/// A definite ≥2 iteration bound from a literal `range(...)` iterable.
+/// The literal trip count of a `range(...)` iterable, when every argument
+/// is an integer literal (an empty span clamps to 0, exactly as `range`
+/// iterates); [`LoopIteration::Unknown`] otherwise.
 fn iteration_bound(iter: &ast::Expr) -> LoopIteration {
     let ast::Expr::Call(call) = iter else {
         return LoopIteration::Unknown;
@@ -592,8 +632,8 @@ fn iteration_bound(iter: &ast::Expr) -> LoopIteration {
         _ => None,
     })();
     match bound {
-        Some(count) if count >= 2 => LoopIteration::AtLeastTwice,
-        _ => LoopIteration::Unknown,
+        Some(count) => LoopIteration::Literal(count.max(0)),
+        None => LoopIteration::Unknown,
     }
 }
 
@@ -707,11 +747,12 @@ mod tests {
             .iter()
             .find(|block| block.is_loop_header)
             .expect("loop header exists");
-        assert_eq!(header.iteration, LoopIteration::AtLeastTwice);
+        assert_eq!(header.iteration, LoopIteration::Literal(3));
         let Terminator::Branch { then_block, .. } = &header.terminator else {
             panic!("header branches");
         };
         assert!(cfg.blocks[then_block.0].in_definite_loop);
+        assert_eq!(cfg.blocks[then_block.0].repetitions, Some(3));
 
         let body = body_of("for i in items:\n    a()\n");
         let cfg = ControlFlowGraph::build(&body);
@@ -721,6 +762,44 @@ mod tests {
             .find(|block| block.is_loop_header)
             .expect("loop header exists");
         assert_eq!(header.iteration, LoopIteration::Unknown);
+    }
+
+    /// Per-block repetition bounds: literal `range` trip counts multiply
+    /// through nested loops, an unknown iterable opens the bound (never 1),
+    /// and code after a loop is back to exactly once per run.
+    #[test]
+    fn repetition_bounds_multiply_literal_loops_and_open_on_unknown() {
+        let source = "\
+before()
+for i in range(3):
+    for j in range(2, 8, 2):
+        inner()
+for x in items:
+    unknown()
+after()
+";
+        let body = body_of(source);
+        let cfg = ControlFlowGraph::build(&body);
+        let block_of = |call: &str| {
+            cfg.blocks
+                .iter()
+                .find(|block| {
+                    block.stmts.iter().any(|stmt| match stmt {
+                        CfgStmt::Stmt(ast::Stmt::Expr(expr)) => {
+                            matches!(&*expr.value, ast::Expr::Call(inner)
+                                if matches!(&*inner.func, ast::Expr::Name(name)
+                                    if name.id.as_str() == call))
+                        }
+                        _ => false,
+                    })
+                })
+                .unwrap_or_else(|| panic!("no block holds {call}()"))
+        };
+        assert_eq!(block_of("before").repetitions, Some(1));
+        // range(3) × range(2, 8, 2) = 3 × 3.
+        assert_eq!(block_of("inner").repetitions, Some(9));
+        assert_eq!(block_of("unknown").repetitions, None, "unknown trip count");
+        assert_eq!(block_of("after").repetitions, Some(1));
     }
 
     #[test]

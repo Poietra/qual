@@ -162,6 +162,10 @@ fn baseline_write_filter_and_line_insertion_survival() {
     let text = std::fs::read_to_string(&baseline_path).unwrap();
     let value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
     assert_eq!(value["schema_version"], 1);
+    assert_eq!(
+        value["scene_attribution"], "attributed",
+        "the writer always marks its provenance"
+    );
     let entries = value["entries"].as_array().expect("entries");
     assert_eq!(entries.len(), report.diagnostics.len());
     for entry in entries {
@@ -290,9 +294,14 @@ fn pre_attribution_baseline_with_empty_scenes_still_suppresses() {
     check(&args).unwrap();
 
     // Rewrite the baseline the way a pre-attribution build would have
-    // written it: every scene field blanked.
+    // written it: every scene field blanked and no provenance marker.
     let text = std::fs::read_to_string(&baseline_path).unwrap();
     let mut value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
+    value
+        .as_object_mut()
+        .expect("document object")
+        .remove("scene_attribution")
+        .expect("the writer emits the marker");
     for entry in value["entries"].as_array_mut().expect("entries") {
         entry["scene"] = Value::String(String::new());
     }
@@ -307,6 +316,42 @@ fn pre_attribution_baseline_with_empty_scenes_still_suppresses() {
         report.diagnostics
     );
     assert_eq!(report.exit, ExitStatus::Success);
+}
+
+/// The finding-5 regression: an *attributed* baseline (the marker kept)
+/// whose entries were blanked to module level must NOT wildcard-suppress
+/// the same-fingerprint diagnostics inside the scenes.
+#[test]
+fn attributed_module_level_entries_do_not_suppress_in_scene_diagnostics() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("demo.py"), TWIN_SCENES).unwrap();
+    let baseline_path = project.path().join("baseline.json");
+
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.write_baseline = Some(baseline_path.clone());
+    let written = check(&args).unwrap();
+    assert!(!written.diagnostics.is_empty());
+
+    let text = std::fs::read_to_string(&baseline_path).unwrap();
+    let mut value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
+    assert_eq!(value["scene_attribution"], "attributed");
+    for entry in value["entries"].as_array_mut().expect("entries") {
+        entry["scene"] = Value::String(String::new());
+    }
+    std::fs::write(&baseline_path, serde_json::to_string(&value).unwrap()).unwrap();
+
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.baseline = Some(baseline_path);
+    let report = check(&args).unwrap();
+    let in_scene = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC101")
+        .count();
+    assert_eq!(
+        in_scene, 2,
+        "attributed empty scenes are exact module-level facts, not wildcards"
+    );
 }
 
 #[test]

@@ -411,37 +411,48 @@ impl CostFacts {
         if execution.proven.is_empty() || self.profiles.is_empty() {
             return None;
         }
-        // Per-scene duration sums (a rendered project runs each scene's
-        // plays in sequence), joined into one hull across scenes.
+        // Per-scene frame sums (a rendered project runs each scene's plays
+        // in sequence), joined into one hull across scenes. Every play
+        // renders its own frame grid (`np.arange(0, run_time, 1/fps)` in
+        // scene.py `get_time_progression`), so `ceil(duration × fps)`
+        // applies **per play** and the counts are summed — never once to
+        // the summed duration, which undercounts consecutive short plays.
+        // A play inside a loop repeats its grid: its contribution is
+        // multiplied by the repetition interval (an unknown trip count
+        // opens the upper bound instead of counting once).
         let mut per_scene: BTreeMap<&str, (f64, Option<f64>)> = BTreeMap::new();
+        let add_upper = |current: Option<f64>, play: &ExecutionPlay, frames: &Num| match (
+            current,
+            frames.upper_bound(),
+            play.repetitions.upper_bound(),
+        ) {
+            (Some(current), Some(upper), Some(repetitions)) => Some(current + upper * repetitions),
+            _ => None,
+        };
         for play in &execution.proven {
             let entry = per_scene
                 .entry(play.scene.as_str())
                 .or_insert((0.0, Some(0.0)));
+            let frames = frames_across_profiles(&play.duration, &self.profiles);
             if play.full_duration_proven {
-                entry.0 += play.duration.lower_bound().unwrap_or(0.0);
+                entry.0 += frames.lower_bound().unwrap_or(0.0)
+                    * play.repetitions.lower_bound().unwrap_or(0.0);
             }
-            entry.1 = match (entry.1, play.duration.upper_bound()) {
-                (Some(current), Some(upper)) => Some(current + upper),
-                _ => None,
-            };
+            entry.1 = add_upper(entry.1, play, &frames);
         }
         for play in &execution.maybe {
             let entry = per_scene
                 .entry(play.scene.as_str())
                 .or_insert((0.0, Some(0.0)));
-            entry.1 = match (entry.1, play.duration.upper_bound()) {
-                (Some(current), Some(upper)) => Some(current + upper),
-                _ => None,
-            };
+            let frames = frames_across_profiles(&play.duration, &self.profiles);
+            entry.1 = add_upper(entry.1, play, &frames);
         }
         let mut joined: Option<Num> = None;
         for (lower, upper) in per_scene.values() {
-            let duration = Num::Interval {
+            let frames = Num::Interval {
                 lo: Some(*lower),
                 hi: if execution.unresolved { None } else { *upper },
             };
-            let frames = frames_across_profiles(&duration, &self.profiles);
             joined = Some(match joined {
                 None => frames,
                 Some(current) => current.join(&frames),

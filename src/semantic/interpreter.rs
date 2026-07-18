@@ -186,6 +186,13 @@ pub struct PlayFact {
     pub star_args: bool,
     /// Path certainty of the call itself.
     pub certainty: Presence,
+    /// How many times one run of the enclosing lifecycle method executes
+    /// this play site: exactly `1` outside loops; `[0, n]` inside loops
+    /// whose trip counts are all literal `range(...)` bounds (each
+    /// execution renders its own frame grid, so frame totals multiply);
+    /// open above when any enclosing trip count is unknown — never left
+    /// at `1` (DESIGN §4.1: unknowns must not underestimate).
+    pub repetitions: Num,
 }
 
 /// Where an updater was registered.
@@ -1113,13 +1120,30 @@ struct TraceSink {
 }
 
 /// Per-block execution context while walking a CFG.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct BlockCtx {
     loop_depth: u32,
     cond_depth: u32,
     in_definite_loop: bool,
     /// Extra loop-ness from comprehension bodies.
     comprehension: bool,
+    /// Upper bound on per-body-run executions of the current site from
+    /// the enclosing loops' literal trip counts
+    /// ([`crate::frontend::cfg::BasicBlock::repetitions`]); `None` when
+    /// any enclosing trip count is unknown.
+    repetitions: Option<i64>,
+}
+
+impl Default for BlockCtx {
+    fn default() -> Self {
+        Self {
+            loop_depth: 0,
+            cond_depth: 0,
+            in_definite_loop: false,
+            comprehension: false,
+            repetitions: Some(1),
+        }
+    }
 }
 
 impl BlockCtx {
@@ -1133,6 +1157,34 @@ impl BlockCtx {
 
     fn in_loop(self) -> bool {
         self.loop_depth > 0 || self.comprehension
+    }
+
+    /// Executions of the current site per run of the enclosing body, as an
+    /// interval (DESIGN §4.1: an unknown factor never collapses to 1):
+    /// exactly once outside loops; `[0, product]` under loops whose trip
+    /// counts are all literal `range(...)` bounds (`break` / `return` /
+    /// `raise` can only reduce the count); open above when any enclosing
+    /// trip count is unknown.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "counts above 2^53 take the open-bound arm instead"
+    )]
+    fn repetition_bound(self) -> Num {
+        /// Largest count the `f64` upper bound represents exactly (2^53).
+        const EXACT_LIMIT: i64 = 1 << 53;
+        if !self.in_loop() {
+            return Num::int(1);
+        }
+        match self.repetitions {
+            Some(count) if count <= EXACT_LIMIT => Num::Interval {
+                lo: Some(0.0),
+                hi: Some(count as f64),
+            },
+            _ => Num::Interval {
+                lo: Some(0.0),
+                hi: None,
+            },
+        }
     }
 
     fn cardinality(self) -> Cardinality {
@@ -2026,6 +2078,7 @@ impl<'a> Machine<'a, '_> {
             cond_depth: block.cond_depth,
             in_definite_loop: block.in_definite_loop,
             comprehension: false,
+            repetitions: block.repetitions,
         };
         for item in &block.stmts {
             self.exec_cfg_stmt(item, &mut state);
@@ -2401,6 +2454,9 @@ impl<'a> Machine<'a, '_> {
         // expression is evaluated once with loop cardinality.
         let saved = self.block;
         self.block.comprehension = true;
+        // Comprehension iteration counts are not modeled: any site inside
+        // gains an open repetition bound, never a fabricated count.
+        self.block.repetitions = None;
         for generator in generators {
             self.eval_expr(&generator.iter, state);
             self.bind_target(&generator.target, AbstractValue::Unknown, state);
@@ -4917,6 +4973,7 @@ impl<'a> Machine<'a, '_> {
                     .iter()
                     .any(|arg| matches!(arg, ast::Expr::Starred(_))),
                 certainty,
+                repetitions: self.block.repetition_bound(),
             });
         }
         AbstractValue::Unknown
@@ -5013,6 +5070,7 @@ impl<'a> Machine<'a, '_> {
                 always_update_mobjects: always_update,
                 star_args: false,
                 certainty: self.certainty(),
+                repetitions: self.block.repetition_bound(),
             });
         }
         AbstractValue::Unknown

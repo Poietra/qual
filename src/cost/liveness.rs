@@ -78,6 +78,12 @@ pub struct ExecutionPlay {
     /// callback's per-frame executions. `false` for stop-condition waits,
     /// which may end after any frame; their duration only bounds above.
     pub full_duration_proven: bool,
+    /// Executions of the play site per run of its lifecycle method
+    /// ([`PlayFact::repetitions`]): each execution renders its own frame
+    /// grid, so frame totals multiply by this interval. Exactly `1`
+    /// outside loops, `[0, n]` under literal `range(...)` loops, open
+    /// above when a trip count is unknown.
+    pub repetitions: Num,
 }
 
 /// Liveness verdict of one hot entry root.
@@ -366,13 +372,12 @@ type PlayMap = BTreeMap<(String, AllocationSite), ExecutionPlay>;
 fn record_play(
     plays: &mut PlayMap,
     scene: &SceneLifecycle,
-    site: AllocationSite,
-    kind: PlayKind,
+    play: &PlayFact,
     duration: Num,
     proven: bool,
     full_duration_proven: bool,
 ) {
-    let key = (scene.qualified_name.clone(), site);
+    let key = (scene.qualified_name.clone(), play.site);
     let certainty = if proven {
         ExecutionCertainty::Proven
     } else {
@@ -385,11 +390,12 @@ fn record_play(
                 key,
                 ExecutionPlay {
                     scene: scene.qualified_name.clone(),
-                    site,
-                    kind,
+                    site: play.site,
+                    kind: play.kind,
                     duration,
                     certainty,
                     full_duration_proven,
+                    repetitions: play.repetitions.clone(),
                 },
             );
         }
@@ -456,8 +462,7 @@ fn mobject_updater_plays(
                 record_play(
                     &mut plays,
                     scene,
-                    play.site,
-                    play.kind,
+                    play,
                     play.duration.clone(),
                     proven,
                     !play.has_stop_condition,
@@ -507,8 +512,7 @@ fn scene_updater_plays(
                 record_play(
                     &mut plays,
                     scene,
-                    play.site,
-                    play.kind,
+                    play,
                     play.duration.clone(),
                     proven,
                     !play.has_stop_condition,
@@ -536,8 +540,7 @@ fn stop_condition_plays(
             record_play(
                 &mut plays,
                 scene,
-                play.site,
-                play.kind,
+                play,
                 play.duration.clone(),
                 play.certainty == Presence::Present,
                 false,
@@ -578,8 +581,7 @@ fn played_animation_plays(
                 record_play(
                     &mut plays,
                     scene,
-                    play.site,
-                    play.kind,
+                    play,
                     duration,
                     play.certainty == Presence::Present,
                     true,
@@ -611,15 +613,7 @@ fn interpolate_override_plays(
             for played in &play.animations {
                 let Some(state) = &played.state else {
                     if played.convertible != Truth::No {
-                        record_play(
-                            &mut plays,
-                            scene,
-                            play.site,
-                            play.kind,
-                            play.duration.clone(),
-                            false,
-                            true,
-                        );
+                        record_play(&mut plays, scene, play, play.duration.clone(), false, true);
                     }
                     continue;
                 };
@@ -635,8 +629,7 @@ fn interpolate_override_plays(
                 record_play(
                     &mut plays,
                     scene,
-                    play.site,
-                    play.kind,
+                    play,
                     state.run_time.clone(),
                     only && play.certainty == Presence::Present,
                     true,

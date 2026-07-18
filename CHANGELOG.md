@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-External-review fixes.
+External-review fixes (two waves).
 
 ### Added
+
+- Baseline files now carry a `scene_attribution: "attributed"` provenance
+  marker (additive; `schema_version` stays 1). In attributed files an
+  empty `scene` means literally "outside any Scene" and matches exactly,
+  so a module-level entry can no longer wildcard-suppress a
+  same-fingerprint diagnostic inside a scene. Files without the marker are
+  read as legacy pre-attribution baselines and keep their empty-scene
+  wildcard behavior.
+- Loop-aware play repetition facts: a `play`/`wait` inside a loop whose
+  trip count is a literal `range(...)` multiplies its frame contribution
+  by the trip-count interval; an unknown trip count opens the upper bound
+  instead of counting the play once.
 
 - Per-updater execution liveness (`src/cost/liveness.rs`): every
   hot-context performance fact is now gated on plays/waits where the
@@ -54,6 +66,14 @@ External-review fixes.
 
 ### Fixed
 
+- Frame totals across multiple plays now apply `ceil(duration × fps)` per
+  play and sum the counts (Manim renders one `np.arange` grid per play),
+  instead of ceiling the summed duration once — two 1 ms plays at 60 fps
+  are 2 frames, not 1. Applies to proven-execution frame estimates,
+  the `cost` report quantities, and the MLP219/MLP220 frame evidence.
+- Directory scanning surfaces unreadable directory entries as errors
+  (exit 2) instead of silently skipping them; an unreadable directory was
+  already an error, per-entry read failures now are too.
 - Directory walking no longer hangs on symlink cycles (canonicalized
   visited set; each file reported once).
 
@@ -80,9 +100,9 @@ projects that never imports or executes the analyzed code.
   literal durations only, machine-readable evidence, exposed as `CostFacts`;
   the `cost` command reports per-scene plays, hot contexts, per-frame
   constructions, and resource-key growth.
-- 52 implemented rules across four families — 25 MLC lifecycle/correctness,
-  14 MLR rendering, 6 MLP performance, 7 MLD determinism/portability — each
-  with golden fixture tests and a documentation page; the remaining 40
+- 79 implemented rules across four families — 28 MLC lifecycle/correctness,
+  23 MLR rendering, 21 MLP performance, 7 MLD determinism/portability — each
+  with golden fixture tests and a documentation page; the remaining 13
   catalog IDs are listed as reserved and never fire.
 - Severity/confidence separation, definite (all-paths) evidence gating, and
   specificity dedup via rule `supersedes` metadata.
