@@ -22,16 +22,21 @@
 //! `applicable_profiles` to the affected renderer's profiles and stay
 //! silent when no active profile targets it (DESIGN §15 invariant 8).
 //!
+//! The Scene-helper completion wave adds `MLR123` (`rendering/mesh.rs`):
+//! a curated OpenGL-only mesh (`Object3D` / the `OpenGLSurface` family,
+//! `renderer.opengl_only_mesh` in the knowledge profile) added to the
+//! scene while an active profile targets Cairo.
+//!
 //! Still reserved: `MLR109` (updater ordering lag), `MLR118` (SVG asset
-//! content facts), `MLR122` (the interpreter now tracks per-object
+//! content facts), and `MLR122` (the interpreter now tracks per-object
 //! `z_index`, but the alias-safe cross-object stacking proof — "a literal
 //! `set_z_index` on another object provably keeps this one below it" — is
-//! still missing), and `MLR123` (no curated mesh / `Object3D` class in
-//! the knowledge profile).
+//! still missing).
 
 mod assets;
 mod fixed_visibility;
 mod markup;
+mod mesh;
 mod path_state;
 mod points;
 mod points_layout;
@@ -94,6 +99,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(renderer::MovingCameraUnderOpengl),
         Box::new(renderer::FocalDistanceUnderOpengl),
         Box::new(stacking::ZShiftForStacking),
+        Box::new(mesh::MeshUnderCairoTarget),
         Box::new(MarkupInPlainText),
         Box::new(state::BareMobjectLeaf),
         Box::new(OpacityStrokeRange),

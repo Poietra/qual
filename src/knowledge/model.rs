@@ -227,6 +227,26 @@ pub struct RendererCompat {
     /// Works under the OpenGL renderer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opengl: Option<bool>,
+    /// Positive renderer-requirement fact: the class is an OpenGL mesh /
+    /// `Object3D`-style scene object that only the OpenGL renderer can
+    /// display (`MLR123`).
+    ///
+    /// These classes (`renderer/shader.py Object3D` / `Mesh`, the
+    /// `OpenGLMobject`-rooted `OpenGLSurface` family) are not Cairo
+    /// `Mobject`s: `Scene.add` diverts `Object3D` instances into
+    /// `Scene.meshes` only under `RendererType.OPENGL` (`scene.py`), and
+    /// under Cairo the object lands in `Scene.mobjects` where
+    /// `Camera.type_or_raise` raises `TypeError` at the first captured
+    /// frame (`camera/camera.py` — none of the `display_funcs` types
+    /// match).
+    ///
+    /// This deliberately does **not** imply `cairo: Some(false)`:
+    /// construction itself is renderer-independent, and the `cairo`
+    /// flag would make the generic call-site rule `MLR107` flag every
+    /// constructor call. The failure is a display-time contract, so the
+    /// scene-membership rule `MLR123` owns it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opengl_only_mesh: Option<bool>,
     /// Free-form reviewer note about the divergence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

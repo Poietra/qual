@@ -762,6 +762,39 @@
       "kind": "method",
       "returns_self": true
     },
+    "manim.mobject.opengl.opengl_surface.OpenGLSurface": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.opengl.opengl_mobject.OpenGLMobject"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "OpenGLMobject-rooted parametric surface mesh (opengl_surface.py OpenGLSurface); not a Cairo Mobject, so Camera.type_or_raise raises TypeError when a Cairo frame captures it (camera.py display_funcs, MLR123)."
+      },
+      "note": "Not star-exported from `manim` in 0.20; reachable via its defining module (manim/__init__.py omits mobject.opengl.opengl_surface)."
+    },
+    "manim.mobject.opengl.opengl_surface.OpenGLSurfaceGroup": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.opengl.opengl_surface.OpenGLSurface"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "Group of OpenGLSurface meshes (opengl_surface.py OpenGLSurfaceGroup); OpenGLMobject-rooted, rejected by the Cairo camera (MLR123)."
+      }
+    },
+    "manim.mobject.opengl.opengl_surface.OpenGLTexturedSurface": {
+      "kind": "mobject",
+      "bases": ["manim.mobject.opengl.opengl_surface.OpenGLSurface"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "Image-textured OpenGLSurface (opengl_surface.py OpenGLTexturedSurface); OpenGLMobject-rooted, rejected by the Cairo camera (MLR123)."
+      }
+    },
+    "manim.mobject.opengl.opengl_three_dimensions.OpenGLSurfaceMesh": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.opengl.opengl_vectorized_mobject.OpenGLVGroup"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "Wireframe mesh over an OpenGLSurface (opengl_three_dimensions.py OpenGLSurfaceMesh); OpenGLVGroup is OpenGLMobject-rooted, not a Cairo VMobject, so the Cairo camera rejects it (MLR123)."
+      }
+    },
     "manim.mobject.svg.svg_mobject.SVGMobject": {
       "kind": "vmobject",
       "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
@@ -876,6 +909,30 @@
     "manim.mobject.value_tracker.ValueTracker.set_value": {
       "kind": "method",
       "returns_self": true
+    },
+    "manim.renderer.shader.FullScreenQuad": {
+      "kind": "mobject",
+      "bases": ["manim.renderer.shader.Mesh"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "Fragment-shader quad mesh (shader.py FullScreenQuad); an Object3D scene object the Cairo camera cannot display (MLR123)."
+      }
+    },
+    "manim.renderer.shader.Mesh": {
+      "kind": "mobject",
+      "bases": ["manim.renderer.shader.Object3D"],
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "Shader-attribute mesh (shader.py Mesh); an Object3D scene object the Cairo camera cannot display (MLR123)."
+      }
+    },
+    "manim.renderer.shader.Object3D": {
+      "kind": "mobject",
+      "renderer": {
+        "opengl_only_mesh": true,
+        "note": "OpenGL scene-graph node (shader.py Object3D). Scene.add diverts Object3D instances into Scene.meshes only under RendererType.OPENGL (scene.py Scene.add); under Cairo the object lands in Scene.mobjects and Camera.type_or_raise raises TypeError at the first captured frame (camera.py display_funcs, MLR123)."
+      },
+      "note": "Not a Mobject subclass: no points, no updater/animate contract; curated as `mobject` only so allocation-site membership tracking works (the kind taxonomy has no separate mesh axis; renderer.opengl_only_mesh carries the mesh fact)."
     },
     "manim.scene.moving_camera_scene.MovingCameraScene": {
       "kind": "scene",

@@ -1,9 +1,9 @@
 //! Golden tests for the Phase 1 rendering rules (`MLR101`, `MLR103`,
 //! `MLR104`, `MLR105`, `MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`),
 //! the Phase 2 state-dependent rules (`MLR102`, `MLR113`, `MLR114`,
-//! `MLR116`, `MLR125`, `MLR127`), and the renderer-compatibility wave
+//! `MLR116`, `MLR125`, `MLR127`), the renderer-compatibility wave
 //! (`MLR107`, `MLR108`, `MLR110`, `MLR111`, `MLR112`, `MLR119`,
-//! `MLR120`, `MLR121`).
+//! `MLR120`, `MLR121`), and the mesh-membership rule `MLR123`.
 //!
 //! Each rule has a fixture directory under `tests/fixtures/rules/<ID>/`
 //! (DESIGN §11.1): `invalid.py` (true positives plus one inline-suppressed
@@ -1202,6 +1202,60 @@ fn mlr121_flags_z_moves_for_stacking_in_2d_cairo_scenes() {
 
     // The z coordinate is meaningful under OpenGL: silence there.
     let (_project, opengl_only) = run_fixture_with_profile("MLR121", &pyproject, Some("opengl"));
+    assert!(
+        opengl_only.is_empty(),
+        "opengl-only run must be silent: {opengl_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR123
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr123_flags_meshes_added_to_the_scene_under_a_cairo_target() {
+    let pyproject = dual_renderer_pyproject(&["MLR123"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR123", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            error("MLR123", "self.add(surface)", 1, 0),
+            error("MLR123", "self.add(mesh)", 1, 0),
+            // A project subclass of a curated mesh fires via the
+            // resolved base chain.
+            error(
+                "MLR123",
+                "self.add(MySurface(lambda u, v: (u, v, 0)))",
+                1,
+                0,
+            ),
+            // The introducer setup-add anchors at the animation site.
+            error(
+                "MLR123",
+                "FadeIn(OpenGLSurface(lambda u, v: (u, v, 0)))",
+                1,
+                0,
+            ),
+        ],
+    );
+    // Cairo-capable 3D mobjects (Surface), Unknown kinds, and meshes that
+    // are never added all stay silent.
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // A branch-dependent add is a Maybe fact: silence.
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // Renderer-specific diagnostics carry only the Cairo profiles and
+    // suggest an OpenGL profile (DESIGN 15.8, DESIGN 7.2).
+    let added = find(&diagnostics, "invalid.py", "MLR123", 0);
+    assert_eq!(added.applicable_profiles, vec!["cairo".to_owned()]);
+    assert!(added.message.contains("OpenGL profile"));
+    assert!(added.message.contains("OpenGLSurface"));
+
+    // An OpenGL-only profile set is silent: the mesh renders there.
+    let (_project, opengl_only) = run_fixture_with_profile("MLR123", &pyproject, Some("opengl"));
     assert!(
         opengl_only.is_empty(),
         "opengl-only run must be silent: {opengl_only:?}"

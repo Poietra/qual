@@ -1,7 +1,7 @@
 # Rule catalog
 
-manim-lint reserves 92 rule IDs in four families. 79 are **implemented**;
-13 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
+manim-lint reserves 92 rule IDs in four families. 80 are **implemented**;
+12 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
 rules` lists it as `reserved`, `manim-lint check` never registers it, and it
 never fires. Each reserved rule waits on a named analysis capability that
 the fact layers do not provide yet; where that capability is known it is
@@ -54,7 +54,7 @@ Columns:
 | [MLC128](MLC128.md) | implemented | error | high | Scene subclass \_\_init\_\_ never calls super().\_\_init\_\_() | |
 | [MLC129](MLC129.md) | implemented | warning | medium | play(..., lag_ratio=...) does not stagger multiple animations | |
 
-## MLR — rendering / renderer compatibility (23 implemented, 4 reserved)
+## MLR — rendering / renderer compatibility (24 implemented, 3 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ Columns:
 | [MLR120](MLR120.md) | implemented | warning | high | focal_distance camera setter has no effect under the OpenGL renderer | |
 | [MLR121](MLR121.md) | implemented | warning | high | shift(OUT)/set_z has no effect in a 2D Cairo scene; use set_z_index | |
 | MLR122 | reserved | warning | high | bring_to_front is defeated by a lower z_index | alias-safe cross-object z_index stacking proof |
-| MLR123 | reserved | error | high | 3D object / mesh added under a Cairo or unknown-renderer profile | curated mesh/Object3D class in the knowledge profile |
+| [MLR123](MLR123.md) | implemented | error | high | OpenGL-only mesh mobject is added to a scene under a Cairo-target profile | |
 | [MLR124](MLR124.md) | implemented | warning | high | Text() literal contains Pango markup that plain Text renders verbatim | |
 | [MLR125](MLR125.md) | implemented | info | high | Bare Mobject() leaf added to the scene displays nothing | |
 | [MLR126](MLR126.md) | implemented | error | high | Literal opacity outside [0, 1] or negative stroke width | |

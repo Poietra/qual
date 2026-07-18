@@ -133,6 +133,64 @@ fn fade_out_is_a_remover_and_fade_in_an_introducer() {
 }
 
 #[test]
+fn opengl_only_meshes_carry_the_renderer_requirement_fact() {
+    // The MLR123 curation: `Object3D` / `Mesh` (renderer/shader.py) and
+    // the `OpenGLSurface` family (mobject/opengl/) are OpenGL-only scene
+    // objects — Scene.add diverts Object3D into Scene.meshes only under
+    // RendererType.OPENGL, and the Cairo camera's type_or_raise rejects
+    // every OpenGLMobject-rooted class (scene.py, camera/camera.py).
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for (id, kind) in [
+        ("manim.renderer.shader.Object3D", SymbolKind::Mobject),
+        ("manim.renderer.shader.Mesh", SymbolKind::Mobject),
+        ("manim.renderer.shader.FullScreenQuad", SymbolKind::Mobject),
+        (
+            "manim.mobject.opengl.opengl_surface.OpenGLSurface",
+            SymbolKind::Mobject,
+        ),
+        (
+            "manim.mobject.opengl.opengl_surface.OpenGLSurfaceGroup",
+            SymbolKind::Mobject,
+        ),
+        (
+            "manim.mobject.opengl.opengl_surface.OpenGLTexturedSurface",
+            SymbolKind::Mobject,
+        ),
+        (
+            "manim.mobject.opengl.opengl_three_dimensions.OpenGLSurfaceMesh",
+            SymbolKind::Vmobject,
+        ),
+    ] {
+        let entry = profile.symbol(id).unwrap_or_else(|| panic!("{id} curated"));
+        assert_eq!(entry.kind, kind, "{id}");
+        let compat = entry.renderer.as_ref().unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(compat.opengl_only_mesh, Some(true), "{id}");
+        // The mesh fact deliberately does not set `cairo: false`: the
+        // failure is display-time (MLR123's territory), so the generic
+        // call-site rule MLR107 must stay silent on constructions.
+        assert_eq!(compat.cairo, None, "{id}");
+        assert_eq!(compat.opengl, None, "{id}");
+    }
+    // These classes are not star-exported from `manim` in 0.20
+    // (manim/__init__.py omits the opengl_surface / shader modules).
+    for name in ["Object3D", "Mesh", "OpenGLSurface", "OpenGLSurfaceMesh"] {
+        assert!(profile.resolve_export(name).is_none(), "{name}");
+    }
+    // Cairo-capable 3D mobjects must never carry the mesh fact.
+    let surface = profile
+        .symbol("manim.mobject.three_d.three_dimensions.Surface")
+        .expect("Surface curated");
+    assert!(
+        surface
+            .renderer
+            .as_ref()
+            .and_then(|compat| compat.opengl_only_mesh)
+            .is_none(),
+        "Surface is Cairo-capable"
+    );
+}
+
+#[test]
 fn replacement_transform_declares_replacement() {
     let profile = knowledge::load(UPSTREAM).expect("load");
     let (_, entry) = profile
