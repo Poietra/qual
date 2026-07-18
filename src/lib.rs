@@ -9,6 +9,7 @@ pub mod cost;
 pub mod diagnostic;
 pub mod frontend;
 pub mod knowledge;
+pub mod render_order;
 pub mod reporting;
 pub mod rules;
 pub mod semantic;
