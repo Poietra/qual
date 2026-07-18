@@ -37,7 +37,7 @@ use serde_json::json;
 
 use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
 use crate::frontend::names::{collect_target_names, flatten_dotted};
-use crate::frontend::statements::{each_statement, function_def_at};
+use crate::frontend::statements::{each_statement, function_def_at, walk_certain_exprs};
 use crate::rules::base::{CameraKind, FixedAction, FixedKind, Rule, RuleContext};
 use crate::semantic::events::{Event, RendererRequirementKind};
 use crate::semantic::interpreter::SceneLifecycle;
@@ -310,7 +310,7 @@ fn first_certain_camera_use(
             _ => break 'stmts,
         };
         for expr in exprs {
-            walk_certain(expr, &mut |certain| {
+            walk_certain_exprs(expr, &mut |certain| {
                 if found.is_some() {
                     return;
                 }
@@ -369,111 +369,4 @@ fn binds_self(body: &[ast::Stmt]) -> bool {
         }
     });
     bound
-}
-
-/// Visits `expr` and the subexpressions that are certainly evaluated
-/// whenever `expr` is: skips lambda bodies (deferred), comprehensions
-/// (zero-iteration), conditional-expression branches, and short-circuit
-/// tails. Conservative by construction — anything skipped only means
-/// silence.
-fn walk_certain<'a>(expr: &'a ast::Expr, visit: &mut dyn FnMut(&'a ast::Expr)) {
-    visit(expr);
-    match expr {
-        // Only the first operand of a short-circuit chain is certain.
-        ast::Expr::BoolOp(inner) => {
-            if let Some(first) = inner.values.first() {
-                walk_certain(first, visit);
-            }
-        }
-        // Only the test of a conditional expression is certain.
-        ast::Expr::IfExp(inner) => walk_certain(&inner.test, visit),
-        // Lambda bodies are deferred; comprehension parts may run zero
-        // times. Both subtrees are skipped entirely, like leaves.
-        ast::Expr::Lambda(_)
-        | ast::Expr::ListComp(_)
-        | ast::Expr::SetComp(_)
-        | ast::Expr::DictComp(_)
-        | ast::Expr::GeneratorExp(_)
-        | ast::Expr::Constant(_)
-        | ast::Expr::Name(_) => {}
-        ast::Expr::NamedExpr(inner) => {
-            walk_certain(&inner.target, visit);
-            walk_certain(&inner.value, visit);
-        }
-        ast::Expr::BinOp(inner) => {
-            walk_certain(&inner.left, visit);
-            walk_certain(&inner.right, visit);
-        }
-        ast::Expr::UnaryOp(inner) => walk_certain(&inner.operand, visit),
-        ast::Expr::Dict(inner) => {
-            for key in inner.keys.iter().flatten() {
-                walk_certain(key, visit);
-            }
-            for value in &inner.values {
-                walk_certain(value, visit);
-            }
-        }
-        ast::Expr::Set(inner) => {
-            for element in &inner.elts {
-                walk_certain(element, visit);
-            }
-        }
-        ast::Expr::Await(inner) => walk_certain(&inner.value, visit),
-        ast::Expr::Yield(inner) => {
-            if let Some(value) = &inner.value {
-                walk_certain(value, visit);
-            }
-        }
-        ast::Expr::YieldFrom(inner) => walk_certain(&inner.value, visit),
-        ast::Expr::Compare(inner) => {
-            walk_certain(&inner.left, visit);
-            for comparator in &inner.comparators {
-                walk_certain(comparator, visit);
-            }
-        }
-        ast::Expr::Call(inner) => {
-            walk_certain(&inner.func, visit);
-            for argument in &inner.args {
-                walk_certain(argument, visit);
-            }
-            for keyword in &inner.keywords {
-                walk_certain(&keyword.value, visit);
-            }
-        }
-        ast::Expr::FormattedValue(inner) => {
-            walk_certain(&inner.value, visit);
-            if let Some(spec) = &inner.format_spec {
-                walk_certain(spec, visit);
-            }
-        }
-        ast::Expr::JoinedStr(inner) => {
-            for value in &inner.values {
-                walk_certain(value, visit);
-            }
-        }
-        ast::Expr::Attribute(inner) => walk_certain(&inner.value, visit),
-        ast::Expr::Subscript(inner) => {
-            walk_certain(&inner.value, visit);
-            walk_certain(&inner.slice, visit);
-        }
-        ast::Expr::Starred(inner) => walk_certain(&inner.value, visit),
-        ast::Expr::List(inner) => {
-            for element in &inner.elts {
-                walk_certain(element, visit);
-            }
-        }
-        ast::Expr::Tuple(inner) => {
-            for element in &inner.elts {
-                walk_certain(element, visit);
-            }
-        }
-        ast::Expr::Slice(inner) => {
-            for part in [&inner.lower, &inner.upper, &inner.step]
-                .into_iter()
-                .flatten()
-            {
-                walk_certain(part, visit);
-            }
-        }
-    }
 }

@@ -9,13 +9,14 @@
 
 use std::collections::BTreeMap;
 
-use rustpython_parser::ast::{self, Ranged};
+use rustpython_parser::ast;
 use serde_json::{Value, json};
 
 use crate::cost::estimator::{num_bounds_json, play_run_time};
 use crate::cost::thresholds::Threshold;
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::frontend::index::QualifiedCall;
+use crate::frontend::statements::{StatementRole, for_loop_with_body_statement};
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::values::Num;
 use crate::source::SourceFile;
@@ -151,52 +152,22 @@ fn child_stmts(stmt: &ast::Stmt) -> Option<Vec<&ast::Stmt>> {
     Some(children)
 }
 
-/// The innermost `for` loop whose body *directly* contains the play call
-/// as an expression statement (a play behind an `if` or in a helper does
-/// not run once per iteration provably).
+/// The `for` loop whose body *directly* contains the play call as a bare
+/// expression statement (a play behind an `if` or in a helper does not
+/// run once per iteration provably). Anchored on the canonical statement
+/// facts: the call's [`StatementRole::BareExpression`] fact names its
+/// enclosing statement, and [`for_loop_with_body_statement`] resolves the
+/// loop owning that statement.
 fn enclosing_direct_loop<'a>(
+    context: &RuleContext<'_>,
     file: &'a SourceFile,
     call: &QualifiedCall,
 ) -> Option<&'a ast::StmtFor> {
-    fn search<'a>(
-        stmts: &'a [ast::Stmt],
-        call: &QualifiedCall,
-        found: &mut Option<&'a ast::StmtFor>,
-    ) {
-        for stmt in stmts {
-            if found.is_some() {
-                return;
-            }
-            if let ast::Stmt::For(for_stmt) = stmt {
-                let direct = for_stmt.body.iter().any(|body_stmt| {
-                    matches!(
-                        body_stmt,
-                        ast::Stmt::Expr(expr) if expr.value.range() == call.call_range
-                    )
-                });
-                if direct {
-                    *found = Some(for_stmt);
-                    return;
-                }
-            }
-            match stmt {
-                ast::Stmt::FunctionDef(def) => search(&def.body, call, found),
-                ast::Stmt::AsyncFunctionDef(def) => search(&def.body, call, found),
-                ast::Stmt::ClassDef(def) => search(&def.body, call, found),
-                other => {
-                    if let Some(children) = child_stmts(other) {
-                        for child in children {
-                            search(std::slice::from_ref(child), call, found);
-                        }
-                    }
-                }
-            }
-        }
+    let fact = context.statement_facts().for_call(call)?;
+    if fact.role != StatementRole::BareExpression {
+        return None;
     }
-    let module = file.ast()?;
-    let mut found: Option<&ast::StmtFor> = None;
-    search(&module.body, call, &mut found);
-    found
+    for_loop_with_body_statement(file, fact.statement_range)
 }
 
 impl Rule for FixedCountLoopPlays {
@@ -222,7 +193,7 @@ impl Rule for FixedCountLoopPlays {
                 continue;
             }
             let file = context.sources().file(call.file);
-            let Some(for_stmt) = enclosing_direct_loop(file, call) else {
+            let Some(for_stmt) = enclosing_direct_loop(context, file, call) else {
                 continue;
             };
             if body_may_short_circuit(&for_stmt.body) {

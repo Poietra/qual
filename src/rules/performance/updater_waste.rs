@@ -4,11 +4,12 @@
 
 use std::collections::BTreeMap;
 
-use rustpython_parser::ast::{self, Ranged};
+use rustpython_parser::ast;
 use serde_json::{Value, json};
 
 use crate::cost::estimator::{num_bounds_json, sum_frames_across_profiles, sum_seconds};
 use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
+use crate::frontend::statements::{lambda_at, unique_function_def, walk_expr};
 use crate::render_order::{
     DisplayOrder, MovingReason, SuffixFact, inputs_at_play, moving_scope_at_play,
     moving_suffix_evidence,
@@ -309,10 +310,14 @@ fn absolute_setter(method: &str) -> bool {
         )
 }
 
-/// Whether `expr` mentions the name `param` anywhere.
+/// Whether `expr` mentions the name `param` anywhere. Uses the canonical
+/// exhaustive expression walk ([`walk_expr`]), which visits *every*
+/// subexpression (lambda defaults and bodies, comprehension parts,
+/// f-string parts included) — a hidden parameter read anywhere fails the
+/// frame-invariance proof.
 fn mentions_name(expr: &ast::Expr, param: &str) -> bool {
     let mut found = false;
-    visit_exprs(expr, &mut |inner| {
+    walk_expr(expr, &mut |inner| {
         if let ast::Expr::Name(name) = inner {
             if name.id.as_str() == param {
                 found = true;
@@ -320,125 +325,6 @@ fn mentions_name(expr: &ast::Expr, param: &str) -> bool {
         }
     });
     found
-}
-
-/// Pre-order walk over an expression tree. Deliberately exhaustive (no
-/// wildcard arm): [`mentions_name`] must see *every* subexpression, or a
-/// hidden parameter read could fake the frame-invariance proof.
-#[allow(
-    clippy::too_many_lines,
-    reason = "exhaustive expression visitor: one arm per AST variant"
-)]
-fn visit_exprs(expr: &ast::Expr, visit: &mut impl FnMut(&ast::Expr)) {
-    fn walk_all(exprs: &[ast::Expr], visit: &mut impl FnMut(&ast::Expr)) {
-        for inner in exprs {
-            visit_exprs(inner, visit);
-        }
-    }
-    fn walk_generators(generators: &[ast::Comprehension], visit: &mut impl FnMut(&ast::Expr)) {
-        for generator in generators {
-            visit_exprs(&generator.target, visit);
-            visit_exprs(&generator.iter, visit);
-            for test in &generator.ifs {
-                visit_exprs(test, visit);
-            }
-        }
-    }
-    visit(expr);
-    match expr {
-        ast::Expr::BoolOp(inner) => walk_all(&inner.values, visit),
-        ast::Expr::NamedExpr(inner) => {
-            visit_exprs(&inner.target, visit);
-            visit_exprs(&inner.value, visit);
-        }
-        ast::Expr::BinOp(inner) => {
-            visit_exprs(&inner.left, visit);
-            visit_exprs(&inner.right, visit);
-        }
-        ast::Expr::UnaryOp(inner) => visit_exprs(&inner.operand, visit),
-        ast::Expr::Lambda(inner) => {
-            // A nested lambda may capture the parameter (shadowing is
-            // ignored: over-reporting a mention only fails the proof).
-            for arg in inner
-                .args
-                .posonlyargs
-                .iter()
-                .chain(&inner.args.args)
-                .chain(&inner.args.kwonlyargs)
-            {
-                if let Some(default) = &arg.default {
-                    visit_exprs(default, visit);
-                }
-            }
-            visit_exprs(&inner.body, visit);
-        }
-        ast::Expr::IfExp(inner) => {
-            visit_exprs(&inner.test, visit);
-            visit_exprs(&inner.body, visit);
-            visit_exprs(&inner.orelse, visit);
-        }
-        ast::Expr::Dict(inner) => {
-            for key in inner.keys.iter().flatten() {
-                visit_exprs(key, visit);
-            }
-            walk_all(&inner.values, visit);
-        }
-        ast::Expr::Set(inner) => walk_all(&inner.elts, visit),
-        ast::Expr::ListComp(inner) => {
-            visit_exprs(&inner.elt, visit);
-            walk_generators(&inner.generators, visit);
-        }
-        ast::Expr::SetComp(inner) => {
-            visit_exprs(&inner.elt, visit);
-            walk_generators(&inner.generators, visit);
-        }
-        ast::Expr::DictComp(inner) => {
-            visit_exprs(&inner.key, visit);
-            visit_exprs(&inner.value, visit);
-            walk_generators(&inner.generators, visit);
-        }
-        ast::Expr::GeneratorExp(inner) => {
-            visit_exprs(&inner.elt, visit);
-            walk_generators(&inner.generators, visit);
-        }
-        ast::Expr::Await(inner) => visit_exprs(&inner.value, visit),
-        ast::Expr::Yield(inner) => {
-            if let Some(value) = &inner.value {
-                visit_exprs(value, visit);
-            }
-        }
-        ast::Expr::YieldFrom(inner) => visit_exprs(&inner.value, visit),
-        ast::Expr::Compare(inner) => {
-            visit_exprs(&inner.left, visit);
-            walk_all(&inner.comparators, visit);
-        }
-        ast::Expr::Call(inner) => {
-            visit_exprs(&inner.func, visit);
-            walk_all(&inner.args, visit);
-            for keyword in &inner.keywords {
-                visit_exprs(&keyword.value, visit);
-            }
-        }
-        ast::Expr::FormattedValue(inner) => visit_exprs(&inner.value, visit),
-        ast::Expr::JoinedStr(inner) => walk_all(&inner.values, visit),
-        ast::Expr::Attribute(inner) => visit_exprs(&inner.value, visit),
-        ast::Expr::Subscript(inner) => {
-            visit_exprs(&inner.value, visit);
-            visit_exprs(&inner.slice, visit);
-        }
-        ast::Expr::Starred(inner) => visit_exprs(&inner.value, visit),
-        ast::Expr::List(inner) => walk_all(&inner.elts, visit),
-        ast::Expr::Tuple(inner) => walk_all(&inner.elts, visit),
-        ast::Expr::Slice(inner) => {
-            for part in [&inner.lower, &inner.upper, &inner.step]
-                .into_iter()
-                .flatten()
-            {
-                visit_exprs(part, visit);
-            }
-        }
-        ast::Expr::Name(_) | ast::Expr::Constant(_) => {}
-    }
 }
 
 /// Verifies the strict absolute-setter shape of a callback body
@@ -507,36 +393,27 @@ fn expr_frame_invariant(expr: &ast::Expr, param: &str) -> bool {
     }
 }
 
-/// Resolves the registration's callback body and verifies the strict
+/// Resolves the registration's callback body via the canonical
+/// fact-anchored lookups ([`lambda_at`] for a lambda site,
+/// [`unique_function_def`] for a named callback) and verifies the strict
 /// frame-invariant shape. Only single-expression lambdas and
 /// single-statement `def` bodies (one expression statement or one
-/// `return`) are verified; anything larger is not proven.
+/// `return`) are verified; anything larger — or an absent / ambiguous
+/// definition — is not proven.
 fn callback_frame_invariant(file: &SourceFile, registration: &UpdaterRegistration) -> bool {
-    let Some(module) = file.ast() else {
-        return false;
-    };
     match &registration.fact.callback {
         CallbackRef::Lambda(site) => {
-            let range = site_range(site.start, site.end);
-            let mut verified = false;
-            for stmt in &module.body {
-                find_lambda(stmt, range, &mut |lambda| {
-                    let param = first_positional_param(&lambda.args);
-                    let Some(param) = param else {
-                        return;
-                    };
-                    verified = expr_frame_invariant(&lambda.body, &param);
-                });
-            }
-            verified
+            let Some(lambda) = lambda_at(file, site_range(site.start, site.end)) else {
+                return false;
+            };
+            let Some(param) = first_positional_param(&lambda.args) else {
+                return false;
+            };
+            expr_frame_invariant(&lambda.body, &param)
         }
         CallbackRef::Named(qualified) => {
             let name = qualified.rsplit('.').next().unwrap_or(qualified);
-            let mut matches: Vec<&ast::StmtFunctionDef> = Vec::new();
-            for stmt in &module.body {
-                collect_defs(stmt, name, &mut matches);
-            }
-            let [def] = matches.as_slice() else {
+            let Some(def) = unique_function_def(file, name) else {
                 return false;
             };
             let Some(param) = first_positional_param(&def.args) else {
@@ -562,122 +439,6 @@ fn first_positional_param(args: &ast::Arguments) -> Option<String> {
         .chain(&args.args)
         .next()
         .map(|arg| arg.def.arg.to_string())
-}
-
-/// Finds the lambda spanning exactly `range` anywhere under `stmt`.
-fn find_lambda(
-    stmt: &ast::Stmt,
-    range: rustpython_parser::text_size::TextRange,
-    visit: &mut impl FnMut(&ast::ExprLambda),
-) {
-    visit_stmt_exprs(stmt, &mut |expr| {
-        if let ast::Expr::Lambda(lambda) = expr {
-            if lambda.range() == range {
-                visit(lambda);
-            }
-        }
-    });
-}
-
-/// Collects `def` statements named `name` anywhere under `stmt`.
-fn collect_defs<'a>(stmt: &'a ast::Stmt, name: &str, out: &mut Vec<&'a ast::StmtFunctionDef>) {
-    if let ast::Stmt::FunctionDef(def) = stmt {
-        if def.name.as_str() == name {
-            out.push(def);
-        }
-    }
-    for child in stmt_children(stmt) {
-        collect_defs(child, name, out);
-    }
-}
-
-/// Direct child statements of a statement.
-fn stmt_children(stmt: &ast::Stmt) -> Vec<&ast::Stmt> {
-    match stmt {
-        ast::Stmt::FunctionDef(inner) => inner.body.iter().collect(),
-        ast::Stmt::AsyncFunctionDef(inner) => inner.body.iter().collect(),
-        ast::Stmt::ClassDef(inner) => inner.body.iter().collect(),
-        ast::Stmt::For(inner) => inner.body.iter().chain(&inner.orelse).collect(),
-        ast::Stmt::AsyncFor(inner) => inner.body.iter().chain(&inner.orelse).collect(),
-        ast::Stmt::While(inner) => inner.body.iter().chain(&inner.orelse).collect(),
-        ast::Stmt::If(inner) => inner.body.iter().chain(&inner.orelse).collect(),
-        ast::Stmt::With(inner) => inner.body.iter().collect(),
-        ast::Stmt::AsyncWith(inner) => inner.body.iter().collect(),
-        ast::Stmt::Try(inner) => inner
-            .body
-            .iter()
-            .chain(inner.handlers.iter().flat_map(|handler| {
-                let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                handler.body.iter()
-            }))
-            .chain(&inner.orelse)
-            .chain(&inner.finalbody)
-            .collect(),
-        ast::Stmt::Match(inner) => inner
-            .cases
-            .iter()
-            .flat_map(|case| case.body.iter())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// Walks every expression under a statement (statements and nested
-/// statements included).
-fn visit_stmt_exprs(stmt: &ast::Stmt, visit: &mut impl FnMut(&ast::Expr)) {
-    match stmt {
-        ast::Stmt::Expr(inner) => visit_exprs(&inner.value, visit),
-        ast::Stmt::Return(inner) => {
-            if let Some(value) = &inner.value {
-                visit_exprs(value, visit);
-            }
-        }
-        ast::Stmt::Assign(inner) => {
-            visit_exprs(&inner.value, visit);
-            inner.targets.iter().for_each(|t| visit_exprs(t, visit));
-        }
-        ast::Stmt::AugAssign(inner) => {
-            visit_exprs(&inner.value, visit);
-            visit_exprs(&inner.target, visit);
-        }
-        ast::Stmt::AnnAssign(inner) => {
-            if let Some(value) = &inner.value {
-                visit_exprs(value, visit);
-            }
-            visit_exprs(&inner.target, visit);
-        }
-        ast::Stmt::For(inner) => {
-            visit_exprs(&inner.iter, visit);
-            visit_exprs(&inner.target, visit);
-        }
-        ast::Stmt::While(inner) => visit_exprs(&inner.test, visit),
-        ast::Stmt::If(inner) => visit_exprs(&inner.test, visit),
-        ast::Stmt::With(inner) => {
-            for item in &inner.items {
-                visit_exprs(&item.context_expr, visit);
-            }
-        }
-        ast::Stmt::AsyncWith(inner) => {
-            for item in &inner.items {
-                visit_exprs(&item.context_expr, visit);
-            }
-        }
-        ast::Stmt::Raise(inner) => {
-            for part in [&inner.exc, &inner.cause].into_iter().flatten() {
-                visit_exprs(part, visit);
-            }
-        }
-        ast::Stmt::Assert(inner) => {
-            visit_exprs(&inner.test, visit);
-            if let Some(message) = &inner.msg {
-                visit_exprs(message, visit);
-            }
-        }
-        _ => {}
-    }
-    for child in stmt_children(stmt) {
-        visit_stmt_exprs(child, visit);
-    }
 }
 
 impl Rule for FrameInvariantDynamicWait {

@@ -45,7 +45,13 @@ fn args_for(root: &Path) -> CheckArgs {
 /// Runs `check` over a rule fixture directory and renders each diagnostic
 /// as `path:line:column rule severity confidence`, in pipeline order.
 fn observed(root: &Path) -> Vec<String> {
-    let report = check(&args_for(root)).unwrap();
+    observed_with(&args_for(root))
+}
+
+/// Like [`observed`], but with explicit `check` arguments (select-gating
+/// tests override `--select`).
+fn observed_with(args: &CheckArgs) -> Vec<String> {
+    let report = check(args).unwrap();
     for diagnostic in &report.diagnostics {
         assert!(
             !diagnostic.evidence.is_empty(),
@@ -169,6 +175,38 @@ fn mlp226_frame_varying_resource_key_golden() {
             "invalid.py:7:39 MLP226 warning high",
             "invalid.py:8:40 MLP201 warning high",
         ],
+    );
+}
+
+/// `--select MLP226` still computes the lifecycle and cost facts the rule
+/// declares (capability gating, DESIGN §6.3): the narrow select reports
+/// exactly the MLP226 rows of the golden set.
+#[test]
+fn mlp226_still_fires_under_a_narrow_select() {
+    let project = copy_fixture("MLP226");
+    let mut args = args_for(project.path());
+    args.select = vec!["MLP226".to_owned()];
+    assert_eq!(
+        observed_with(&args),
+        vec!["invalid.py:7:39 MLP226 warning high"]
+    );
+}
+
+/// `--select MLP201` must not resurrect the generic diagnostic at the
+/// span MLP226 owns: the enabled-rule closure keeps the superseding rule
+/// running even though its own diagnostics are filtered out afterwards,
+/// so the select-gated pipeline matches the pre-gating output exactly.
+#[test]
+fn selecting_a_superseded_rule_does_not_resurrect_it() {
+    let project = copy_fixture("MLP226");
+    let mut args = args_for(project.path());
+    args.select = vec!["MLP201".to_owned()];
+    assert_eq!(
+        observed_with(&args),
+        vec![
+            "branch.py:7:39 MLP201 warning high",
+            "invalid.py:8:40 MLP201 warning high",
+        ]
     );
 }
 

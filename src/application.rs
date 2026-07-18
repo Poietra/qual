@@ -156,13 +156,23 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         }
     }
 
-    let facts = compute_facts(&sources, &config, &profile);
+    // Capability gate (DESIGN §6.3 `required_capabilities`): resolve the
+    // enabled rule set first — select/ignore plus the supersession closure
+    // — and only build the fact layers that set can consume. Frontend
+    // facts are always built: name resolution and the project index feed
+    // every later stage and baseline scene attribution ([`baseline::
+    // SceneSpans`] reads the project index only; inline suppressions read
+    // no facts at all). The `cost` command computes everything via its own
+    // entry point.
+    let rules = registry::enabled_rules(&config.select, &config.ignore);
+    let needs = FactNeeds::for_capabilities(&registry::capability_union(&rules));
+    let facts = compute_facts(&sources, &config, &profile, needs);
     let context = RuleContext::new(&sources, &config)
         .with_knowledge(&profile)
         .with_frontend(facts.index, facts.calls)
         .with_lifecycle(facts.lifecycle)
         .with_cost(facts.cost);
-    for rule in registry::all_rules() {
+    for rule in rules {
         diagnostics.extend(rule.run(&context));
     }
 
@@ -308,26 +318,68 @@ struct ProjectFacts {
     cost: cost::CostFacts,
 }
 
-/// Runs the fixed fact-layer pipeline (DESIGN §5.1): frontend facts, then
-/// the lifecycle abstract interpreter over the discovered scenes, then the
-/// symbolic cost model. Rules only ever see the result.
+/// Which optional fact layers a run must compute. Frontend facts (project
+/// index, qualified calls, statement and binding facts) are always built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FactNeeds {
+    /// Run the lifecycle abstract interpreter.
+    lifecycle: bool,
+    /// Run the symbolic cost model (implies `lifecycle`: cost facts are
+    /// computed over the lifecycle scenes).
+    cost: bool,
+}
+
+impl FactNeeds {
+    /// Every fact layer (the `cost` command and tests use this).
+    const ALL: Self = Self {
+        lifecycle: true,
+        cost: true,
+    };
+
+    /// The layers implied by a capability union: `"lifecycle"` needs the
+    /// interpreter, `"cost-facts"` needs the cost model *and* the
+    /// interpreter it consumes. `"source"` / `"qualified-calls"` need
+    /// nothing beyond the always-built frontend facts.
+    fn for_capabilities(capabilities: &BTreeSet<&'static str>) -> Self {
+        let cost = capabilities.contains("cost-facts");
+        Self {
+            lifecycle: cost || capabilities.contains("lifecycle"),
+            cost,
+        }
+    }
+}
+
+/// Runs the fact-layer pipeline (DESIGN §5.1): frontend facts, then — when
+/// `needs` asks for them — the lifecycle abstract interpreter over the
+/// discovered scenes and the symbolic cost model. A skipped layer keeps
+/// its empty default, which the [`RuleContext`] contract reads as "not
+/// analyzed": rules consuming it stay silent, exactly what the select
+/// filter would enforce afterwards anyway. Rules only ever see the result.
 fn compute_facts(
     sources: &SourceManager,
     config: &ResolvedConfig,
     profile: &KnowledgeProfile,
+    needs: FactNeeds,
 ) -> ProjectFacts {
     let surface = manim_surface(profile);
     let facts = frontend::index::analyze(sources, &config.source_roots, &surface);
-    let lifecycle =
-        semantic::interpreter::analyze(sources, &facts.index, &facts.calls, Some(profile));
-    let cost = cost::CostFacts::compute_with_lifecycle(
-        sources,
-        &facts.index,
-        &facts.calls,
-        Some(profile),
-        &config.active_profiles,
-        &lifecycle,
-    );
+    let lifecycle = if needs.lifecycle {
+        semantic::interpreter::analyze(sources, &facts.index, &facts.calls, Some(profile))
+    } else {
+        semantic::interpreter::LifecycleFacts::default()
+    };
+    let cost = if needs.cost {
+        cost::CostFacts::compute_with_lifecycle(
+            sources,
+            &facts.index,
+            &facts.calls,
+            Some(profile),
+            &config.active_profiles,
+            &lifecycle,
+        )
+    } else {
+        cost::CostFacts::default()
+    };
     ProjectFacts {
         index: facts.index,
         calls: facts.calls,
@@ -361,7 +413,9 @@ pub fn run_cost(path: &Path, scene_filter: Option<&str>) -> Result<Execution, Ap
     for file in &files {
         sources.load_file(file);
     }
-    let facts = compute_facts(&sources, &config, &profile);
+    // The cost report reads lifecycle plays and cost contexts directly:
+    // always compute every layer here.
+    let facts = compute_facts(&sources, &config, &profile, FactNeeds::ALL);
     let output = render_cost_report(&sources, &config, &facts, scene_filter)?;
     Ok(Execution::success(output))
 }
@@ -1187,6 +1241,42 @@ pub fn run_config_at(start: &Path) -> Result<Execution, ApplicationError> {
 mod tests {
     use super::*;
     use crate::diagnostic::{Confidence, Severity, SourcePosition, SourceSpan};
+
+    /// Capability → fact-layer mapping (DESIGN §6.3): only `lifecycle`
+    /// and `cost-facts` demand layers beyond the always-built frontend
+    /// facts, and cost facts imply the lifecycle interpreter they are
+    /// computed over.
+    #[test]
+    fn fact_needs_follow_the_capability_union() {
+        let needs = |capabilities: &[&'static str]| {
+            FactNeeds::for_capabilities(&capabilities.iter().copied().collect())
+        };
+        assert_eq!(
+            needs(&[]),
+            FactNeeds {
+                lifecycle: false,
+                cost: false
+            }
+        );
+        assert_eq!(
+            needs(&["source", "qualified-calls"]),
+            FactNeeds {
+                lifecycle: false,
+                cost: false
+            }
+        );
+        assert_eq!(
+            needs(&["qualified-calls", "lifecycle"]),
+            FactNeeds {
+                lifecycle: true,
+                cost: false
+            }
+        );
+        // Cost facts are computed over the lifecycle scenes: requesting
+        // them always runs the interpreter too.
+        assert_eq!(needs(&["cost-facts"]), FactNeeds::ALL);
+        assert_eq!(needs(&["qualified-calls", "cost-facts"]), FactNeeds::ALL);
+    }
 
     fn span(line: usize, column: usize) -> SourceSpan {
         SourceSpan {

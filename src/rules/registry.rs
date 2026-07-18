@@ -48,6 +48,70 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     rules
 }
 
+/// Whether the selector configuration enables `rule_id`: some `select`
+/// selector matches it and no `ignore` selector does. This is the same
+/// predicate the post-run diagnostic filter applies, evaluated up front.
+fn selector_enabled(rule_id: &str, select: &[String], ignore: &[String]) -> bool {
+    let matches = |selectors: &[String]| {
+        selectors
+            .iter()
+            .any(|selector| crate::reporting::suppressions::selector_matches(selector, rule_id))
+    };
+    matches(select) && !matches(ignore)
+}
+
+/// The registered rules a `check` run must execute for the resolved
+/// `select` / `ignore` configuration: every selected-and-not-ignored
+/// rule, plus — transitively — every rule that `supersedes` one of them.
+///
+/// Supersession is part of diagnostic *production* (DESIGN §7.3: the
+/// specific diagnostic permanently replaces the generic one), so a
+/// superseding rule must still run when only the generic rule is
+/// selected; otherwise the generic diagnostic would resurrect at spans
+/// the specific rule owns. Per-file ignores never disable a rule
+/// globally — they only filter matching files — so they cannot shrink
+/// this set.
+#[must_use]
+pub fn enabled_rules(select: &[String], ignore: &[String]) -> Vec<Box<dyn Rule>> {
+    let all = all_rules();
+    let mut wanted: std::collections::BTreeSet<&'static str> = all
+        .iter()
+        .map(|rule| rule.metadata())
+        .filter(|metadata| selector_enabled(metadata.id, select, ignore))
+        .map(|metadata| metadata.id)
+        .collect();
+    // Fixpoint: pull in supersessors of already-wanted rules (supersedes
+    // chains are short, but the closure keeps the guarantee uniform).
+    loop {
+        let mut grew = false;
+        for rule in &all {
+            let metadata = rule.metadata();
+            if !wanted.contains(metadata.id)
+                && metadata.supersedes.iter().any(|id| wanted.contains(id))
+            {
+                wanted.insert(metadata.id);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    all.into_iter()
+        .filter(|rule| wanted.contains(rule.metadata().id))
+        .collect()
+}
+
+/// The union of `required_capabilities` over a rule set: the fact layers
+/// a run executing exactly these rules can ever consume.
+#[must_use]
+pub fn capability_union(rules: &[Box<dyn Rule>]) -> std::collections::BTreeSet<&'static str> {
+    rules
+        .iter()
+        .flat_map(|rule| rule.metadata().required_capabilities.iter().copied())
+        .collect()
+}
+
 fn metadata_index() -> &'static std::collections::BTreeMap<&'static str, &'static RuleMetadata> {
     static INDEX: std::sync::OnceLock<
         std::collections::BTreeMap<&'static str, &'static RuleMetadata>,
@@ -150,10 +214,81 @@ fn split_rule_id(rule_id: &str) -> Option<(&str, u16)> {
 mod tests {
     use super::*;
 
+    fn owned(selectors: &[&str]) -> Vec<String> {
+        selectors.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn ids(rules: &[Box<dyn Rule>]) -> Vec<&'static str> {
+        rules.iter().map(|rule| rule.metadata().id).collect()
+    }
+
     #[test]
     fn selector_validation_rejects_unknown_ids() {
         assert!(validate_selectors(&["MLC".to_owned()], "select").is_ok());
         assert!(validate_selectors(&["MLC101".to_owned()], "select").is_ok());
         assert!(validate_selectors(&["MLC999".to_owned()], "select").is_err());
+    }
+
+    /// The builtin default select (all four prefixes) enables every
+    /// registered rule, so a default run computes every fact layer.
+    #[test]
+    fn default_prefixes_enable_every_rule_and_every_capability() {
+        let select = owned(&RULE_PREFIXES);
+        let rules = enabled_rules(&select, &[]);
+        assert_eq!(rules.len(), all_rules().len());
+        let capabilities = capability_union(&rules);
+        for capability in ["qualified-calls", "lifecycle", "cost-facts"] {
+            assert!(capabilities.contains(capability), "missing {capability}");
+        }
+    }
+
+    /// A select matching no registered rule (`MLC000` is produced by the
+    /// pipeline, not a registered rule) yields an empty capability union:
+    /// the run skips the lifecycle interpreter and the cost model.
+    #[test]
+    fn pipeline_only_select_needs_no_fact_capability() {
+        let rules = enabled_rules(&owned(&["MLC000"]), &[]);
+        assert!(rules.is_empty());
+        assert!(capability_union(&rules).is_empty());
+    }
+
+    /// A narrow deep-capability select keeps its own requirements: MLP226
+    /// declares qualified-calls + cost-facts, so the union demands them.
+    #[test]
+    fn narrow_select_keeps_the_selected_rules_capabilities() {
+        let rules = enabled_rules(&owned(&["MLP226"]), &[]);
+        assert_eq!(ids(&rules), ["MLP226"]);
+        let capabilities = capability_union(&rules);
+        assert!(capabilities.contains("qualified-calls"));
+        assert!(capabilities.contains("cost-facts"));
+    }
+
+    /// Selecting only a superseded generic rule still runs its superseding
+    /// specific rule (supersession is diagnostic production, DESIGN §7.3):
+    /// `--select MLP201` must not resurrect MLP201 diagnostics at spans
+    /// MLP226 owns, so MLP226 joins the enabled set — and its capability
+    /// requirements join the union.
+    #[test]
+    fn superseding_rules_join_the_enabled_set_of_their_generic_rule() {
+        let rules = enabled_rules(&owned(&["MLP201"]), &[]);
+        let ids = ids(&rules);
+        assert!(ids.contains(&"MLP201"));
+        assert!(ids.contains(&"MLP226"), "supersessor must run: {ids:?}");
+        assert!(capability_union(&rules).contains("cost-facts"));
+    }
+
+    /// An `ignore`d rule stays out of the directly-selected set, but a
+    /// supersessor pulled back in via the closure still runs (its
+    /// diagnostics are filtered afterwards; its supersession effect is
+    /// not) — exactly the pre-gating pipeline behavior.
+    #[test]
+    fn ignored_supersessor_still_runs_for_its_superseded_rule() {
+        let rules = enabled_rules(&owned(&["MLP"]), &owned(&["MLP226"]));
+        assert!(ids(&rules).contains(&"MLP226"));
+        // Ignoring the generic rule as well removes both.
+        let rules = enabled_rules(&owned(&["MLP"]), &owned(&["MLP226", "MLP201"]));
+        let ids = ids(&rules);
+        assert!(!ids.contains(&"MLP201"));
+        assert!(!ids.contains(&"MLP226"));
     }
 }

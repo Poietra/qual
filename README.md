@@ -127,7 +127,12 @@ least one does; `2` — command-line, configuration, or internal error.
 Useful `check` options: `--select` / `--ignore`, `--min-confidence`,
 `--fail-level`, `--profile`, `--renderer`, `--fps`,
 `--resolution WIDTHxHEIGHT`, `--statistics`, and the baseline/fix options
-described below.
+described below. `--select` also narrows the analysis itself: fact layers
+no selected rule needs (the lifecycle interpreter, the symbolic cost
+model) are skipped, so a narrow select is faster than a full run. The
+reported diagnostics are identical either way — rules superseding a
+selected rule still run so a narrow select never resurrects a superseded
+diagnostic.
 
 `--format full` prints the explanation and machine-readable evidence under
 each diagnostic:

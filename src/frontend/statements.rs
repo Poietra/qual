@@ -99,6 +99,75 @@ pub fn each_statement<'a>(stmts: &'a [ast::Stmt], visit: &mut dyn FnMut(&'a ast:
     }
 }
 
+/// Depth-first statement walk over one class body's *instance scope*:
+/// enters direct methods and their nested functions but never a nested
+/// `class` body, whose `self` is a different instance. The visitor
+/// receives each statement together with the function nesting depth of
+/// its enclosing context (`0` = directly in the class body, `1` = inside
+/// a method, ...). A nested `class` statement is itself visited — its
+/// decorators and bases evaluate in the outer scope — but its body is
+/// skipped entirely.
+pub fn each_class_scope_statement<'a>(
+    body: &'a [ast::Stmt],
+    visit: &mut dyn FnMut(&'a ast::Stmt, u32),
+) {
+    fn walk<'a>(stmts: &'a [ast::Stmt], depth: u32, visit: &mut dyn FnMut(&'a ast::Stmt, u32)) {
+        for stmt in stmts {
+            visit(stmt, depth);
+            match stmt {
+                ast::Stmt::FunctionDef(inner) => walk(&inner.body, depth + 1, visit),
+                ast::Stmt::AsyncFunctionDef(inner) => walk(&inner.body, depth + 1, visit),
+                // A nested class owns a different `self`: never descend.
+                #[allow(clippy::match_same_arms, reason = "deliberate: never descend")]
+                ast::Stmt::ClassDef(_) => {}
+                ast::Stmt::If(inner) => {
+                    walk(&inner.body, depth, visit);
+                    walk(&inner.orelse, depth, visit);
+                }
+                ast::Stmt::While(inner) => {
+                    walk(&inner.body, depth, visit);
+                    walk(&inner.orelse, depth, visit);
+                }
+                ast::Stmt::For(inner) => {
+                    walk(&inner.body, depth, visit);
+                    walk(&inner.orelse, depth, visit);
+                }
+                ast::Stmt::AsyncFor(inner) => {
+                    walk(&inner.body, depth, visit);
+                    walk(&inner.orelse, depth, visit);
+                }
+                ast::Stmt::With(inner) => walk(&inner.body, depth, visit),
+                ast::Stmt::AsyncWith(inner) => walk(&inner.body, depth, visit),
+                ast::Stmt::Try(inner) => {
+                    walk(&inner.body, depth, visit);
+                    for handler in &inner.handlers {
+                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                        walk(&handler.body, depth, visit);
+                    }
+                    walk(&inner.orelse, depth, visit);
+                    walk(&inner.finalbody, depth, visit);
+                }
+                ast::Stmt::TryStar(inner) => {
+                    walk(&inner.body, depth, visit);
+                    for handler in &inner.handlers {
+                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                        walk(&handler.body, depth, visit);
+                    }
+                    walk(&inner.orelse, depth, visit);
+                    walk(&inner.finalbody, depth, visit);
+                }
+                ast::Stmt::Match(inner) => {
+                    for case in &inner.cases {
+                        walk(&case.body, depth, visit);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(body, 0, visit);
+}
+
 /// The expressions embedded directly in one statement. Compound bodies are
 /// reached by [`each_statement`], not here, so a nested statement's
 /// expressions are attributed to the nested statement.
@@ -347,6 +416,115 @@ fn walk_comprehensions<'a>(
     }
 }
 
+/// Certainty-annotated expression walk: visits `expr` and exactly the
+/// subexpressions that are certainly evaluated whenever `expr` is. Lambda
+/// bodies (deferred), comprehension parts (zero-iteration), conditional
+/// expression branches, and short-circuit tails are skipped entirely, like
+/// leaves. Conservative by construction — anything skipped only means a
+/// rule stays silent (DESIGN §15: no certainty from `Maybe`).
+#[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
+pub fn walk_certain_exprs<'a>(expr: &'a ast::Expr, visit: &mut dyn FnMut(&'a ast::Expr)) {
+    visit(expr);
+    match expr {
+        // Only the first operand of a short-circuit chain is certain.
+        ast::Expr::BoolOp(inner) => {
+            if let Some(first) = inner.values.first() {
+                walk_certain_exprs(first, visit);
+            }
+        }
+        // Only the test of a conditional expression is certain.
+        ast::Expr::IfExp(inner) => walk_certain_exprs(&inner.test, visit),
+        // Lambda bodies are deferred; comprehension parts may run zero
+        // times. Both subtrees are skipped entirely, like leaves.
+        ast::Expr::Lambda(_)
+        | ast::Expr::ListComp(_)
+        | ast::Expr::SetComp(_)
+        | ast::Expr::DictComp(_)
+        | ast::Expr::GeneratorExp(_)
+        | ast::Expr::Constant(_)
+        | ast::Expr::Name(_) => {}
+        ast::Expr::NamedExpr(inner) => {
+            walk_certain_exprs(&inner.target, visit);
+            walk_certain_exprs(&inner.value, visit);
+        }
+        ast::Expr::BinOp(inner) => {
+            walk_certain_exprs(&inner.left, visit);
+            walk_certain_exprs(&inner.right, visit);
+        }
+        ast::Expr::UnaryOp(inner) => walk_certain_exprs(&inner.operand, visit),
+        ast::Expr::Dict(inner) => {
+            for key in inner.keys.iter().flatten() {
+                walk_certain_exprs(key, visit);
+            }
+            for value in &inner.values {
+                walk_certain_exprs(value, visit);
+            }
+        }
+        ast::Expr::Set(inner) => {
+            for element in &inner.elts {
+                walk_certain_exprs(element, visit);
+            }
+        }
+        ast::Expr::Await(inner) => walk_certain_exprs(&inner.value, visit),
+        ast::Expr::Yield(inner) => {
+            if let Some(value) = &inner.value {
+                walk_certain_exprs(value, visit);
+            }
+        }
+        ast::Expr::YieldFrom(inner) => walk_certain_exprs(&inner.value, visit),
+        ast::Expr::Compare(inner) => {
+            walk_certain_exprs(&inner.left, visit);
+            for comparator in &inner.comparators {
+                walk_certain_exprs(comparator, visit);
+            }
+        }
+        ast::Expr::Call(inner) => {
+            walk_certain_exprs(&inner.func, visit);
+            for argument in &inner.args {
+                walk_certain_exprs(argument, visit);
+            }
+            for keyword in &inner.keywords {
+                walk_certain_exprs(&keyword.value, visit);
+            }
+        }
+        ast::Expr::FormattedValue(inner) => {
+            walk_certain_exprs(&inner.value, visit);
+            if let Some(spec) = &inner.format_spec {
+                walk_certain_exprs(spec, visit);
+            }
+        }
+        ast::Expr::JoinedStr(inner) => {
+            for value in &inner.values {
+                walk_certain_exprs(value, visit);
+            }
+        }
+        ast::Expr::Attribute(inner) => walk_certain_exprs(&inner.value, visit),
+        ast::Expr::Subscript(inner) => {
+            walk_certain_exprs(&inner.value, visit);
+            walk_certain_exprs(&inner.slice, visit);
+        }
+        ast::Expr::Starred(inner) => walk_certain_exprs(&inner.value, visit),
+        ast::Expr::List(inner) => {
+            for element in &inner.elts {
+                walk_certain_exprs(element, visit);
+            }
+        }
+        ast::Expr::Tuple(inner) => {
+            for element in &inner.elts {
+                walk_certain_exprs(element, visit);
+            }
+        }
+        ast::Expr::Slice(inner) => {
+            for part in [&inner.lower, &inner.upper, &inner.step]
+                .into_iter()
+                .flatten()
+            {
+                walk_certain_exprs(part, visit);
+            }
+        }
+    }
+}
+
 /// Visits every expression of a parsed file: each statement's direct
 /// expressions plus all nested subexpressions.
 fn each_expr_in_file<'a>(file: &'a SourceFile, visit: &mut dyn FnMut(&'a ast::Expr)) {
@@ -418,6 +596,28 @@ pub fn unique_function_def<'a>(
         [def] => Some(def),
         _ => None,
     }
+}
+
+/// The `for` statement whose *direct* loop body contains a statement
+/// spanning exactly `statement` in `file`, if any. Statement byte ranges
+/// are unique (a compound statement strictly contains its children), so
+/// at most one loop matches. `orelse` suites deliberately do not count:
+/// they run once, not per iteration.
+#[must_use]
+pub fn for_loop_with_body_statement(
+    file: &SourceFile,
+    statement: TextRange,
+) -> Option<&ast::StmtFor> {
+    let module = file.ast()?;
+    let mut found: Option<&ast::StmtFor> = None;
+    each_statement(&module.body, &mut |stmt| {
+        if let ast::Stmt::For(for_stmt) = stmt {
+            if for_stmt.body.iter().any(|child| child.range() == statement) {
+                found = Some(for_stmt);
+            }
+        }
+    });
+    found
 }
 
 /// The lambda expression spanning exactly `range` in `file`, if any.

@@ -10,8 +10,11 @@ use manim_lint::frontend::index::{
     ArgShape, AttributeRef, FrontendFacts, LiteralFact, ParamFact, ParamKind, QualifiedCall,
     ReceiverKind, analyze,
 };
-use manim_lint::frontend::statements::StatementRole;
+use manim_lint::frontend::statements::{
+    StatementRole, each_class_scope_statement, for_loop_with_body_statement, walk_certain_exprs,
+};
 use manim_lint::source::{FileId, SourceManager};
+use rustpython_parser::ast::{self, Ranged};
 
 const SCENE: &str = "manim.scene.scene.Scene";
 const SQUARE: &str = "manim.mobject.geometry.polygram.Square";
@@ -933,4 +936,130 @@ fn callee_facts_expose_dotted_chains_and_chained_methods() {
         open_call.callee_dotted.as_deref(),
         Some(&["open".to_owned()][..])
     );
+}
+
+// ---------------------------------------------------------------------------
+// Canonical traversal helpers (frontend::statements).
+// ---------------------------------------------------------------------------
+
+/// The class-scope walk enters direct methods and their nested functions
+/// (with the enclosing function depth), but never a nested `class` body:
+/// its `self` is a different instance.
+#[test]
+fn class_scope_walk_enters_methods_but_never_nested_class_bodies() {
+    let (sources, _) = load_inline(
+        "class_scope.py",
+        "\
+class Outer:
+    def method(self):
+        marker_method = 1
+        def inner(dt):
+            marker_inner = 1
+    class Nested:
+        def hidden(self):
+            marker_hidden = 1
+",
+    );
+    let id = file_id(&sources, "class_scope.py");
+    let module = sources.file(id).ast().expect("parsed");
+    let ast::Stmt::ClassDef(outer) = &module.body[0] else {
+        panic!("expected a class statement");
+    };
+
+    let mut defs: Vec<(String, u32)> = Vec::new();
+    let mut assigned: Vec<String> = Vec::new();
+    each_class_scope_statement(&outer.body, &mut |stmt, depth| match stmt {
+        ast::Stmt::FunctionDef(def) => defs.push((def.name.to_string(), depth)),
+        ast::Stmt::ClassDef(def) => defs.push((def.name.to_string(), depth)),
+        ast::Stmt::Assign(assign) => {
+            for target in &assign.targets {
+                if let ast::Expr::Name(name) = target {
+                    assigned.push(name.id.to_string());
+                }
+            }
+        }
+        _ => {}
+    });
+
+    // `method` and the nested `Nested` class statement sit at class-body
+    // depth 0; `inner` is nested inside a method (depth 1); `hidden`
+    // belongs to the nested class's scope and is never visited.
+    assert_eq!(
+        defs,
+        vec![
+            ("method".to_owned(), 0),
+            ("inner".to_owned(), 1),
+            ("Nested".to_owned(), 0),
+        ]
+    );
+    assert_eq!(
+        assigned,
+        vec!["marker_method".to_owned(), "marker_inner".to_owned()]
+    );
+}
+
+/// The certainty-annotated walk visits only subexpressions evaluated on
+/// every execution of the root: short-circuit tails, conditional
+/// branches, lambda bodies, and comprehension parts are skipped.
+#[test]
+fn certain_walk_skips_deferred_and_conditional_subtrees() {
+    let (sources, _) = load_inline(
+        "certain.py",
+        "certain() and tail()\nfirst() if test() else orelse()\n(lambda: deferred())\n[body() for x in iterable()]\n",
+    );
+    let id = file_id(&sources, "certain.py");
+    let module = sources.file(id).ast().expect("parsed");
+
+    let mut called: Vec<String> = Vec::new();
+    for stmt in &module.body {
+        let ast::Stmt::Expr(expr) = stmt else {
+            panic!("expression statements only");
+        };
+        walk_certain_exprs(&expr.value, &mut |certain| {
+            if let ast::Expr::Call(call) = certain {
+                if let ast::Expr::Name(name) = call.func.as_ref() {
+                    called.push(name.id.to_string());
+                }
+            }
+        });
+    }
+
+    // `tail` (short-circuit), `first` / `orelse` (branches), `deferred`
+    // (lambda body), and `body` / `iterable` (comprehension) are all
+    // uncertain; only `certain` and the conditional's `test` remain.
+    assert_eq!(called, vec!["certain".to_owned(), "test".to_owned()]);
+}
+
+/// `for_loop_with_body_statement` resolves the loop whose *direct* body
+/// owns a statement; `orelse` suites and nested positions do not count.
+#[test]
+fn for_loop_lookup_matches_direct_body_statements_only() {
+    let (sources, facts) = load_inline(
+        "loops.py",
+        "\
+for i in range(4):
+    direct = Square()
+else:
+    in_orelse = Square()
+
+standalone = Square()
+",
+    );
+    let id = file_id(&sources, "loops.py");
+    let file = sources.file(id);
+
+    let statement_of = |line: usize| {
+        facts
+            .calls
+            .calls_in_file(id)
+            .find(|call| file.span_of_range(call.call_range).start.line == line)
+            .and_then(|call| facts.calls.statements.for_call(call))
+            .map(|fact| fact.statement_range)
+            .expect("statement fact")
+    };
+
+    let in_body = for_loop_with_body_statement(file, statement_of(2)).expect("loop found");
+    assert_eq!(file.slice(in_body.iter.range()), "range(4)");
+    assert!(for_loop_with_body_statement(file, statement_of(4)).is_none());
+    assert!(for_loop_with_body_statement(file, statement_of(6)).is_none());
 }

@@ -448,3 +448,24 @@ fn smoke_fixture_project_checks_end_to_end() {
     assert_eq!(report.config.default_profile, "preview");
     assert_eq!(report.config.active_profiles[0].pixel_width, 854);
 }
+
+/// `--select MLC000` enables no registered rule, so the run's capability
+/// union is empty and the pipeline skips the lifecycle interpreter and
+/// the cost model entirely (the enabled-rule/capability gate; see
+/// `rules::registry` and `application` unit tests). Pipeline diagnostics
+/// are unaffected: the parse error still surfaces and still reaches
+/// fail-level, while everything else — the MLC001 suppression warning
+/// included — is filtered out.
+#[test]
+fn select_mlc000_reports_parse_errors_only() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path());
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.select = vec!["MLC000".to_owned()];
+    let report = check(&args).unwrap();
+
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(report.diagnostics[0].rule_id, "MLC000");
+    assert_eq!(report.diagnostics[0].path, "scenes/bad.py");
+    assert_eq!(report.exit, ExitStatus::Failure);
+}

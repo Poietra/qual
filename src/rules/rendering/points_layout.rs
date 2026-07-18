@@ -24,7 +24,9 @@ use serde_json::json;
 
 use crate::config::model::Renderer;
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
-use crate::frontend::statements::{class_def_at, statement_exprs, walk_expr};
+use crate::frontend::statements::{
+    class_def_at, each_class_scope_statement, statement_exprs, walk_expr,
+};
 use crate::rules::base::{Rule, RuleContext};
 
 use super::{VmClass, build_diagnostic, renderer_profile_names};
@@ -133,98 +135,38 @@ impl Rule for FixedPointLayoutAssumption {
     }
 }
 
-/// Collects layout assumptions from a class body: direct methods and
+/// Collects layout assumptions from a class body via the canonical
+/// class-scope walk ([`each_class_scope_statement`]): direct methods and
 /// their nested functions, but never nested `class` bodies (their `self`
 /// is a different instance). A nested function re-binding a parameter
-/// named `self` poisons the whole class (conservative silence).
+/// named `self` (any function at depth ≥ 1) poisons the whole class —
+/// conservative silence.
 fn class_body_assumptions(body: &[ast::Stmt]) -> Vec<LayoutAssumption> {
-    fn walk_stmts(
-        stmts: &[ast::Stmt],
-        function_depth: u32,
-        poisoned: &mut bool,
-        assumptions: &mut Vec<LayoutAssumption>,
-    ) {
-        for stmt in stmts {
-            if *poisoned {
-                return;
-            }
-            for expr in statement_exprs(stmt) {
-                walk_expr(expr, &mut |candidate| {
-                    if let Some(assumption) = layout_assumption(candidate) {
-                        assumptions.push(assumption);
-                    }
-                });
-            }
-            match stmt {
-                ast::Stmt::FunctionDef(def) => {
-                    if function_depth > 0 && binds_self_param(&def.args) {
-                        *poisoned = true;
-                        return;
-                    }
-                    walk_stmts(&def.body, function_depth + 1, poisoned, assumptions);
-                }
-                ast::Stmt::AsyncFunctionDef(def) => {
-                    if function_depth > 0 && binds_self_param(&def.args) {
-                        *poisoned = true;
-                        return;
-                    }
-                    walk_stmts(&def.body, function_depth + 1, poisoned, assumptions);
-                }
-                // Nested classes own a different `self`.
-                #[allow(clippy::match_same_arms, reason = "deliberate: never descend")]
-                ast::Stmt::ClassDef(_) => {}
-                ast::Stmt::If(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::While(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::For(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::AsyncFor(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::With(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::AsyncWith(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::Try(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    for handler in &inner.handlers {
-                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                        walk_stmts(&handler.body, function_depth, poisoned, assumptions);
-                    }
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.finalbody, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::TryStar(inner) => {
-                    walk_stmts(&inner.body, function_depth, poisoned, assumptions);
-                    for handler in &inner.handlers {
-                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                        walk_stmts(&handler.body, function_depth, poisoned, assumptions);
-                    }
-                    walk_stmts(&inner.orelse, function_depth, poisoned, assumptions);
-                    walk_stmts(&inner.finalbody, function_depth, poisoned, assumptions);
-                }
-                ast::Stmt::Match(inner) => {
-                    for case in &inner.cases {
-                        walk_stmts(&case.body, function_depth, poisoned, assumptions);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
     let mut assumptions = Vec::new();
     let mut poisoned = false;
-    walk_stmts(body, 0, &mut poisoned, &mut assumptions);
+    each_class_scope_statement(body, &mut |stmt, depth| {
+        if poisoned {
+            return;
+        }
+        match stmt {
+            ast::Stmt::FunctionDef(def) if depth > 0 && binds_self_param(&def.args) => {
+                poisoned = true;
+                return;
+            }
+            ast::Stmt::AsyncFunctionDef(def) if depth > 0 && binds_self_param(&def.args) => {
+                poisoned = true;
+                return;
+            }
+            _ => {}
+        }
+        for expr in statement_exprs(stmt) {
+            walk_expr(expr, &mut |candidate| {
+                if let Some(assumption) = layout_assumption(candidate) {
+                    assumptions.push(assumption);
+                }
+            });
+        }
+    });
     if poisoned { Vec::new() } else { assumptions }
 }
 
