@@ -18,19 +18,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rustpython_parser::ast;
 use serde_json::json;
 
 use crate::config::model::Renderer;
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::frontend::index::{ArgShape, LiteralFact, QualifiedCall, ReceiverKind};
+use crate::frontend::statements::FileBindingFacts;
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::interpreter::CameraKind;
 use crate::source::SourceFile;
 
 use super::{
-    VmClass, build_diagnostic, collect_parameter_names, collect_target_names, each_statement,
-    renderer_profile_names, resolved_method_for_call, short_name,
+    VmClass, build_diagnostic, renderer_profile_names, resolved_method_for_call, short_name,
 };
 
 /// The canonical id of the curated `OUT` direction constant.
@@ -77,7 +76,6 @@ impl Rule for ZShiftForStacking {
         if standard_scenes.is_empty() {
             return Vec::new();
         }
-        let mut out_names: BTreeMap<crate::source::FileId, BTreeSet<String>> = BTreeMap::new();
         let mut diagnostics = Vec::new();
         for call in &context.qualified_calls().calls {
             let Some(class_name) = call.context.class_name.as_deref() else {
@@ -87,10 +85,10 @@ impl Rule for ZShiftForStacking {
                 continue;
             }
             let file = context.sources().file(call.file);
-            let names = out_names
-                .entry(call.file)
-                .or_insert_with(|| manim_out_names(file));
-            let Some(written) = z_stacking_use(profile, index, file, call, names) else {
+            let Some(bindings) = context.binding_facts().file(call.file) else {
+                continue;
+            };
+            let Some(written) = z_stacking_use(profile, index, file, call, bindings) else {
                 continue;
             };
             let mut evidence = BTreeMap::new();
@@ -143,7 +141,7 @@ fn z_stacking_use(
     index: &crate::frontend::index::ProjectIndex,
     file: &SourceFile,
     call: &QualifiedCall,
-    out_names: &BTreeSet<String>,
+    bindings: &FileBindingFacts,
 ) -> Option<ZStackingUse> {
     let ReceiverKind::KnownInstance(kind) = &call.receiver else {
         return None;
@@ -164,7 +162,7 @@ fn z_stacking_use(
     if let Some((canonical, _)) = resolved_method_for_call(profile, call) {
         if canonical.starts_with("manim.mobject.") && short_name(&canonical) == "shift" {
             let is_out = match &argument.shape {
-                ArgShape::Name => out_names.contains(file.slice(argument.range)),
+                ArgShape::Name => is_manim_out_name(bindings, file.slice(argument.range)),
                 ArgShape::Attribute(reference) => {
                     reference.candidates.len() == 1
                         && reference.candidates.iter().next().map(String::as_str)
@@ -204,113 +202,17 @@ fn z_stacking_use(
     })
 }
 
-/// Local names that definitely mean `manim.constants.OUT` in this file:
-/// bound by `from manim import OUT [as alias]` (or usable through
-/// `from manim import *`) and never re-bound by anything else. Any
-/// non-manim star import distrusts everything.
-#[allow(clippy::too_many_lines, reason = "one arm per binding statement kind")]
-fn manim_out_names(file: &SourceFile) -> BTreeSet<String> {
-    let Some(module) = file.ast() else {
-        return BTreeSet::new();
-    };
-    let mut out_aliases: BTreeSet<String> = BTreeSet::new();
-    let mut has_manim_star = false;
-    let mut foreign_star = false;
-    let mut other_bound: BTreeSet<String> = BTreeSet::new();
-    each_statement(&module.body, &mut |stmt| match stmt {
-        ast::Stmt::Assign(assign) => {
-            for target in &assign.targets {
-                collect_target_names(target, &mut other_bound);
-            }
-        }
-        ast::Stmt::AnnAssign(assign) => collect_target_names(&assign.target, &mut other_bound),
-        ast::Stmt::AugAssign(assign) => collect_target_names(&assign.target, &mut other_bound),
-        ast::Stmt::For(inner) => collect_target_names(&inner.target, &mut other_bound),
-        ast::Stmt::AsyncFor(inner) => collect_target_names(&inner.target, &mut other_bound),
-        ast::Stmt::With(inner) => {
-            for item in &inner.items {
-                if let Some(vars) = &item.optional_vars {
-                    collect_target_names(vars, &mut other_bound);
-                }
-            }
-        }
-        ast::Stmt::AsyncWith(inner) => {
-            for item in &inner.items {
-                if let Some(vars) = &item.optional_vars {
-                    collect_target_names(vars, &mut other_bound);
-                }
-            }
-        }
-        ast::Stmt::FunctionDef(def) => {
-            other_bound.insert(def.name.to_string());
-            collect_parameter_names(&def.args, &mut other_bound);
-        }
-        ast::Stmt::AsyncFunctionDef(def) => {
-            other_bound.insert(def.name.to_string());
-            collect_parameter_names(&def.args, &mut other_bound);
-        }
-        ast::Stmt::ClassDef(def) => {
-            other_bound.insert(def.name.to_string());
-        }
-        ast::Stmt::Import(import) => {
-            for alias in &import.names {
-                let bound = alias.asname.as_ref().map_or_else(
-                    || {
-                        alias
-                            .name
-                            .split('.')
-                            .next()
-                            .unwrap_or(alias.name.as_str())
-                            .to_owned()
-                    },
-                    std::string::ToString::to_string,
-                );
-                other_bound.insert(bound);
-            }
-        }
-        ast::Stmt::ImportFrom(import) => {
-            let is_plain_manim = import.module.as_deref() == Some("manim")
-                && import.level.map_or(0, |level| level.to_usize()) == 0;
-            for alias in &import.names {
-                if alias.name.as_str() == "*" {
-                    if is_plain_manim {
-                        has_manim_star = true;
-                    } else {
-                        foreign_star = true;
-                    }
-                    continue;
-                }
-                let bound = alias
-                    .asname
-                    .as_ref()
-                    .map_or_else(|| alias.name.to_string(), std::string::ToString::to_string);
-                if is_plain_manim && alias.name.as_str() == "OUT" {
-                    out_aliases.insert(bound);
-                } else {
-                    other_bound.insert(bound);
-                }
-            }
-        }
-        ast::Stmt::Global(inner) => {
-            for name in &inner.names {
-                other_bound.insert(name.to_string());
-            }
-        }
-        ast::Stmt::Nonlocal(inner) => {
-            for name in &inner.names {
-                other_bound.insert(name.to_string());
-            }
-        }
-        _ => {}
-    });
-    if foreign_star {
-        return BTreeSet::new();
+/// Whether `name` definitely means `manim.constants.OUT` in this file:
+/// bound by `from manim import OUT [as alias]` (or reaching `OUT` through
+/// `from manim import *`) and never re-bound by anything else (frontend
+/// binding facts). Any non-manim star import distrusts everything.
+fn is_manim_out_name(bindings: &FileBindingFacts, name: &str) -> bool {
+    if bindings.has_star_other_than("manim") || bindings.is_poisoned(name) {
+        return false;
     }
-    if has_manim_star {
-        out_aliases.insert("OUT".to_owned());
+    match bindings.import_target(name) {
+        Some("manim.OUT") => true,
+        Some(_) => false,
+        None => name == "OUT" && bindings.has_star_from("manim"),
     }
-    out_aliases
-        .into_iter()
-        .filter(|name| !other_bound.contains(name))
-        .collect()
 }

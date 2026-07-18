@@ -10,6 +10,7 @@ use manim_lint::frontend::index::{
     ArgShape, AttributeRef, FrontendFacts, LiteralFact, ParamFact, ParamKind, QualifiedCall,
     ReceiverKind, analyze,
 };
+use manim_lint::frontend::statements::StatementRole;
 use manim_lint::source::{FileId, SourceManager};
 
 const SCENE: &str = "manim.scene.scene.Scene";
@@ -747,5 +748,189 @@ fn tuple_and_list_displays_yield_element_literals() {
     assert_eq!(
         plot.arguments[4].literal, None,
         "starred elements void the fact"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Statement facts (frontend::statements::StatementFacts).
+// ---------------------------------------------------------------------------
+
+/// The (line, role) of every `Square(...)` call in the roles fixture.
+#[test]
+fn statement_facts_classify_call_roles_including_nested_statements() {
+    let (sources, facts) = load(&["statement_roles.py"]);
+    let id = file_id(&sources, "statement_roles.py");
+    let file = sources.file(id);
+
+    let mut roles: Vec<(usize, StatementRole)> = facts
+        .calls
+        .calls_in_file(id)
+        .filter(|call| file.slice(call.callee_range) == "Square")
+        .map(|call| {
+            let fact = facts
+                .calls
+                .statements
+                .for_call(call)
+                .expect("every call has a statement fact");
+            let line = file.span_of_range(call.call_range).start.line;
+            (line, fact.role.clone())
+        })
+        .collect();
+    roles.sort_by_key(|(line, _)| *line);
+
+    assert_eq!(
+        roles,
+        vec![
+            (8, StatementRole::BareExpression),
+            (
+                10,
+                StatementRole::AssignmentRhs {
+                    target: Some("sq".to_owned()),
+                },
+            ),
+            // Chained assignment: no single plain-name target.
+            (12, StatementRole::AssignmentRhs { target: None }),
+            (16, StatementRole::ReturnValue),
+            (24, StatementRole::WithContext),
+            // The `if` test is not a bare expression statement.
+            (27, StatementRole::Other),
+            // The call inside the `if` body anchors to its own (nested)
+            // statement, not the enclosing `if`.
+            (28, StatementRole::BareExpression),
+            (
+                30,
+                StatementRole::AssignmentRhs {
+                    target: Some("total".to_owned()),
+                },
+            ),
+            // The nested constructor argument is not the assignment RHS.
+            (31, StatementRole::Other),
+        ]
+    );
+}
+
+#[test]
+fn statement_facts_span_whole_multi_line_statements() {
+    let (sources, facts) = load(&["statement_roles.py"]);
+    let id = file_id(&sources, "statement_roles.py");
+    let file = sources.file(id);
+
+    // The nested call on line 31 sits inside the assignment statement
+    // spanning lines 30-32.
+    let nested = facts
+        .calls
+        .calls_in_file(id)
+        .find(|call| file.span_of_range(call.call_range).start.line == 31)
+        .expect("nested constructor call");
+    let fact = facts.calls.statements.for_call(nested).expect("fact");
+    let span = file.span_of_range(fact.statement_range);
+    assert_eq!(span.start.line, 30);
+    assert_eq!(span.end.line, 32);
+
+    // Decorator calls anchor to the decorated `def` statement (whose AST
+    // range starts at the `def` keyword, after the decorator list).
+    let decorator = single_call(&sources, &facts, "statement_roles.py", "wrap");
+    let fact = facts.calls.statements.for_call(decorator).expect("fact");
+    assert_eq!(fact.role, StatementRole::Decorator);
+    let span = file.span_of_range(fact.statement_range);
+    assert_eq!(span.start.line, 20);
+    assert_eq!(span.end.line, 21);
+}
+
+// ---------------------------------------------------------------------------
+// Binding facts (frontend::statements::BindingFacts).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn binding_facts_resolve_canonical_paths_through_aliases() {
+    let (sources, facts) = load(&["binding_facts.py"]);
+    let id = file_id(&sources, "binding_facts.py");
+    let bindings = facts.calls.bindings.file(id).expect("parsed file");
+
+    // `import numpy as np` + `np.random.seed` → canonical dotted path.
+    let parts: Vec<String> = ["np", "random", "seed"]
+        .iter()
+        .map(|part| (*part).to_owned())
+        .collect();
+    assert_eq!(
+        bindings.resolve_parts(&parts).as_deref(),
+        Some("numpy.random.seed")
+    );
+
+    // `from math import inf as INF` → `math.inf` under the alias.
+    assert_eq!(bindings.import_target("INF"), Some("math.inf"));
+    assert_eq!(
+        bindings.resolve_parts(&["INF".to_owned()]).as_deref(),
+        Some("math.inf")
+    );
+
+    assert!(bindings.has_star_from("manim"));
+    assert!(!bindings.has_star_other_than("manim"));
+}
+
+#[test]
+fn binding_facts_poison_rebound_names_everywhere() {
+    let (sources, facts) = load(&["binding_facts.py"]);
+    let id = file_id(&sources, "binding_facts.py");
+    let bindings = facts.calls.bindings.file(id).expect("parsed file");
+
+    // `nan = 3.0` poisons the `from math import nan` binding.
+    assert!(bindings.is_poisoned("nan"));
+    assert!(bindings.is_statement_assigned("nan"));
+    assert_eq!(bindings.import_target("nan"), None);
+
+    // A def parameter named `time` poisons the `import time` binding.
+    assert!(bindings.is_poisoned("time"));
+    assert_eq!(bindings.import_target("time"), None);
+    assert_eq!(bindings.resolve_parts(&["time".to_owned()]), None);
+
+    // A lambda parameter poisons the imported `urlopen`.
+    assert!(bindings.is_poisoned("urlopen"));
+    assert_eq!(bindings.import_target("urlopen"), None);
+
+    // Walrus targets are assignment bindings.
+    assert!(bindings.is_poisoned("scale"));
+    assert!(bindings.is_statement_assigned("scale"));
+
+    // Untouched names stay trusted / bare.
+    assert_eq!(bindings.import_target("np"), Some("numpy"));
+    assert!(bindings.is_unshadowed_bare("float"));
+    assert!(!bindings.is_unshadowed_bare("nan"));
+
+    // Statement-level binding counts: `nan` is bound by its import and by
+    // the assignment; `INF` only by its import.
+    assert_eq!(bindings.binding_statement_count("nan"), 2);
+    assert_eq!(bindings.binding_statement_count("INF"), 1);
+    assert_eq!(bindings.binding_statement_count("np"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Callee facts (dotted chains and call-chained methods).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn callee_facts_expose_dotted_chains_and_chained_methods() {
+    let (sources, facts) = load(&["binding_facts.py"]);
+
+    let seed = single_call(&sources, &facts, "binding_facts.py", "np.random.seed");
+    assert_eq!(
+        seed.callee_dotted.as_deref(),
+        Some(&["np".to_owned(), "random".to_owned(), "seed".to_owned()][..])
+    );
+    assert_eq!(seed.callee_chained, None);
+
+    // `open("data.txt").read_text()`: the outer call records the chained
+    // method and the inner call's fact index.
+    let open_call = single_call(&sources, &facts, "binding_facts.py", "open");
+    let chained = facts
+        .calls
+        .calls_in_file(file_id(&sources, "binding_facts.py"))
+        .find_map(|call| call.callee_chained.as_ref())
+        .expect("chained callee fact");
+    assert_eq!(chained.method, "read_text");
+    assert_eq!(&facts.calls.calls[chained.inner], open_call);
+    assert_eq!(
+        open_call.callee_dotted.as_deref(),
+        Some(&["open".to_owned()][..])
     );
 }

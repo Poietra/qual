@@ -53,7 +53,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rustpython_parser::Tok;
-use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 use serde_json::{Value, json};
 
@@ -64,9 +63,10 @@ use crate::diagnostic::{
 use crate::frontend::index::{
     ArgShape, CallArgument, LiteralFact, ProjectIndex, QualifiedCall, ReceiverKind,
 };
+use crate::frontend::statements::{FileBindingFacts, StatementRole};
 use crate::knowledge::{AcceptedTarget, KnowledgeProfile, SymbolEntry, SymbolKind};
 use crate::rules::base::{Rule, RuleContext};
-use crate::source::{FileId, SourceFile};
+use crate::source::SourceFile;
 
 /// Every implemented rendering rule, in rule-ID order.
 ///
@@ -401,268 +401,18 @@ fn closing_quote_len(slice: &str) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// AST-anchored helpers (fact-layer debt).
-//
-// These walks exist because a needed fact is not in `QualifiedCallFacts`
-// yet: statement position (bare expression statements for `MLR117`) and
-// module-level name bindings (`math.inf` aliases and builtin shadowing for
-// `MLR106`). They are anchored per file and kept private here.
+// MLR106 name facts over the frontend binding layer.
 // ---------------------------------------------------------------------------
 
-/// Depth-first visit over every statement of a module, entering all
-/// compound-statement bodies.
-pub(crate) fn each_statement<'a>(stmts: &'a [ast::Stmt], visit: &mut dyn FnMut(&'a ast::Stmt)) {
-    for stmt in stmts {
-        visit(stmt);
-        match stmt {
-            ast::Stmt::FunctionDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::AsyncFunctionDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::ClassDef(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::If(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::While(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::For(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::AsyncFor(inner) => {
-                each_statement(&inner.body, visit);
-                each_statement(&inner.orelse, visit);
-            }
-            ast::Stmt::With(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::AsyncWith(inner) => each_statement(&inner.body, visit),
-            ast::Stmt::Try(inner) => {
-                each_statement(&inner.body, visit);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    each_statement(&handler.body, visit);
-                }
-                each_statement(&inner.orelse, visit);
-                each_statement(&inner.finalbody, visit);
-            }
-            ast::Stmt::TryStar(inner) => {
-                each_statement(&inner.body, visit);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    each_statement(&handler.body, visit);
-                }
-                each_statement(&inner.orelse, visit);
-                each_statement(&inner.finalbody, visit);
-            }
-            ast::Stmt::Match(inner) => {
-                for case in &inner.cases {
-                    each_statement(&case.body, visit);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Byte ranges of every call that is a whole bare expression statement
-/// (`f(...)` on its own line, not a `with` context, not assigned, not
-/// passed on). Needed by `MLR117`; statement position is fact-layer debt.
-fn bare_expression_call_ranges(file: &SourceFile) -> BTreeSet<(usize, usize)> {
-    let mut ranges = BTreeSet::new();
-    if let Some(module) = file.ast() {
-        each_statement(&module.body, &mut |stmt| {
-            if let ast::Stmt::Expr(expr) = stmt {
-                if let ast::Expr::Call(call) = expr.value.as_ref() {
-                    let range = call.range();
-                    ranges.insert((usize::from(range.start()), usize::from(range.end())));
-                }
-            }
-        });
-    }
-    ranges
-}
-
-/// Collects assignment-like target names into `names`.
-fn collect_target_names(target: &ast::Expr, names: &mut BTreeSet<String>) {
-    match target {
-        ast::Expr::Name(name) => {
-            names.insert(name.id.to_string());
-        }
-        ast::Expr::Tuple(tuple) => {
-            for element in &tuple.elts {
-                collect_target_names(element, names);
-            }
-        }
-        ast::Expr::List(list) => {
-            for element in &list.elts {
-                collect_target_names(element, names);
-            }
-        }
-        ast::Expr::Starred(starred) => collect_target_names(&starred.value, names),
-        _ => {}
-    }
-}
-
-/// Names bound anywhere in a file by statements that are not the
-/// `from math import inf/nan` shape (assignments, defs, classes, imports,
-/// loop targets, `with ... as`, parameters, `global`/`nonlocal`).
-///
-/// Used conservatively by `MLR106`: a name in this set can never be
-/// trusted to still mean `math.inf` / builtin `float`.
-#[allow(clippy::too_many_lines, reason = "one arm per binding statement kind")]
-fn non_math_bound_names(file: &SourceFile) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let Some(module) = file.ast() else {
-        return names;
-    };
-    each_statement(&module.body, &mut |stmt| match stmt {
-        ast::Stmt::Assign(assign) => {
-            for target in &assign.targets {
-                collect_target_names(target, &mut names);
-            }
-        }
-        ast::Stmt::AnnAssign(assign) => collect_target_names(&assign.target, &mut names),
-        ast::Stmt::AugAssign(assign) => collect_target_names(&assign.target, &mut names),
-        ast::Stmt::For(inner) => collect_target_names(&inner.target, &mut names),
-        ast::Stmt::AsyncFor(inner) => collect_target_names(&inner.target, &mut names),
-        ast::Stmt::With(inner) => {
-            for item in &inner.items {
-                if let Some(vars) = &item.optional_vars {
-                    collect_target_names(vars, &mut names);
-                }
-            }
-        }
-        ast::Stmt::AsyncWith(inner) => {
-            for item in &inner.items {
-                if let Some(vars) = &item.optional_vars {
-                    collect_target_names(vars, &mut names);
-                }
-            }
-        }
-        ast::Stmt::FunctionDef(def) => {
-            names.insert(def.name.to_string());
-            collect_parameter_names(&def.args, &mut names);
-        }
-        ast::Stmt::AsyncFunctionDef(def) => {
-            names.insert(def.name.to_string());
-            collect_parameter_names(&def.args, &mut names);
-        }
-        ast::Stmt::ClassDef(def) => {
-            names.insert(def.name.to_string());
-        }
-        ast::Stmt::Import(import) => {
-            for alias in &import.names {
-                let bound = alias.asname.as_ref().map_or_else(
-                    || {
-                        alias
-                            .name
-                            .split('.')
-                            .next()
-                            .unwrap_or(alias.name.as_str())
-                            .to_owned()
-                    },
-                    std::string::ToString::to_string,
-                );
-                names.insert(bound);
-            }
-        }
-        ast::Stmt::ImportFrom(import) => {
-            let is_plain_math = import.module.as_deref() == Some("math")
-                && import.level.map_or(0, |l| l.to_usize()) == 0;
-            for alias in &import.names {
-                let is_constant = matches!(alias.name.as_str(), "inf" | "nan");
-                if is_plain_math && is_constant {
-                    // The qualifying shape is collected separately.
-                    continue;
-                }
-                let bound = alias
-                    .asname
-                    .as_ref()
-                    .map_or_else(|| alias.name.to_string(), std::string::ToString::to_string);
-                names.insert(bound);
-            }
-        }
-        ast::Stmt::Global(inner) => {
-            for name in &inner.names {
-                names.insert(name.to_string());
-            }
-        }
-        ast::Stmt::Nonlocal(inner) => {
-            for name in &inner.names {
-                names.insert(name.to_string());
-            }
-        }
-        _ => {}
-    });
-    names
-}
-
-fn collect_parameter_names(args: &ast::Arguments, names: &mut BTreeSet<String>) {
-    for arg in args
-        .posonlyargs
-        .iter()
-        .chain(&args.args)
-        .chain(&args.kwonlyargs)
-    {
-        names.insert(arg.def.arg.to_string());
-    }
-    if let Some(vararg) = &args.vararg {
-        names.insert(vararg.arg.to_string());
-    }
-    if let Some(kwarg) = &args.kwarg {
-        names.insert(kwarg.arg.to_string());
-    }
-}
-
-/// Per-file name facts for `MLR106`.
-struct NonFiniteNameFacts {
-    /// Local name → canonical constant (`math.inf` / `math.nan`), only for
-    /// names bound exactly once by `from math import inf/nan [as alias]`
-    /// and never rebound by anything else in the file.
-    math_constants: BTreeMap<String, &'static str>,
-    /// True when the file rebinds the name `float` anywhere, so a `float`
-    /// call can no longer be trusted to be the builtin.
-    float_rebound: bool,
-}
-
-fn nonfinite_name_facts(file: &SourceFile) -> NonFiniteNameFacts {
-    let other_bound = non_math_bound_names(file);
-    let mut imported: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
-    if let Some(module) = file.ast() {
-        each_statement(&module.body, &mut |stmt| {
-            let ast::Stmt::ImportFrom(import) = stmt else {
-                return;
-            };
-            if import.module.as_deref() != Some("math")
-                || import.level.map_or(0, |l| l.to_usize()) != 0
-            {
-                return;
-            }
-            for alias in &import.names {
-                let target = match alias.name.as_str() {
-                    "inf" => "math.inf",
-                    "nan" => "math.nan",
-                    _ => continue,
-                };
-                let bound = alias
-                    .asname
-                    .as_ref()
-                    .map_or_else(|| alias.name.to_string(), std::string::ToString::to_string);
-                imported.entry(bound).or_default().insert(target);
-            }
-        });
-    }
-    let math_constants = imported
-        .into_iter()
-        .filter(|(name, targets)| targets.len() == 1 && !other_bound.contains(name))
-        .map(|(name, targets)| {
-            let target = *targets.iter().next().expect("len checked");
-            (name, target)
-        })
-        .collect();
-    NonFiniteNameFacts {
-        math_constants,
-        float_rebound: other_bound.contains("float"),
+/// Classifies a bare name as a trusted `math.inf` / `math.nan` alias via
+/// the frontend's conservative per-file binding facts (an import binding
+/// survives there only when nothing else in the file rebinds the name).
+/// Returns the display kind (`"infinity"` / `"NaN"`).
+fn nonfinite_math_alias(bindings: &FileBindingFacts, name: &str) -> Option<&'static str> {
+    match bindings.import_target(name)? {
+        "math.inf" => Some("infinity"),
+        "math.nan" => Some("NaN"),
+        _ => None,
     }
 }
 
@@ -1248,21 +998,20 @@ impl Rule for NonFiniteGeometryLiteral {
         };
         let facts = context.qualified_calls();
         let profiles = context.config().active_profile_names();
-        let mut per_file_names: BTreeMap<FileId, NonFiniteNameFacts> = BTreeMap::new();
         let mut diagnostics = Vec::new();
         for call in &facts.calls {
             let Some(target) = nonfinite_rule_target(profile, call) else {
                 continue;
             };
             let file = context.sources().file(call.file);
-            let names = per_file_names
-                .entry(call.file)
-                .or_insert_with(|| nonfinite_name_facts(file));
+            let Some(bindings) = context.binding_facts().file(call.file) else {
+                continue;
+            };
             for (position, argument) in call.arguments.iter().enumerate() {
                 if is_kwargs_splat(call, position, argument) {
                     continue;
                 }
-                let Some(kind) = nonfinite_argument(file, facts, names, argument) else {
+                let Some(kind) = nonfinite_argument(file, facts, bindings, argument) else {
                     continue;
                 };
                 let written = file.slice(argument.range);
@@ -1329,11 +1078,11 @@ fn nonfinite_rule_target(
 fn nonfinite_argument(
     file: &SourceFile,
     facts: &crate::frontend::index::QualifiedCallFacts,
-    names: &NonFiniteNameFacts,
+    bindings: &FileBindingFacts,
     argument: &CallArgument,
 ) -> Option<&'static str> {
     match &argument.shape {
-        ArgShape::Call(inner) => nonfinite_float_call(file, &facts.calls[*inner], names),
+        ArgShape::Call(inner) => nonfinite_float_call(file, &facts.calls[*inner], bindings),
         ArgShape::Attribute(reference) => {
             if reference.candidates.len() != 1 {
                 return None;
@@ -1344,14 +1093,7 @@ fn nonfinite_argument(
                 _ => None,
             }
         }
-        ArgShape::Name => {
-            let written = file.slice(argument.range);
-            match names.math_constants.get(written).copied() {
-                Some("math.inf") => Some("infinity"),
-                Some("math.nan") => Some("NaN"),
-                _ => None,
-            }
-        }
+        ArgShape::Name => nonfinite_math_alias(bindings, file.slice(argument.range)),
         _ => None,
     }
 }
@@ -1361,9 +1103,9 @@ fn nonfinite_argument(
 fn nonfinite_float_call(
     file: &SourceFile,
     inner: &QualifiedCall,
-    names: &NonFiniteNameFacts,
+    bindings: &FileBindingFacts,
 ) -> Option<&'static str> {
-    if names.float_rebound
+    if !bindings.is_unshadowed_bare("float")
         || !inner.candidates.is_empty()
         || inner.receiver != ReceiverKind::Direct
         || file.slice(inner.callee_range) != "float"
@@ -1493,7 +1235,6 @@ impl Rule for BareRegisterFont {
 
     fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
         let profiles = context.config().active_profile_names();
-        let mut per_file_bare: BTreeMap<FileId, BTreeSet<(usize, usize)>> = BTreeMap::new();
         let mut diagnostics = Vec::new();
         for call in &context.qualified_calls().calls {
             if call.candidates.len() != 1
@@ -1501,17 +1242,17 @@ impl Rule for BareRegisterFont {
             {
                 continue;
             }
-            let file = context.sources().file(call.file);
-            let bare = per_file_bare
-                .entry(call.file)
-                .or_insert_with(|| bare_expression_call_ranges(file));
-            let key = (
-                usize::from(call.call_range.start()),
-                usize::from(call.call_range.end()),
-            );
-            if !bare.contains(&key) {
+            // The context manager is discarded only when the call is a whole
+            // bare expression statement (not a `with` item, not assigned,
+            // not passed on).
+            let is_bare = context
+                .statement_facts()
+                .for_call(call)
+                .is_some_and(|statement| statement.role == StatementRole::BareExpression);
+            if !is_bare {
                 continue;
             }
+            let file = context.sources().file(call.file);
             let mut evidence = BTreeMap::new();
             evidence.insert("function".to_owned(), json!(REGISTER_FONT));
             diagnostics.push(build_diagnostic(

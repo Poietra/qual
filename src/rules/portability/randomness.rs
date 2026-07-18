@@ -20,14 +20,15 @@
 
 use std::collections::BTreeMap;
 
-use rustpython_parser::ast;
 use serde_json::json;
 
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::frontend::index::QualifiedCallFacts;
+use crate::frontend::statements::FileBindingFacts;
 use crate::rules::base::{Rule, RuleContext};
 use crate::source::FileId;
 
-use super::{ImportMap, build_diagnostic, call_nodes_by_range};
+use super::build_diagnostic;
 
 /// Module-level functions of stdlib `random` that read the global state.
 const RANDOM_STATE_READERS: [&str; 20] = [
@@ -82,35 +83,33 @@ pub(super) const MLD302: RuleMetadata = RuleMetadata {
 
 pub(super) struct UnseededGlobalRandom;
 
-/// Per-file classification state.
-struct FileFacts<'a> {
-    imports: ImportMap,
-    calls: BTreeMap<(u32, u32), &'a ast::ExprCall>,
+/// Per-file seed facts.
+struct SeedFacts {
     /// A `random.seed(...)` call exists somewhere in the file.
     stdlib_seeded: bool,
     /// A `numpy.random.seed(...)` call exists somewhere in the file.
     numpy_seeded: bool,
 }
 
-impl<'a> FileFacts<'a> {
-    fn build(file: &'a crate::source::SourceFile) -> Self {
-        let imports = ImportMap::build(file);
-        let calls = call_nodes_by_range(file);
+impl SeedFacts {
+    fn build(facts: &QualifiedCallFacts, bindings: &FileBindingFacts, file: FileId) -> Self {
         let mut stdlib_seeded = false;
         let mut numpy_seeded = false;
-        for call in calls.values() {
-            if call.args.is_empty() && call.keywords.is_empty() {
+        for call in facts.calls_in_file(file) {
+            if call.arguments.is_empty() {
                 continue;
             }
-            match imports.resolve_expr(&call.func).as_deref() {
+            let resolved = call
+                .callee_dotted
+                .as_deref()
+                .and_then(|parts| bindings.resolve_parts(parts));
+            match resolved.as_deref() {
                 Some("random.seed") => stdlib_seeded = true,
                 Some("numpy.random.seed") => numpy_seeded = true,
                 _ => {}
             }
         }
         Self {
-            imports,
-            calls,
             stdlib_seeded,
             numpy_seeded,
         }
@@ -124,27 +123,22 @@ impl Rule for UnseededGlobalRandom {
 
     fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
         let cost = context.cost_facts();
+        let call_facts = context.qualified_calls();
         let profiles = context.config().active_profile_names();
-        let mut per_file: BTreeMap<FileId, FileFacts<'_>> = BTreeMap::new();
+        let mut per_file: BTreeMap<FileId, SeedFacts> = BTreeMap::new();
         let mut diagnostics = Vec::new();
-        for (call_index, call) in context.qualified_calls().calls.iter().enumerate() {
+        for (call_index, call) in call_facts.calls.iter().enumerate() {
             let Some(hot) = cost.is_call_in_hot_context(call_index) else {
                 continue;
             };
             let file = context.sources().file(call.file);
-            let facts = per_file
-                .entry(call.file)
-                .or_insert_with(|| FileFacts::build(file));
-            let key = (call.call_range.start().into(), call.call_range.end().into());
-            let Some(node) = facts.calls.get(&key) else {
+            let Some(bindings) = context.binding_facts().file(call.file) else {
                 continue;
             };
-            let targets = super::external_call_targets(
-                context.project_index(),
-                call,
-                &facts.imports,
-                &node.func,
-            );
+            let seeds = per_file
+                .entry(call.file)
+                .or_insert_with(|| SeedFacts::build(call_facts, bindings, call.file));
+            let targets = super::external_call_targets(context.project_index(), call, bindings);
             if targets.is_empty() {
                 continue;
             }
@@ -152,7 +146,7 @@ impl Rule for UnseededGlobalRandom {
             // random-state read; anything else is silence.
             let classified: Vec<String> = targets
                 .iter()
-                .filter_map(|target| classify_global_random(target, facts))
+                .filter_map(|target| classify_global_random(target, seeds))
                 .collect();
             if classified.len() != targets.len() {
                 continue;
@@ -193,18 +187,18 @@ impl Rule for UnseededGlobalRandom {
 
 /// Classifies a canonical dotted call target as a global random-state
 /// read, honoring the per-file seed downgrades. Returns the display name.
-fn classify_global_random(target: &str, facts: &FileFacts<'_>) -> Option<String> {
+fn classify_global_random(target: &str, seeds: &SeedFacts) -> Option<String> {
     if let Some(function) = target.strip_prefix("random.") {
         if !function.contains('.')
             && RANDOM_STATE_READERS.contains(&function)
-            && !facts.stdlib_seeded
+            && !seeds.stdlib_seeded
         {
             return Some(format!("random.{function}"));
         }
         return None;
     }
     if let Some(function) = target.strip_prefix("numpy.random.") {
-        if !function.contains('.') && !NUMPY_NON_READERS.contains(&function) && !facts.numpy_seeded
+        if !function.contains('.') && !NUMPY_NON_READERS.contains(&function) && !seeds.numpy_seeded
         {
             return Some(format!("numpy.random.{function}"));
         }

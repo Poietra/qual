@@ -33,11 +33,14 @@ use serde_json::json;
 use crate::cost::contexts::resolve_candidate;
 use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
 use crate::frontend::index::{ArgShape, QualifiedCall};
+use crate::frontend::statements::{
+    FileBindingFacts, each_statement, lambda_at, statement_exprs, unique_function_def, walk_expr,
+};
 use crate::knowledge::{KnowledgeProfile, SymbolKind};
 use crate::rules::base::{Rule, RuleContext};
 use crate::source::{FileId, SourceFile};
 
-use super::{ImportMap, build_diagnostic, each_expr_in_file, each_statement, walk_expr};
+use super::build_diagnostic;
 
 /// Canonical id of the mobject-level updater registration.
 const MOBJECT_ADD_UPDATER: &str = "manim.mobject.mobject.Mobject.add_updater";
@@ -70,7 +73,6 @@ impl Rule for FpsDependentUpdaterMotion {
             return Vec::new();
         };
         let profiles = context.config().active_profile_names();
-        let mut import_maps: BTreeMap<FileId, ImportMap> = BTreeMap::new();
         let mut reported: BTreeSet<(FileId, u32, u32)> = BTreeSet::new();
         let mut diagnostics = Vec::new();
         for call in &context.qualified_calls().calls {
@@ -99,10 +101,10 @@ impl Rule for FpsDependentUpdaterMotion {
             let Some(param) = callback.mobject_param.clone() else {
                 continue;
             };
-            let imports = import_maps
-                .entry(call.file)
-                .or_insert_with(|| ImportMap::build(file));
-            for mutation in fixed_step_mutations(&callback, &param, imports, knowledge) {
+            let Some(bindings) = context.binding_facts().file(call.file) else {
+                continue;
+            };
+            for mutation in fixed_step_mutations(&callback, &param, bindings, knowledge) {
                 let key = (
                     call.file,
                     mutation.range.start().into(),
@@ -176,7 +178,8 @@ struct CallbackBody<'a> {
     expr: Option<&'a ast::Expr>,
 }
 
-/// Resolves the callback argument to its AST body.
+/// Resolves the callback argument to its AST body via the frontend's
+/// fact-anchored node queries.
 ///
 /// Lambdas are located by their exact byte range; named callbacks are
 /// accepted only when exactly one `def` with that name exists in the whole
@@ -188,15 +191,7 @@ fn resolve_callback_body<'a>(
 ) -> Option<CallbackBody<'a>> {
     match shape {
         ArgShape::Lambda => {
-            let mut found: Option<&ast::ExprLambda> = None;
-            each_expr_in_file(file, &mut |expr| {
-                if let ast::Expr::Lambda(lambda) = expr {
-                    if lambda.range() == range {
-                        found = Some(lambda);
-                    }
-                }
-            });
-            let lambda = found?;
+            let lambda = lambda_at(file, range)?;
             Some(CallbackBody {
                 label: "lambda".to_owned(),
                 mobject_param: first_positional_param(&lambda.args),
@@ -207,18 +202,7 @@ fn resolve_callback_body<'a>(
         }
         ArgShape::Name => {
             let name = file.slice(range);
-            let module = file.ast()?;
-            let mut matches: Vec<&ast::StmtFunctionDef> = Vec::new();
-            each_statement(&module.body, &mut |stmt| {
-                if let ast::Stmt::FunctionDef(def) = stmt {
-                    if def.name.as_str() == name {
-                        matches.push(def);
-                    }
-                }
-            });
-            let [def] = matches.as_slice() else {
-                return None;
-            };
+            let def = unique_function_def(file, name)?;
             Some(CallbackBody {
                 label: format!("`{name}`"),
                 mobject_param: first_positional_param(&def.args),
@@ -268,7 +252,7 @@ struct FixedStepMutation {
 fn fixed_step_mutations(
     callback: &CallbackBody<'_>,
     param: &str,
-    imports: &ImportMap,
+    bindings: &FileBindingFacts,
     knowledge: &KnowledgeProfile,
 ) -> Vec<FixedStepMutation> {
     let mut mutations = Vec::new();
@@ -300,7 +284,7 @@ fn fixed_step_mutations(
             .args
             .iter()
             .chain(call.keywords.iter().map(|keyword| &keyword.value))
-            .all(|argument| is_constant_step(argument, imports, knowledge));
+            .all(|argument| is_constant_step(argument, bindings, knowledge));
         if all_constant {
             mutations.push(FixedStepMutation {
                 method: method.to_owned(),
@@ -312,7 +296,7 @@ fn fixed_step_mutations(
         walk_expr(expr, &mut inspect);
     }
     each_statement(callback.stmts, &mut |stmt| {
-        for expr in super::statement_exprs(stmt) {
+        for expr in statement_exprs(stmt) {
             walk_expr(expr, &mut inspect);
         }
     });
@@ -322,38 +306,42 @@ fn fixed_step_mutations(
 /// Whether an argument expression is provably frame-invariant and
 /// tracker-independent: numeric literals and knowledge Manim constants
 /// combined with `+ - * /`, unary sign, and tuple / list grouping.
-fn is_constant_step(expr: &ast::Expr, imports: &ImportMap, knowledge: &KnowledgeProfile) -> bool {
+fn is_constant_step(
+    expr: &ast::Expr,
+    bindings: &FileBindingFacts,
+    knowledge: &KnowledgeProfile,
+) -> bool {
     match expr {
         ast::Expr::Constant(constant) => matches!(
             constant.value,
             ast::Constant::Int(_) | ast::Constant::Float(_)
         ),
-        ast::Expr::Name(name) => is_manim_constant_name(imports, knowledge, name.id.as_str()),
-        ast::Expr::Attribute(_) => is_manim_constant_attribute(imports, knowledge, expr),
+        ast::Expr::Name(name) => is_manim_constant_name(bindings, knowledge, name.id.as_str()),
+        ast::Expr::Attribute(_) => is_manim_constant_attribute(bindings, knowledge, expr),
         ast::Expr::UnaryOp(inner) => {
             matches!(inner.op, ast::UnaryOp::UAdd | ast::UnaryOp::USub)
-                && is_constant_step(&inner.operand, imports, knowledge)
+                && is_constant_step(&inner.operand, bindings, knowledge)
         }
         ast::Expr::BinOp(inner) => {
             matches!(
                 inner.op,
                 ast::Operator::Add | ast::Operator::Sub | ast::Operator::Mult | ast::Operator::Div
-            ) && is_constant_step(&inner.left, imports, knowledge)
-                && is_constant_step(&inner.right, imports, knowledge)
+            ) && is_constant_step(&inner.left, bindings, knowledge)
+                && is_constant_step(&inner.right, bindings, knowledge)
         }
         ast::Expr::Tuple(inner) => {
             !inner.elts.is_empty()
                 && inner
                     .elts
                     .iter()
-                    .all(|element| is_constant_step(element, imports, knowledge))
+                    .all(|element| is_constant_step(element, bindings, knowledge))
         }
         ast::Expr::List(inner) => {
             !inner.elts.is_empty()
                 && inner
                     .elts
                     .iter()
-                    .all(|element| is_constant_step(element, imports, knowledge))
+                    .all(|element| is_constant_step(element, bindings, knowledge))
         }
         _ => false,
     }
@@ -361,11 +349,15 @@ fn is_constant_step(expr: &ast::Expr, imports: &ImportMap, knowledge: &Knowledge
 
 /// Whether a bare name reaches a knowledge-curated Manim constant
 /// (`RIGHT`, `PI`, ...) through this file's imports.
-fn is_manim_constant_name(imports: &ImportMap, knowledge: &KnowledgeProfile, name: &str) -> bool {
-    let export = if imports.is_manim_star_name(name) {
+fn is_manim_constant_name(
+    bindings: &FileBindingFacts,
+    knowledge: &KnowledgeProfile,
+    name: &str,
+) -> bool {
+    let export = if bindings.has_star_from("manim") && bindings.is_unshadowed_bare(name) {
         Some(name.to_owned())
     } else {
-        imports
+        bindings
             .resolve_parts(std::slice::from_ref(&name.to_owned()))
             .and_then(|target| target.strip_prefix("manim.").map(str::to_owned))
     };
@@ -374,11 +366,11 @@ fn is_manim_constant_name(imports: &ImportMap, knowledge: &KnowledgeProfile, nam
 
 /// Whether `mn.RIGHT`-style attribute access reaches a Manim constant.
 fn is_manim_constant_attribute(
-    imports: &ImportMap,
+    bindings: &FileBindingFacts,
     knowledge: &KnowledgeProfile,
     expr: &ast::Expr,
 ) -> bool {
-    imports
+    bindings
         .resolve_expr(expr)
         .and_then(|target| target.strip_prefix("manim.").map(str::to_owned))
         .is_some_and(|export| is_constant_export(knowledge, &export))

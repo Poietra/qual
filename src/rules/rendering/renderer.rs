@@ -24,7 +24,6 @@
 
 use std::collections::BTreeMap;
 
-use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 use serde_json::json;
 
@@ -37,7 +36,7 @@ use crate::semantic::interpreter::CameraKind;
 use crate::source::FileId;
 
 use super::{
-    build_diagnostic, each_statement, renderer_profile_names, resolved_method_for_call, short_name,
+    build_diagnostic, renderer_profile_names, resolved_method_for_call, short_name,
     single_knowledge_symbol,
 };
 
@@ -66,26 +65,6 @@ fn unsupported_renderers(entry: &SymbolEntry) -> Vec<Renderer> {
         unsupported.push(Renderer::Opengl);
     }
     unsupported
-}
-
-/// The source range of the `index`-th base expression of the class
-/// statement recorded at `record.range`, from the file's AST.
-fn base_expr_range(
-    context: &RuleContext<'_>,
-    record: &ClassRecord,
-    index: usize,
-) -> Option<TextRange> {
-    let file = context.sources().file(record.file);
-    let module = file.ast()?;
-    let mut found = None;
-    each_statement(&module.body, &mut |stmt| {
-        if let ast::Stmt::ClassDef(def) = stmt {
-            if def.range() == record.range {
-                found = def.bases.get(index).map(Ranged::range);
-            }
-        }
-    });
-    found
 }
 
 /// Direct-base positions of `record` that resolve to the canonical
@@ -214,7 +193,7 @@ impl Rule for UnsupportedRendererApi {
         for record in index.classes.values() {
             for (symbol, entry) in flagged_symbols(profile) {
                 for position in direct_base_positions(record, symbol) {
-                    let Some(range) = base_expr_range(context, record, position) else {
+                    let Some(range) = record.base_ranges.get(position).copied() else {
                         continue;
                     };
                     diagnostics.extend(Self::diagnostic(
@@ -295,7 +274,7 @@ impl Rule for MovingCameraUnderOpengl {
             // Only the class naming MovingCameraScene directly carries the
             // finding; deeper subclasses inherit it from their root.
             for position in direct_base_positions(record, MOVING_CAMERA_SCENE) {
-                let Some(range) = base_expr_range(context, record, position) else {
+                let Some(range) = record.base_ranges.get(position).copied() else {
                     continue;
                 };
                 let file = context.sources().file(record.file);

@@ -8,6 +8,7 @@ pub mod imports;
 pub mod index;
 pub mod names;
 pub mod parser;
+pub mod statements;
 
 use std::collections::{BTreeMap, BTreeSet};
 

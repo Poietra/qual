@@ -33,6 +33,12 @@ pub use crate::frontend::index::QualifiedCallFacts;
 /// subclass discovery.
 pub use crate::frontend::index::ProjectIndex as ProjectIndexFacts;
 
+/// Statement-position facts (enclosing-statement span and role of every
+/// call expression) and conservative per-file import binding facts,
+/// collected by the frontend alongside the qualified calls
+/// (`frontend::statements`, DESIGN §5.3 / §5.6).
+pub use crate::frontend::statements::{BindingFacts, StatementFacts};
+
 /// Lifecycle events, membership snapshots, play groups, updater and
 /// builder facts, produced by the abstract interpreter
 /// (`semantic::interpreter::analyze`, DESIGN §5.6 / §3).
@@ -166,6 +172,24 @@ impl<'a> RuleContext<'a> {
     #[must_use]
     pub const fn project_index(&self) -> &ProjectIndexFacts {
         &self.project_index
+    }
+
+    /// Statement-position facts: the enclosing-statement span and role of
+    /// every call expression (`frontend::statements::StatementFacts`).
+    ///
+    /// Empty unless attached via [`RuleContext::with_frontend`].
+    #[must_use]
+    pub const fn statement_facts(&self) -> &StatementFacts {
+        &self.qualified_calls.statements
+    }
+
+    /// Conservative per-file import-derived binding facts with rebind
+    /// poisoning (`frontend::statements::BindingFacts`).
+    ///
+    /// Empty unless attached via [`RuleContext::with_frontend`].
+    #[must_use]
+    pub const fn binding_facts(&self) -> &BindingFacts {
+        &self.qualified_calls.bindings
     }
 
     /// Lifecycle events and state snapshots from the abstract

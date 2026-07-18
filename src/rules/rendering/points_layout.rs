@@ -24,9 +24,10 @@ use serde_json::json;
 
 use crate::config::model::Renderer;
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::frontend::statements::{class_def_at, statement_exprs, walk_expr};
 use crate::rules::base::{Rule, RuleContext};
 
-use super::{VmClass, build_diagnostic, each_statement, renderer_profile_names};
+use super::{VmClass, build_diagnostic, renderer_profile_names};
 
 const MLR112: RuleMetadata = RuleMetadata {
     id: "MLR112",
@@ -71,23 +72,20 @@ impl Rule for FixedPointLayoutAssumption {
                 continue;
             }
             let file = context.sources().file(record.file);
-            let Some(module) = file.ast() else {
-                continue;
-            };
-            // `self` rebound anywhere in the file makes the receiver
+            // `self` rebound anywhere in the file (assignment-like
+            // statement or walrus target) makes the receiver
             // untrustworthy: silence (conservative).
-            if file_rebinds_self(&module.body) {
+            let self_rebound = context
+                .binding_facts()
+                .file(record.file)
+                .is_none_or(|bindings| bindings.is_statement_assigned("self"));
+            if self_rebound {
                 continue;
             }
-            let mut assumptions: Vec<LayoutAssumption> = Vec::new();
-            each_statement(&module.body, &mut |stmt| {
-                if let ast::Stmt::ClassDef(def) = stmt {
-                    if def.range() == record.range {
-                        assumptions = class_body_assumptions(&def.body);
-                    }
-                }
-            });
-            for assumption in assumptions {
+            let Some(def) = class_def_at(file, record.range) else {
+                continue;
+            };
+            for assumption in class_body_assumptions(&def.body) {
                 // The assumption breaks under the *other* renderer; fire
                 // only when an active profile targets it (DESIGN §15.8).
                 let (assumed, breaks_under, applicable) = if assumption.per_curve == 4 {
@@ -133,42 +131,6 @@ impl Rule for FixedPointLayoutAssumption {
         }
         diagnostics
     }
-}
-
-/// Whether any non-parameter binding in the file targets the name `self`.
-fn file_rebinds_self(body: &[ast::Stmt]) -> bool {
-    let mut rebinds = false;
-    each_statement(body, &mut |stmt| {
-        let mut names = std::collections::BTreeSet::new();
-        match stmt {
-            ast::Stmt::Assign(assign) => {
-                for target in &assign.targets {
-                    super::collect_target_names(target, &mut names);
-                }
-            }
-            ast::Stmt::AnnAssign(assign) => super::collect_target_names(&assign.target, &mut names),
-            ast::Stmt::AugAssign(assign) => super::collect_target_names(&assign.target, &mut names),
-            ast::Stmt::For(inner) => super::collect_target_names(&inner.target, &mut names),
-            ast::Stmt::AsyncFor(inner) => super::collect_target_names(&inner.target, &mut names),
-            ast::Stmt::With(inner) => {
-                for item in &inner.items {
-                    if let Some(vars) = &item.optional_vars {
-                        super::collect_target_names(vars, &mut names);
-                    }
-                }
-            }
-            ast::Stmt::AsyncWith(inner) => {
-                for item in &inner.items {
-                    if let Some(vars) = &item.optional_vars {
-                        super::collect_target_names(vars, &mut names);
-                    }
-                }
-            }
-            _ => {}
-        }
-        rebinds |= names.contains("self");
-    });
-    rebinds
 }
 
 /// Collects layout assumptions from a class body: direct methods and
@@ -281,178 +243,6 @@ fn binds_self_param(args: &ast::Arguments) -> bool {
             .kwarg
             .as_ref()
             .is_some_and(|arg| arg.arg.as_str() == "self")
-}
-
-/// The direct expressions of one statement (bodies are handled by
-/// [`each_statement`]).
-fn statement_exprs(stmt: &ast::Stmt) -> Vec<&ast::Expr> {
-    match stmt {
-        ast::Stmt::Expr(inner) => vec![&inner.value],
-        ast::Stmt::Return(inner) => inner.value.as_deref().into_iter().collect(),
-        ast::Stmt::Assign(inner) => {
-            let mut exprs: Vec<&ast::Expr> = inner.targets.iter().collect();
-            exprs.push(&inner.value);
-            exprs
-        }
-        ast::Stmt::AugAssign(inner) => vec![&inner.target, &inner.value],
-        ast::Stmt::AnnAssign(inner) => {
-            let mut exprs = vec![inner.target.as_ref()];
-            if let Some(value) = &inner.value {
-                exprs.push(value);
-            }
-            exprs
-        }
-        ast::Stmt::If(inner) => vec![&inner.test],
-        ast::Stmt::While(inner) => vec![&inner.test],
-        ast::Stmt::For(inner) => vec![&inner.target, &inner.iter],
-        ast::Stmt::AsyncFor(inner) => vec![&inner.target, &inner.iter],
-        ast::Stmt::With(inner) => inner.items.iter().map(|item| &item.context_expr).collect(),
-        ast::Stmt::AsyncWith(inner) => inner.items.iter().map(|item| &item.context_expr).collect(),
-        ast::Stmt::Assert(inner) => {
-            let mut exprs = vec![inner.test.as_ref()];
-            if let Some(message) = &inner.msg {
-                exprs.push(message);
-            }
-            exprs
-        }
-        ast::Stmt::Raise(inner) => {
-            let mut exprs = Vec::new();
-            if let Some(exc) = &inner.exc {
-                exprs.push(exc.as_ref());
-            }
-            if let Some(cause) = &inner.cause {
-                exprs.push(cause.as_ref());
-            }
-            exprs
-        }
-        ast::Stmt::Delete(inner) => inner.targets.iter().collect(),
-        ast::Stmt::Match(inner) => vec![&inner.subject],
-        _ => Vec::new(),
-    }
-}
-
-/// Depth-first visit over an expression and its subexpressions.
-#[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
-fn walk_expr<'a>(expr: &'a ast::Expr, visit: &mut dyn FnMut(&'a ast::Expr)) {
-    visit(expr);
-    match expr {
-        ast::Expr::BoolOp(inner) => {
-            for value in &inner.values {
-                walk_expr(value, visit);
-            }
-        }
-        ast::Expr::NamedExpr(inner) => {
-            walk_expr(&inner.target, visit);
-            walk_expr(&inner.value, visit);
-        }
-        ast::Expr::BinOp(inner) => {
-            walk_expr(&inner.left, visit);
-            walk_expr(&inner.right, visit);
-        }
-        ast::Expr::UnaryOp(inner) => walk_expr(&inner.operand, visit),
-        ast::Expr::Lambda(inner) => walk_expr(&inner.body, visit),
-        ast::Expr::IfExp(inner) => {
-            walk_expr(&inner.test, visit);
-            walk_expr(&inner.body, visit);
-            walk_expr(&inner.orelse, visit);
-        }
-        ast::Expr::Dict(inner) => {
-            for key in inner.keys.iter().flatten() {
-                walk_expr(key, visit);
-            }
-            for value in &inner.values {
-                walk_expr(value, visit);
-            }
-        }
-        ast::Expr::Set(inner) => {
-            for element in &inner.elts {
-                walk_expr(element, visit);
-            }
-        }
-        ast::Expr::ListComp(inner) => {
-            walk_expr(&inner.elt, visit);
-            walk_comprehensions(&inner.generators, visit);
-        }
-        ast::Expr::SetComp(inner) => {
-            walk_expr(&inner.elt, visit);
-            walk_comprehensions(&inner.generators, visit);
-        }
-        ast::Expr::DictComp(inner) => {
-            walk_expr(&inner.key, visit);
-            walk_expr(&inner.value, visit);
-            walk_comprehensions(&inner.generators, visit);
-        }
-        ast::Expr::GeneratorExp(inner) => {
-            walk_expr(&inner.elt, visit);
-            walk_comprehensions(&inner.generators, visit);
-        }
-        ast::Expr::Await(inner) => walk_expr(&inner.value, visit),
-        ast::Expr::Yield(inner) => {
-            if let Some(value) = &inner.value {
-                walk_expr(value, visit);
-            }
-        }
-        ast::Expr::YieldFrom(inner) => walk_expr(&inner.value, visit),
-        ast::Expr::Compare(inner) => {
-            walk_expr(&inner.left, visit);
-            for comparator in &inner.comparators {
-                walk_expr(comparator, visit);
-            }
-        }
-        ast::Expr::Call(inner) => {
-            walk_expr(&inner.func, visit);
-            for argument in &inner.args {
-                walk_expr(argument, visit);
-            }
-            for keyword in &inner.keywords {
-                walk_expr(&keyword.value, visit);
-            }
-        }
-        ast::Expr::FormattedValue(inner) => walk_expr(&inner.value, visit),
-        ast::Expr::JoinedStr(inner) => {
-            for value in &inner.values {
-                walk_expr(value, visit);
-            }
-        }
-        ast::Expr::Attribute(inner) => walk_expr(&inner.value, visit),
-        ast::Expr::Subscript(inner) => {
-            walk_expr(&inner.value, visit);
-            walk_expr(&inner.slice, visit);
-        }
-        ast::Expr::Starred(inner) => walk_expr(&inner.value, visit),
-        ast::Expr::List(inner) => {
-            for element in &inner.elts {
-                walk_expr(element, visit);
-            }
-        }
-        ast::Expr::Tuple(inner) => {
-            for element in &inner.elts {
-                walk_expr(element, visit);
-            }
-        }
-        ast::Expr::Slice(inner) => {
-            for part in [&inner.lower, &inner.upper, &inner.step]
-                .into_iter()
-                .flatten()
-            {
-                walk_expr(part, visit);
-            }
-        }
-        ast::Expr::Constant(_) | ast::Expr::Name(_) => {}
-    }
-}
-
-fn walk_comprehensions<'a>(
-    generators: &'a [ast::Comprehension],
-    visit: &mut dyn FnMut(&'a ast::Expr),
-) {
-    for generator in generators {
-        walk_expr(&generator.target, visit);
-        walk_expr(&generator.iter, visit);
-        for condition in &generator.ifs {
-            walk_expr(condition, visit);
-        }
-    }
 }
 
 /// Whether `expr` is the attribute chain `self.points`.

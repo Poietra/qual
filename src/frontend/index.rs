@@ -61,6 +61,8 @@ pub struct ClassRecord {
     pub range: TextRange,
     /// Base-class references in declaration order.
     pub bases: Vec<BaseRef>,
+    /// Source byte range of each base expression, parallel to `bases`.
+    pub base_ranges: Vec<TextRange>,
     /// Methods defined directly on this class, name → def byte range.
     pub methods: BTreeMap<String, TextRange>,
     /// Manim kinds reached through the resolved base chain.
@@ -369,6 +371,17 @@ pub struct CallArgument {
     pub callable_signature: Option<CallableSignature>,
 }
 
+/// The callee is a method chained directly onto another call's result
+/// (`Path("a").read_text()`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainedCallee {
+    /// Index of the receiver call's own [`QualifiedCall`] fact inside
+    /// [`QualifiedCallFacts::calls`].
+    pub inner: usize,
+    /// The chained method name (`read_text`).
+    pub method: String,
+}
+
 /// Enclosing context of a call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallContext {
@@ -408,6 +421,13 @@ pub struct QualifiedCall {
     /// True when a `**kwargs` splat is present: keyword names are then
     /// incomplete and keyword-presence rules must skip this call.
     pub has_star_star_kwargs: bool,
+    /// The callee written as a pure `Name` / `Attribute` chain, flattened
+    /// in source order (`np.random.seed(...)` → `["np", "random",
+    /// "seed"]`). `None` for dynamic callees (calls, subscripts, ...).
+    pub callee_dotted: Option<Vec<String>>,
+    /// Set when the callee is `<call>.method` — a method chained directly
+    /// onto another call's result.
+    pub callee_chained: Option<ChainedCallee>,
     /// Enclosing module / class / method.
     pub context: CallContext,
 }
@@ -445,6 +465,12 @@ pub struct QualifiedCallFacts {
     /// Facts in deterministic walk order (files in load order; within a
     /// file, post-order per statement so nested calls precede their parent).
     pub calls: Vec<QualifiedCall>,
+    /// Statement-position facts for every call expression (enclosing
+    /// statement span and role), collected alongside the call facts.
+    pub statements: super::statements::StatementFacts,
+    /// Conservative per-file import-derived binding facts (DESIGN §5.3:
+    /// a name rebound anywhere in a file is never trusted).
+    pub bindings: super::statements::BindingFacts,
 }
 
 impl QualifiedCallFacts {
@@ -452,7 +478,10 @@ impl QualifiedCallFacts {
     #[must_use]
     pub fn collect(sources: &SourceManager, index: &ProjectIndex, surface: &ManimSurface) -> Self {
         let parsed = parsed_modules(sources);
-        collect_calls(&parsed, index, surface)
+        let mut facts = collect_calls(&parsed, index, surface);
+        facts.statements = super::statements::StatementFacts::collect(sources);
+        facts.bindings = super::statements::BindingFacts::collect(sources);
+        facts
     }
 
     /// Facts inside one file, in source walk order.
@@ -1042,6 +1071,7 @@ impl Walker<'_> {
                 .iter()
                 .map(|base| self.resolve_base(base, scopes))
                 .collect();
+            let base_ranges = def.bases.iter().map(Ranged::range).collect();
             let methods = direct_methods(&def.body);
             self.class_records.push(ClassRecord {
                 qualified_name: qualified.clone(),
@@ -1049,6 +1079,7 @@ impl Walker<'_> {
                 file: self.file,
                 range: def.range(),
                 bases,
+                base_ranges,
                 methods,
                 kinds: BTreeSet::new(),
                 reached_bases: BTreeSet::new(),
@@ -1326,6 +1357,24 @@ impl Walker<'_> {
         // Python evaluates the callee before the arguments; resolve the
         // callee first so a walrus in an argument cannot leak backwards.
         self.visit_expr(&call.func, scopes);
+        // When the callee is `<call>.method`, the receiver call's own fact
+        // was pushed last while visiting the callee expression just above.
+        let callee_chained = match call.func.as_ref() {
+            ast::Expr::Attribute(attribute)
+                if matches!(attribute.value.as_ref(), ast::Expr::Call(_)) =>
+            {
+                Some(ChainedCallee {
+                    inner: self.facts.len() - 1,
+                    method: attribute.attr.to_string(),
+                })
+            }
+            _ => None,
+        };
+        let callee_dotted = flatten_dotted(&call.func).map(|(root, segments)| {
+            let mut parts = vec![root];
+            parts.extend(segments);
+            parts
+        });
         let (receiver, candidates) = self.resolve_callee(&call.func, scopes);
 
         let mut arguments = Vec::new();
@@ -1372,6 +1421,8 @@ impl Walker<'_> {
             arguments,
             has_star_args,
             has_star_star_kwargs,
+            callee_dotted,
+            callee_chained,
             context: self.context(),
         };
         self.facts.push(fact);
@@ -2131,8 +2182,15 @@ fn collect_calls(
                     argument.shape = ArgShape::Call(child + offset);
                 }
             }
+            if let Some(chained) = &mut fact.callee_chained {
+                chained.inner += offset;
+            }
             calls.push(fact);
         }
     }
-    QualifiedCallFacts { calls }
+    QualifiedCallFacts {
+        calls,
+        statements: super::statements::StatementFacts::default(),
+        bindings: super::statements::BindingFacts::default(),
+    }
 }

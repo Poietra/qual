@@ -36,13 +36,15 @@ use rustpython_parser::text_size::TextRange;
 use serde_json::json;
 
 use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
+use crate::frontend::names::{collect_target_names, flatten_dotted};
+use crate::frontend::statements::{each_statement, function_def_at};
 use crate::rules::base::{CameraKind, FixedAction, FixedKind, Rule, RuleContext};
 use crate::semantic::events::{Event, RendererRequirementKind};
 use crate::semantic::interpreter::SceneLifecycle;
 use crate::semantic::values::Presence;
 use crate::source::FileId;
 
-use super::{build_diagnostic, dotted_parts};
+use super::build_diagnostic;
 
 pub(super) const MLD304: RuleMetadata = RuleMetadata {
     id: "MLD304",
@@ -284,17 +286,8 @@ fn first_certain_camera_use(
         Some((record, *range))
     })?;
     let file = context.sources().file(record.file);
-    let module = file.ast()?;
-    let mut construct: Option<&ast::StmtFunctionDef> = None;
-    super::each_statement(&module.body, &mut |stmt| {
-        if let ast::Stmt::FunctionDef(def) = stmt {
-            if def.range() == construct_range && def.name.as_str() == "construct" {
-                construct = Some(def);
-            }
-        }
-    });
-    let construct = construct?;
-    if binds_self(&construct.body) {
+    let construct = function_def_at(file, construct_range)?;
+    if construct.name.as_str() != "construct" || binds_self(&construct.body) {
         return None;
     }
     let mut found: Option<(&'static str, TextRange)> = None;
@@ -321,11 +314,11 @@ fn first_certain_camera_use(
                 if found.is_some() {
                     return;
                 }
-                if let Some(parts) = dotted_parts(certain) {
-                    let strs: Vec<&str> = parts.iter().map(String::as_str).collect();
-                    if strs == ["self", "camera", "frame"] {
+                if let Some((root, segments)) = flatten_dotted(certain) {
+                    let tail: Vec<&str> = segments.iter().map(String::as_str).collect();
+                    if root == "self" && tail == ["camera", "frame"] {
                         found = Some(("self.camera.frame", certain.range()));
-                    } else if strs == ["self", "camera", "auto_zoom"] {
+                    } else if root == "self" && tail == ["camera", "auto_zoom"] {
                         found = Some(("self.camera.auto_zoom", certain.range()));
                     }
                 }
@@ -343,29 +336,29 @@ fn first_certain_camera_use(
 /// rebound `self` means `self.camera` is no longer certainly the scene.
 fn binds_self(body: &[ast::Stmt]) -> bool {
     let mut bound = false;
-    super::each_statement(body, &mut |stmt| {
+    each_statement(body, &mut |stmt| {
         let mut names = BTreeSet::new();
         match stmt {
             ast::Stmt::Assign(inner) => {
                 for target in &inner.targets {
-                    super::collect_target_names(target, &mut names);
+                    collect_target_names(target, &mut names);
                 }
             }
-            ast::Stmt::AnnAssign(inner) => super::collect_target_names(&inner.target, &mut names),
-            ast::Stmt::AugAssign(inner) => super::collect_target_names(&inner.target, &mut names),
-            ast::Stmt::For(inner) => super::collect_target_names(&inner.target, &mut names),
-            ast::Stmt::AsyncFor(inner) => super::collect_target_names(&inner.target, &mut names),
+            ast::Stmt::AnnAssign(inner) => collect_target_names(&inner.target, &mut names),
+            ast::Stmt::AugAssign(inner) => collect_target_names(&inner.target, &mut names),
+            ast::Stmt::For(inner) => collect_target_names(&inner.target, &mut names),
+            ast::Stmt::AsyncFor(inner) => collect_target_names(&inner.target, &mut names),
             ast::Stmt::With(inner) => {
                 for item in &inner.items {
                     if let Some(vars) = &item.optional_vars {
-                        super::collect_target_names(vars, &mut names);
+                        collect_target_names(vars, &mut names);
                     }
                 }
             }
             ast::Stmt::AsyncWith(inner) => {
                 for item in &inner.items {
                     if let Some(vars) = &item.optional_vars {
-                        super::collect_target_names(vars, &mut names);
+                        collect_target_names(vars, &mut names);
                     }
                 }
             }

@@ -15,14 +15,14 @@
 
 use std::collections::BTreeMap;
 
-use rustpython_parser::ast;
 use serde_json::json;
 
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::frontend::index::{ProjectIndex, QualifiedCall, QualifiedCallFacts};
+use crate::frontend::statements::FileBindingFacts;
 use crate::rules::base::{Rule, RuleContext};
-use crate::source::FileId;
 
-use super::{ImportMap, build_diagnostic, call_nodes_by_range};
+use super::build_diagnostic;
 
 /// Canonical wall-clock reads.
 const WALL_CLOCK: [&str; 12] = [
@@ -116,12 +116,6 @@ impl IoKind {
     }
 }
 
-/// Per-file classification state.
-struct FileFacts<'a> {
-    imports: ImportMap,
-    calls: BTreeMap<(u32, u32), &'a ast::ExprCall>,
-}
-
 impl Rule for FrameCallbackIo {
     fn metadata(&self) -> &'static RuleMetadata {
         &MLD307
@@ -129,24 +123,19 @@ impl Rule for FrameCallbackIo {
 
     fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
         let cost = context.cost_facts();
+        let call_facts = context.qualified_calls();
         let profiles = context.config().active_profile_names();
-        let mut per_file: BTreeMap<FileId, FileFacts<'_>> = BTreeMap::new();
         let mut diagnostics = Vec::new();
-        for (call_index, call) in context.qualified_calls().calls.iter().enumerate() {
+        for (call_index, call) in call_facts.calls.iter().enumerate() {
             let Some(hot) = cost.is_call_in_hot_context(call_index) else {
                 continue;
             };
             let file = context.sources().file(call.file);
-            let facts = per_file.entry(call.file).or_insert_with(|| FileFacts {
-                imports: ImportMap::build(file),
-                calls: call_nodes_by_range(file),
-            });
-            let key = (call.call_range.start().into(), call.call_range.end().into());
-            let Some(node) = facts.calls.get(&key) else {
+            let Some(bindings) = context.binding_facts().file(call.file) else {
                 continue;
             };
             let Some((kind, shown)) =
-                classify_io(context.project_index(), call, node, &facts.imports)
+                classify_io(context.project_index(), call_facts, call, bindings)
             else {
                 continue;
             };
@@ -182,38 +171,35 @@ impl Rule for FrameCallbackIo {
 /// Classifies the callee of one hot call as impure I/O. Returns the kind
 /// and a canonical display name; `None` means silence.
 fn classify_io(
-    index: &crate::frontend::index::ProjectIndex,
-    fact: &crate::frontend::index::QualifiedCall,
-    call: &ast::ExprCall,
-    imports: &ImportMap,
+    index: &ProjectIndex,
+    facts: &QualifiedCallFacts,
+    fact: &QualifiedCall,
+    bindings: &FileBindingFacts,
 ) -> Option<(IoKind, String)> {
     // `open(...)`: the builtin, only when nothing resolves or rebinds it.
-    if let ast::Expr::Name(name) = call.func.as_ref() {
-        if name.id.as_str() == "open"
-            && fact.candidates.is_empty()
-            && imports.is_probably_builtin("open")
-        {
-            return Some((IoKind::Filesystem, "open".to_owned()));
-        }
+    let is_bare_open = matches!(fact.callee_dotted.as_deref(), Some([name]) if name == "open");
+    if is_bare_open && fact.candidates.is_empty() && bindings.is_unshadowed_bare("open") {
+        return Some((IoKind::Filesystem, "open".to_owned()));
     }
     // `Path("...").read_text()`-style direct chains: the receiver is a
     // call, so only the structural shape identifies the Path method.
-    if let ast::Expr::Attribute(attribute) = call.func.as_ref() {
-        if let ast::Expr::Call(inner) = attribute.value.as_ref() {
-            if PATH_IO_METHODS.contains(&attribute.attr.as_str())
-                && imports.resolve_expr(&inner.func).as_deref() == Some("pathlib.Path")
-            {
-                return Some((
-                    IoKind::Filesystem,
-                    format!("Path(...).{}", attribute.attr.as_str()),
-                ));
+    if let Some(chained) = &fact.callee_chained {
+        if PATH_IO_METHODS.contains(&chained.method.as_str()) {
+            let receiver = facts
+                .calls
+                .get(chained.inner)?
+                .callee_dotted
+                .as_deref()
+                .and_then(|parts| bindings.resolve_parts(parts));
+            if receiver.as_deref() == Some("pathlib.Path") {
+                return Some((IoKind::Filesystem, format!("Path(...).{}", chained.method)));
             }
-            return None;
         }
+        return None;
     }
     // Dotted / bare external functions: every resolution must classify to
     // the same kind, otherwise silence.
-    let targets = super::external_call_targets(index, fact, imports, &call.func);
+    let targets = super::external_call_targets(index, fact, bindings);
     let mut classified: Option<(IoKind, String)> = None;
     for target in &targets {
         let current = classify_target(target)?;
