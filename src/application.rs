@@ -119,6 +119,10 @@ pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
 }
 
 /// Full `check` pipeline as a library entry point (used by tests).
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear pipeline stage per DESIGN §5.1 step; splitting adds no clarity"
+)]
 pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let paths = normalized_input_paths(args)?;
     let project_root = discover_project_root(&paths)?;
@@ -144,6 +148,7 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         if let Some(diagnostic) = file.parse_diagnostic() {
             diagnostics.push(diagnostic.clone());
         }
+        diagnostics.extend(frontend::features::gate(file, &config.target_python));
         let (index, warnings) = suppressions::collect(file);
         diagnostics.extend(warnings);
         if !index.is_empty() {
@@ -225,7 +230,12 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     }
 
     let fix_report = if args.fix {
-        Some(fixes::apply(&sources, &diagnostics, args.unsafe_fixes)?)
+        Some(fixes::apply_with_target(
+            &sources,
+            &diagnostics,
+            args.unsafe_fixes,
+            Some(&config.target_python),
+        )?)
     } else {
         None
     };
@@ -1133,11 +1143,15 @@ pub fn run_config_at(start: &Path) -> Result<Execution, ApplicationError> {
     value["enforcement"] = serde_json::json!({
         "manim-version": manim_version_note,
         "target-python": format!(
-            "gates only: validated for format and parser support (Python \
-             {min_major}.{min_minor} through {max_major}.{max_minor}), but \
-             the bundled parser grammar is fixed (rustpython-parser 0.4, \
-             Python {max_major}.{max_minor} grammar, no feature_version \
-             pinning), so target-python does not change parsing",
+            "enforced post-parse: validated for format and parser support \
+             (Python {min_major}.{min_minor} through \
+             {max_major}.{max_minor}); the bundled parser grammar is fixed \
+             (rustpython-parser 0.4, Python {max_major}.{max_minor} \
+             grammar, no feature_version pinning), so target-python does \
+             not change parsing, but a parsed construct newer than the \
+             target (match, except*, PEP 695, walrus, positional-only \
+             parameters) is reported as MLC000 and a --fix that introduces \
+             one is rolled back",
             min_major = loader::MIN_TARGET_PYTHON.0,
             min_minor = loader::MIN_TARGET_PYTHON.1,
             max_major = loader::MAX_TARGET_PYTHON.0,

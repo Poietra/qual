@@ -14,17 +14,21 @@
 //! The bundled parser grammar is fixed — rustpython-parser 0.4 implements
 //! the Python 3.12 grammar and exposes no `feature_version` pinning — so
 //! the post-fix re-parse accepts that grammar regardless of the configured
-//! `target-python`. `target-python` is validated at configuration time
-//! instead (format and parser bounds; a target newer than the bundled
-//! grammar is an explicit config error per DESIGN §5.2): it gates
-//! acceptance but never changes how this module parses.
+//! `target-python`. [`apply_with_target`] therefore re-runs the post-parse
+//! syntax feature gate ([`crate::frontend::features`]) on every fixed
+//! file: a file whose fixes *introduced* a construct newer than
+//! `target-python` (any gated feature occurring more often than in the
+//! original text) is rolled back like a parse failure. Pre-existing gated
+//! constructs never block a fix — the file already carries their `MLC000`
+//! and analysis of it continues by design.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use rustpython_parser::{Mode, parse};
+use rustpython_parser::{Mode, ast, parse};
 
 use crate::diagnostic::{Diagnostic, Fix, FixApplicability, SourcePosition};
+use crate::frontend::features;
 use crate::source::{SourceFile, SourceManager};
 
 /// Errors that abort fix application; callers map them to exit code 2.
@@ -89,18 +93,34 @@ struct ResolvedEdit {
     replacement: String,
 }
 
-/// Applies the fixes attached to `diagnostics` to the files on disk.
+/// Applies fixes without a `target-python` syntax gate.
 ///
-/// Only `applicability = safe` fixes are applied unless `unsafe_fixes` is
-/// set. Fixes are considered in the given (stable diagnostic) order, so the
-/// outcome is deterministic. Files whose fixed text fails to re-parse are
-/// rolled back per file; a (rare) multi-file fix touching a rolled-back
-/// file is not counted as applied, but its edits to other, surviving files
-/// are still written.
+/// Equivalent to [`apply_with_target`] with a target at the bundled
+/// grammar's own version: only the re-parse and re-encode checks guard the
+/// rollback. The CLI path always uses [`apply_with_target`] with the
+/// configured `target-python`.
 pub fn apply(
     sources: &SourceManager,
     diagnostics: &[Diagnostic],
     unsafe_fixes: bool,
+) -> Result<FixReport, FixError> {
+    apply_with_target(sources, diagnostics, unsafe_fixes, None)
+}
+
+/// Applies the fixes attached to `diagnostics` to the files on disk.
+///
+/// Only `applicability = safe` fixes are applied unless `unsafe_fixes` is
+/// set. Fixes are considered in the given (stable diagnostic) order, so the
+/// outcome is deterministic. Files whose fixed text fails to re-parse, or
+/// (with a `target_python`) whose fixes introduced syntax newer than the
+/// target, are rolled back per file; a (rare) multi-file fix touching a
+/// rolled-back file is not counted as applied, but its edits to other,
+/// surviving files are still written.
+pub fn apply_with_target(
+    sources: &SourceManager,
+    diagnostics: &[Diagnostic],
+    unsafe_fixes: bool,
+    target_python: Option<&str>,
 ) -> Result<FixReport, FixError> {
     let mut report = FixReport::default();
     let files: BTreeMap<&str, &SourceFile> = sources
@@ -147,7 +167,9 @@ pub fn apply(
         if new_text == file.text() {
             continue;
         }
-        let checked = reparse(&new_text, path).and_then(|()| encode(file, &new_text));
+        let checked = reparse(&new_text, path)
+            .and_then(|module| check_target_syntax(file, &module, target_python))
+            .and_then(|()| encode(file, &new_text));
         match checked {
             Ok(bytes) => writes.push((file, path.clone(), bytes)),
             Err(reason) => {
@@ -268,10 +290,59 @@ fn byte_of_char(text: &str, char_offset: usize) -> usize {
 }
 
 /// Re-parses the fixed text; a failure message triggers a rollback.
-fn reparse(text: &str, path: &str) -> Result<(), String> {
-    parse(text, Mode::Module, path)
-        .map(|_| ())
-        .map_err(|error| format!("fixed text no longer parses: {}", error.error))
+fn reparse(text: &str, path: &str) -> Result<ast::ModModule, String> {
+    match parse(text, Mode::Module, path) {
+        Ok(ast::Mod::Module(module)) => Ok(module),
+        Ok(_) => unreachable!("Mode::Module always produces Mod::Module"),
+        Err(error) => Err(format!("fixed text no longer parses: {}", error.error)),
+    }
+}
+
+/// Rolls the file back when a fix *introduced* syntax newer than the
+/// configured `target-python`: a gated feature counts as introduced when
+/// the fixed text uses it more often than the original text did.
+/// Pre-existing gated constructs (the file already carries their `MLC000`)
+/// never block a fix that edits something else.
+fn check_target_syntax(
+    file: &SourceFile,
+    module: &ast::ModModule,
+    target_python: Option<&str>,
+) -> Result<(), String> {
+    let Some(target_python) = target_python else {
+        return Ok(());
+    };
+    let Some(target) = features::parse_python_version(target_python) else {
+        debug_assert!(false, "target-python is validated at config time");
+        return Ok(());
+    };
+    let fixed = feature_counts(&features::violations(module, target));
+    if fixed.is_empty() {
+        return Ok(());
+    }
+    let original = file
+        .ast()
+        .map(|module| feature_counts(&features::violations(module, target)))
+        .unwrap_or_default();
+    for (feature, count) in &fixed {
+        if *count > original.get(feature).copied().unwrap_or(0) {
+            let (major, minor) = feature.introduced_in();
+            return Err(format!(
+                "fix introduced {label}, which requires Python {major}.{minor} \
+                 but target-python is {target_python}",
+                label = feature.label(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Occurrences of each gated feature, for the introduced-syntax check.
+fn feature_counts(violations: &[features::Violation]) -> BTreeMap<features::Feature, usize> {
+    let mut counts = BTreeMap::new();
+    for violation in violations {
+        *counts.entry(violation.feature).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// Re-encodes the fixed text in the file's original source encoding.
@@ -302,6 +373,27 @@ fn encode(file: &SourceFile, text: &str) -> Result<Vec<u8>, String> {
         }
         return Ok(bytes);
     }
+    // Round-trip of the C1-override decode in `source.rs`: CPython's
+    // iso8859-9 / iso8859-11 differ from the WHATWG windows-1254 /
+    // windows-874 decoders only in 0x80–0x9F, so the C1 controls map back
+    // to those bytes directly and every other char goes through the WHATWG
+    // encoder — which must then never emit a byte in 0x80–0x9F (e.g. '€' →
+    // 0x80 in windows-1254 would re-decode as U+0080; CPython's iso8859-9
+    // cannot encode '€' at all, so the file rolls back instead).
+    let c1_override = match encoding_info.label.as_str() {
+        "iso-8859-9" => Some(encoding_rs::WINDOWS_1254),
+        "iso-8859-11" => Some(encoding_rs::WINDOWS_874),
+        _ => None,
+    };
+    if let Some(encoding) = c1_override {
+        encode_single_byte_with_c1_controls(text, encoding, &mut bytes).map_err(|()| {
+            format!(
+                "fixed text cannot be encoded as {label}",
+                label = encoding_info.label
+            )
+        })?;
+        return Ok(bytes);
+    }
     let Some(encoding) = encoding_rs::Encoding::for_label(encoding_info.label.as_bytes()) else {
         return Err(format!(
             "unknown source encoding {label}",
@@ -319,15 +411,166 @@ fn encode(file: &SourceFile, text: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Encodes text for a single-byte WHATWG encoding decoded with the C1
+/// override: U+0080–U+009F map to bytes 0x80–0x9F, everything else through
+/// the WHATWG encoder, rejecting any char the encoder cannot represent or
+/// would place in 0x80–0x9F (those bytes mean the C1 controls here).
+fn encode_single_byte_with_c1_controls(
+    text: &str,
+    encoding: &'static encoding_rs::Encoding,
+    bytes: &mut Vec<u8>,
+) -> Result<(), ()> {
+    let is_c1 = |ch: char| ('\u{80}'..='\u{9f}').contains(&ch);
+    let mut rest = text;
+    while !rest.is_empty() {
+        let run_end = rest.find(is_c1).unwrap_or(rest.len());
+        if run_end > 0 {
+            let (encoded, _, had_errors) = encoding.encode(&rest[..run_end]);
+            if had_errors || encoded.iter().any(|byte| (0x80..=0x9f).contains(byte)) {
+                return Err(());
+            }
+            bytes.extend_from_slice(&encoded);
+            rest = &rest[run_end..];
+        }
+        while let Some(ch) = rest.chars().next() {
+            if !is_c1(ch) {
+                break;
+            }
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "C1 controls are code points 0x80..=0x9F"
+            )]
+            bytes.push(u32::from(ch) as u8);
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
 
+    use crate::diagnostic::{Confidence, Severity, SourceSpan};
+
     fn sources_from(text: &str) -> SourceManager {
         let mut sources = SourceManager::new("/project");
         sources.load_bytes(Path::new("/project/scene.py"), text.as_bytes());
         sources
+    }
+
+    fn replace_first_line_fix(path: &str, line_length: usize, replacement: &str) -> Diagnostic {
+        Diagnostic {
+            rule_id: "MLC101".to_owned(),
+            severity: Severity::Warning,
+            confidence: Confidence::High,
+            path: path.to_owned(),
+            primary_span: SourceSpan {
+                start: SourcePosition { line: 1, column: 1 },
+                end: SourcePosition { line: 1, column: 1 },
+            },
+            message: String::new(),
+            explanation: None,
+            related_locations: Vec::new(),
+            evidence: std::collections::BTreeMap::new(),
+            estimated_cost: None,
+            applicable_profiles: Vec::new(),
+            fix: Some(Fix {
+                applicability: FixApplicability::Safe,
+                message: String::new(),
+                edits: vec![crate::diagnostic::TextEdit {
+                    path: path.to_owned(),
+                    span: SourceSpan {
+                        start: SourcePosition { line: 1, column: 1 },
+                        end: SourcePosition {
+                            line: 1,
+                            column: line_length + 1,
+                        },
+                    },
+                    replacement: replacement.to_owned(),
+                }],
+            }),
+        }
+    }
+
+    /// A fix that introduces a `match` statement rolls the file back under
+    /// a pre-3.10 `target-python` and applies under 3.10.
+    #[test]
+    fn fix_introducing_gated_syntax_rolls_back_under_old_target() {
+        let original = "value = command\n";
+        let replacement = "match command:\n    case 1:\n        pass";
+        for (target, expect_applied) in [(Some("3.9"), false), (Some("3.10"), true), (None, true)] {
+            let project = tempfile::tempdir().unwrap();
+            let file_path = project.path().join("scene.py");
+            std::fs::write(&file_path, original).unwrap();
+            let mut sources = SourceManager::new(project.path());
+            sources.load_file(&file_path);
+            let diagnostic =
+                replace_first_line_fix("scene.py", original.trim_end().len(), replacement);
+            let report = apply_with_target(&sources, &[diagnostic], false, target).unwrap();
+            let on_disk = std::fs::read_to_string(&file_path).unwrap();
+            if expect_applied {
+                assert_eq!(report.applied, 1, "target {target:?}");
+                assert!(on_disk.contains("match command"), "target {target:?}");
+            } else {
+                assert_eq!(report.applied, 0, "target {target:?}");
+                assert_eq!(report.rolled_back.len(), 1);
+                let rolled_back = &report.rolled_back[0];
+                assert_eq!(rolled_back.path, "scene.py");
+                assert!(
+                    rolled_back.reason.contains("requires Python 3.10")
+                        && rolled_back.reason.contains("target-python is 3.9"),
+                    "reason must name the construct and versions: {}",
+                    rolled_back.reason
+                );
+                assert_eq!(on_disk, original, "rolled back file must be untouched");
+            }
+        }
+    }
+
+    /// A gated construct that already existed in the file never blocks a
+    /// fix that edits something else: the file keeps its MLC000 and the
+    /// fix still lands.
+    #[test]
+    fn preexisting_gated_syntax_does_not_block_unrelated_fixes() {
+        let original = "flag = False\nmatch flag:\n    case 1:\n        pass\n";
+        let project = tempfile::tempdir().unwrap();
+        let file_path = project.path().join("scene.py");
+        std::fs::write(&file_path, original).unwrap();
+        let mut sources = SourceManager::new(project.path());
+        sources.load_file(&file_path);
+        let diagnostic = replace_first_line_fix("scene.py", "flag = False".len(), "flag = True");
+        let report = apply_with_target(&sources, &[diagnostic], false, Some("3.9")).unwrap();
+        assert_eq!(report.applied, 1);
+        assert!(report.rolled_back.is_empty());
+        assert!(
+            std::fs::read_to_string(&file_path)
+                .unwrap()
+                .starts_with("flag = True\n")
+        );
+    }
+
+    /// Round-trip of the iso-8859-9 C1-override decode: C1 controls map
+    /// back to 0x80–0x9F, Turkish letters to their windows-1254 bytes, and
+    /// '€' — encodable in windows-1254 (0x80) but not in `CPython`'s
+    /// iso8859-9 — is a rollback, never a silent byte change.
+    #[test]
+    fn iso_8859_9_reencode_round_trips_and_rejects_euro() {
+        let mut bytes = b"# coding: iso-8859-9\nx = \"".to_vec();
+        bytes.extend([0xd0, 0x9f, 0xfd]); // G-breve, C1 0x9F, dotless i
+        bytes.extend(b"\"\n");
+        let mut sources = SourceManager::new("/project");
+        sources.load_bytes(Path::new("/project/tr.py"), &bytes);
+        let file = &sources.files()[0];
+        assert!(file.is_parsed());
+        assert_eq!(
+            encode(file, file.text()).expect("identity re-encode"),
+            bytes,
+            "decode then encode must reproduce the original bytes"
+        );
+        let euro = encode(file, "x = \"\u{20ac}\"\n");
+        assert!(euro.is_err(), "'€' is not encodable in CPython iso8859-9");
     }
 
     #[test]

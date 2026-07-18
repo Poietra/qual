@@ -3,6 +3,7 @@
 //! interpreter).
 
 pub mod cfg;
+pub mod features;
 pub mod imports;
 pub mod index;
 pub mod names;

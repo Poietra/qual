@@ -360,6 +360,45 @@ fn symlink_cycle_terminates_and_reports_each_file_once() {
     assert_eq!(mlc000[0].path, "scenes/bad.py");
 }
 
+/// The `target-python` syntax gate is a per-file MLC000 like a parse
+/// failure, but the gated file keeps its AST: the invalid suppression on
+/// a later line still produces MLC001, proving analysis continued, and
+/// the error severity reaches the default fail level.
+#[test]
+fn target_python_gate_emits_mlc000_without_stopping_the_file() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("pyproject.toml"),
+        "[tool.manim-lint]\ntarget-python = \"3.9\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("modern.py"),
+        "value = 1\nmatch value:\n    case 1:\n        pass\nx = 2  # manim-lint: ignore[MLC999]\n",
+    )
+    .unwrap();
+    let report = check(&args_for(project.path(), OutputFormat::Concise)).unwrap();
+
+    let mlc000: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC000")
+        .collect();
+    assert_eq!(mlc000.len(), 1);
+    assert_eq!(mlc000[0].path, "modern.py");
+    assert_eq!(mlc000[0].primary_span.start.line, 2);
+    assert_eq!(mlc000[0].severity, Severity::Error);
+    assert!(mlc000[0].message.contains("requires Python 3.10"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "MLC001" && diagnostic.path == "modern.py"),
+        "the gated file is still analyzed (its unknown suppression warns)"
+    );
+    assert_eq!(report.exit, ExitStatus::Failure, "MLC000 is an error");
+}
+
 #[test]
 fn smoke_fixture_project_checks_end_to_end() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke");

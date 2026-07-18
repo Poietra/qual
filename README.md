@@ -195,8 +195,13 @@ Configuration is validated honestly (exit 2 on violation):
   `>=0.20,<0.21`); when absent, nothing is validated.
 - `target-python` must be `MAJOR.MINOR` between 3.0 and 3.12 — the Python
   grammar the bundled parser (rustpython-parser 0.4) implements. The
-  grammar is fixed (no `feature_version` pinning), so `target-python` only
-  gates acceptance; it does not change parsing.
+  grammar is fixed (no `feature_version` pinning), so parsing itself never
+  changes; instead a post-parse gate reports any construct newer than the
+  target as `MLC000` (`match` 3.10, `except*` 3.11, `type` aliases and
+  PEP 695 type parameters 3.12, `:=` and positional-only `/` 3.8). The
+  gated file is still fully analyzed, and a `--fix` that would introduce
+  such syntax is rolled back. See `manim-lint explain MLC000` for what is
+  and is not detectable.
 - A frame rate that is zero, negative, or non-finite, and a resolution
   with a zero dimension, are rejected wherever they come from (`--fps` /
   `--resolution`, a profile, or `manim.cfg`).

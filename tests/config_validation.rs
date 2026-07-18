@@ -20,9 +20,13 @@ class Demo(Scene):
 ";
 
 fn write_project(pyproject: &str) -> tempfile::TempDir {
+    write_project_with(pyproject, SCENE)
+}
+
+fn write_project_with(pyproject: &str, scene: &str) -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("pyproject.toml"), pyproject).unwrap();
-    std::fs::write(project.path().join("scene.py"), SCENE).unwrap();
+    std::fs::write(project.path().join("scene.py"), scene).unwrap();
     project
 }
 
@@ -180,6 +184,90 @@ fn target_python_in_supported_range_is_accepted() {
     }
 }
 
+/// DESIGN §5.2 adapted: the parser cannot pin `feature_version`, so a
+/// construct newer than `target-python` is caught by the post-parse
+/// syntax gate as MLC000 — and the file is still analyzed (the gate never
+/// removes the AST).
+#[test]
+fn target_python_gates_match_statements() {
+    const MATCH_SCENE: &str = "\
+from manim import *
+
+
+class Chooser(Scene):
+    def construct(self):
+        command = 1
+        match command:
+            case 1:
+                self.play(FadeIn(Square()), run_time=0.004)
+";
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.9\"\n", MATCH_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    let gate: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC000")
+        .collect();
+    assert_eq!(gate.len(), 1, "exactly one gated construct");
+    assert_eq!(
+        gate[0].message,
+        "`match` statement requires Python 3.10 but target-python is 3.9"
+    );
+    assert_eq!(gate[0].primary_span.start.line, 7);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "MLP206"),
+        "analysis of the gated file continues: the sub-frame play inside \
+         the match arm still reports"
+    );
+
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.10\"\n", MATCH_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.rule_id != "MLC000"),
+        "the same file is clean once the target reaches 3.10"
+    );
+}
+
+#[test]
+fn target_python_gates_type_alias_statements() {
+    const TYPE_SCENE: &str = "type Vector = list[float]\n";
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.11\"\n", TYPE_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == "MLC000"
+                && diagnostic.message
+                    == "`type` alias statement requires Python 3.12 but target-python is 3.11"
+        }),
+        "diagnostics: {:?}",
+        report.diagnostics
+    );
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.12\"\n", TYPE_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    assert!(report.diagnostics.is_empty());
+}
+
+#[test]
+fn target_python_gates_walrus_below_3_8() {
+    const WALRUS_SCENE: &str = "value = 1\nif (flag := value) > 0:\n    pass\n";
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.7\"\n", WALRUS_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.rule_id == "MLC000"
+            && diagnostic.message
+                == "assignment expression `:=` requires Python 3.8 but target-python is 3.7"
+    }));
+    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.8\"\n", WALRUS_SCENE);
+    let report = check(&args_for(project.path())).unwrap();
+    assert!(report.diagnostics.is_empty(), "walrus is fine at 3.8");
+}
+
 #[test]
 fn config_command_states_what_is_enforced() {
     let project = write_project("[tool.manim-lint]\nmanim-version = \"0.20\"\n");
@@ -196,6 +284,10 @@ fn config_command_states_what_is_enforced() {
     assert!(
         target_python.contains("no feature_version pinning"),
         "{target_python}"
+    );
+    assert!(
+        target_python.contains("MLC000"),
+        "the note must state the post-parse gate: {target_python}"
     );
     let manim_version = enforcement["manim-version"].as_str().unwrap();
     assert!(manim_version.contains("upstream_0_20"), "{manim_version}");

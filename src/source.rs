@@ -393,7 +393,8 @@ pub fn relative_posix_path(root: &Path, path: &Path) -> String {
 }
 
 /// Decodes Python source bytes per PEP 263: UTF-8 by default, honoring a
-/// `# -*- coding: ... -*-` declaration in the first two lines and a UTF-8 BOM.
+/// UTF-8 BOM and a `# -*- coding: ... -*-` declaration on line 1, or on
+/// line 2 when line 1 is blank or comment-only (`CPython`'s exact rule).
 fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String> {
     const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
     let (bytes, byte_order_mark) = match bytes.strip_prefix(UTF8_BOM) {
@@ -433,6 +434,19 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
                         byte_order_mark,
                     },
                 )),
+                DeclaredCodec::WhatwgC1Controls {
+                    encoding,
+                    canonical,
+                } => match decode_single_byte_with_c1_controls(bytes, encoding) {
+                    Some(text) => Ok((
+                        text,
+                        SourceEncoding {
+                            label: canonical.to_owned(),
+                            byte_order_mark,
+                        },
+                    )),
+                    None => Err(format!("cannot decode file with declared encoding {label}")),
+                },
                 DeclaredCodec::Whatwg(encoding) => {
                     let (text, actual, had_errors) = encoding.decode(bytes);
                     if had_errors {
@@ -460,6 +474,17 @@ enum DeclaredCodec {
     Latin1,
     /// A WHATWG decoder from `encoding_rs`.
     Whatwg(&'static encoding_rs::Encoding),
+    /// A single-byte WHATWG decoder whose only divergence from the
+    /// `CPython` codec the label names is the 0x80–0x9F range: those bytes
+    /// decode to the C1 controls U+0080–U+009F instead of the WHATWG
+    /// index entries. `canonical` is the label stored on the decoded file
+    /// (and matched by the fix re-encoder).
+    WhatwgC1Controls {
+        /// Underlying WHATWG decoder for every byte outside 0x80–0x9F.
+        encoding: &'static encoding_rs::Encoding,
+        /// Canonical label, e.g. `iso-8859-9`.
+        canonical: &'static str,
+    },
 }
 
 /// True ISO-8859-1 (`CPython`'s `latin-1` codec): each byte is the code
@@ -471,6 +496,47 @@ enum DeclaredCodec {
 /// produces — so the 1:1 mapping is implemented directly.
 fn decode_latin_1(bytes: &[u8]) -> String {
     bytes.iter().map(|&byte| char::from(byte)).collect()
+}
+
+/// Decodes a single-byte WHATWG encoding with 0x80–0x9F overridden to the
+/// C1 controls U+0080–U+009F, or `None` when any byte outside that range
+/// fails to decode.
+///
+/// This reproduces `CPython`'s `iso8859-9` / `iso8859-11` codecs exactly:
+/// the WHATWG label space resolves those names to windows-1254 /
+/// windows-874, which were verified byte-for-byte (including which bytes
+/// are decode errors) to differ from the `CPython` codecs only in
+/// 0x80–0x9F. Chunking at C1 bytes is sound because both decoders are
+/// stateless single-byte codecs.
+fn decode_single_byte_with_c1_controls(
+    bytes: &[u8],
+    encoding: &'static encoding_rs::Encoding,
+) -> Option<String> {
+    let is_c1 = |byte: u8| (0x80..=0x9f).contains(&byte);
+    let mut text = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let run_end = rest
+            .iter()
+            .position(|byte| is_c1(*byte))
+            .unwrap_or(rest.len());
+        if run_end > 0 {
+            let (decoded, had_errors) = encoding.decode_without_bom_handling(&rest[..run_end]);
+            if had_errors {
+                return None;
+            }
+            text.push_str(&decoded);
+            rest = &rest[run_end..];
+        }
+        while let Some((&byte, tail)) = rest.split_first() {
+            if !is_c1(byte) {
+                break;
+            }
+            text.push(char::from(byte));
+            rest = tail;
+        }
+    }
+    Some(text)
 }
 
 /// Resolves a PEP 263 encoding label to a decoder, accepting both WHATWG
@@ -521,6 +587,39 @@ fn resolve_declared_encoding(label: &str) -> Option<DeclaredCodec> {
     ) {
         return Some(DeclaredCodec::Latin1);
     }
+    // CPython's iso8859-9 and iso8859-11 codecs (alias sets from
+    // `Lib/encodings/aliases.py`, plus the codec names). WHATWG resolves
+    // several of these labels (`latin5`, `l5`, `iso-ir-148`, ...) to
+    // windows-1254 / windows-874, whose 0x80–0x9F decode to punctuation
+    // instead of CPython's C1 controls — verified byte-for-byte that the
+    // C1 range is the ONLY divergence, so these decode through the WHATWG
+    // codec with a C1 override (see `decode_single_byte_with_c1_controls`).
+    // `cp1254` / `cp874` spellings intentionally keep their plain WHATWG
+    // meaning — that is what those CPython codecs are closest to.
+    if matches!(
+        normalized.as_str(),
+        "iso8859_9"
+            | "iso_8859_9"
+            | "iso_8859_9_1989"
+            | "iso_ir_148"
+            | "l5"
+            | "latin5"
+            | "csisolatin5"
+    ) {
+        return Some(DeclaredCodec::WhatwgC1Controls {
+            encoding: encoding_rs::WINDOWS_1254,
+            canonical: "iso-8859-9",
+        });
+    }
+    if matches!(
+        normalized.as_str(),
+        "iso8859_11" | "iso_8859_11" | "iso_8859_11_2001" | "thai"
+    ) {
+        return Some(DeclaredCodec::WhatwgC1Controls {
+            encoding: encoding_rs::WINDOWS_874,
+            canonical: "iso-8859-11",
+        });
+    }
     resolve_whatwg_encoding(label, &normalized).map(|encoding| {
         if encoding == encoding_rs::UTF_8 {
             DeclaredCodec::Utf8
@@ -552,6 +651,22 @@ fn resolve_whatwg_encoding(
         "mac_roman" | "macroman" => Some("macintosh"),
         "mac_cyrillic" | "maccyrillic" => Some("x-mac-cyrillic"),
         "u8" | "cp65001" => Some("utf-8"),
+        // CPython-only spellings of the ISO-8859 family (aliases.py).
+        // Safe because the WHATWG decoders for these targets were verified
+        // byte-for-byte identical to the CPython codecs, C1 range and
+        // error positions included (see the iso-8859 tests below).
+        "iso_8859_2_1987" => Some("iso-8859-2"),
+        "iso_8859_3_1988" => Some("iso-8859-3"),
+        "iso_8859_4_1988" => Some("iso-8859-4"),
+        "iso_8859_5_1988" => Some("iso-8859-5"),
+        "iso_8859_6_1987" => Some("iso-8859-6"),
+        "iso_8859_7_1987" => Some("iso-8859-7"),
+        "iso_8859_8_1988" => Some("iso-8859-8"),
+        "iso_8859_10_1992" => Some("iso-8859-10"),
+        "l7" | "latin7" => Some("iso-8859-13"),
+        "l8" | "latin8" | "iso_celtic" | "iso_ir_199" | "iso_8859_14_1998" => Some("iso-8859-14"),
+        "latin9" => Some("iso-8859-15"),
+        "l10" | "latin10" | "iso_ir_226" | "iso_8859_16_2001" => Some("iso-8859-16"),
         _ => None,
     };
     if let Some(mapped) = mapped {
@@ -583,57 +698,105 @@ fn decode_strict_utf8(
     }
 }
 
-/// Finds a PEP 263 `coding: name` declaration in the first two lines.
+/// Finds a PEP 263 `coding: name` declaration, mirroring `CPython`'s
+/// `tokenize.detect_encoding` exactly: the cookie is looked for on line 1;
+/// line 2 is examined only when line 1 is blank or comment-only
+/// (`blank_re` = `^[ \t\f]*(?:[#\r\n]|$)`). A cookie after a code line —
+/// `x = 1` then `# coding: latin-1` — is NOT honored (verified against
+/// `CPython` 3.12 `tokenize.detect_encoding` and `compile`).
+///
+/// `CPython` also raises `SyntaxError` when an examined line is not valid
+/// UTF-8; returning no cookie here reaches the same per-file `MLC000`
+/// through the strict UTF-8 decode of the whole file.
 fn detect_coding_declaration(bytes: &[u8]) -> Option<String> {
-    for line in bytes.split(|byte| *byte == b'\n').take(2) {
-        let trimmed = trim_ascii(line);
-        if !trimmed.starts_with(b"#") {
+    let mut lines = bytes.split(|byte| *byte == b'\n');
+    let first = lines.next().unwrap_or(b"");
+    if std::str::from_utf8(first).is_err() {
+        return None;
+    }
+    if let Some(label) = find_cookie(first) {
+        return Some(label);
+    }
+    if !is_blank_or_comment_line(first) {
+        return None;
+    }
+    let second = lines.next()?;
+    if std::str::from_utf8(second).is_err() {
+        return None;
+    }
+    find_cookie(second)
+}
+
+/// `CPython`'s `tokenize.blank_re`, `^[ \t\f]*(?:[#\r\n]|$)`: the only
+/// first lines whose successor may carry the cookie. The `\n` alternative
+/// cannot occur here because lines are already split on `\n`; a line
+/// produced from `\r\n` still ends with (or, when empty, is) `\r`.
+fn is_blank_or_comment_line(line: &[u8]) -> bool {
+    let rest = skip_cookie_whitespace(line);
+    matches!(rest.first(), None | Some(b'#' | b'\r'))
+}
+
+/// One line of `CPython`'s `tokenize.cookie_re`,
+/// `^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)`: an own-line comment whose
+/// text contains `coding:` or `coding=` followed by a codec label.
+fn find_cookie(line: &[u8]) -> Option<String> {
+    let comment = skip_cookie_whitespace(line);
+    if comment.first() != Some(&b'#') {
+        return None;
+    }
+    extract_coding_label(comment)
+}
+
+/// Leading whitespace `cookie_re` and `blank_re` accept: space, tab, and
+/// form feed only (NOT `\v` or `\r` — verified against `CPython`, where a
+/// `\v`-indented comment line carries no cookie).
+fn skip_cookie_whitespace(line: &[u8]) -> &[u8] {
+    let start = line
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\x0c'))
+        .unwrap_or(line.len());
+    &line[start..]
+}
+
+/// Emulates `.*?coding[:=][ \t]*([-\w.]+)` with regex backtracking: every
+/// `coding` occurrence is tried in order until one is followed by `:`/`=`
+/// and a non-empty label (`# coding: , coding=latin-1` matches `latin-1`,
+/// verified against `CPython`). The label charset is the ASCII subset of
+/// `[-\w.]`; a non-ASCII label `CPython` would reject as an unknown
+/// encoding is treated as no cookie.
+fn extract_coding_label(comment: &[u8]) -> Option<String> {
+    let marker = b"coding";
+    let mut search_start = 0;
+    while let Some(position) = find_subslice(&comment[search_start..], marker) {
+        let after_marker = search_start + position + marker.len();
+        search_start += position + 1;
+        let mut rest = &comment[after_marker..];
+        if !matches!(rest.first(), Some(b':' | b'=')) {
             continue;
         }
-        if let Some(label) = extract_coding_label(trimmed) {
-            return Some(label);
+        rest = &rest[1..];
+        while rest
+            .first()
+            .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+        {
+            rest = &rest[1..];
+        }
+        let end = rest
+            .iter()
+            .position(|byte| !byte.is_ascii_alphanumeric() && !b"-_.".contains(byte))
+            .unwrap_or(rest.len());
+        if end > 0 {
+            return Some(String::from_utf8_lossy(&rest[..end]).into_owned());
         }
     }
     None
 }
 
-fn extract_coding_label(comment: &[u8]) -> Option<String> {
-    let marker = b"coding";
-    let position = comment
-        .windows(marker.len())
-        .position(|window| window == marker)?;
-    let mut rest = &comment[position + marker.len()..];
-    let first = rest.first()?;
-    if *first != b':' && *first != b'=' {
-        return None;
-    }
-    rest = &rest[1..];
-    while rest
-        .first()
-        .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
-    {
-        rest = &rest[1..];
-    }
-    let end = rest
-        .iter()
-        .position(|byte| !byte.is_ascii_alphanumeric() && !b"-_.".contains(byte))
-        .unwrap_or(rest.len());
-    if end == 0 {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&rest[..end]).into_owned())
-}
-
-fn trim_ascii(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
-        .map_or(start, |index| index + 1);
-    &bytes[start..end]
+/// First offset of `needle` in `haystack`, if any.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Byte offsets of every physical line start, honoring `\n`, `\r\n`, and `\r`.
@@ -888,6 +1051,247 @@ mod tests {
             assert!(
                 !file.text().contains('\u{20ac}'),
                 "{cookie}: 0x80 must not decode to windows-1252 '€'"
+            );
+        }
+    }
+
+    /// `CPython` only examines line 2 for the cookie when line 1 is blank
+    /// or comment-only (`tokenize.blank_re`); after a code line the cookie
+    /// is ignored (verified against `CPython` 3.12 `detect_encoding`).
+    #[test]
+    fn cookie_after_a_code_line_is_not_honored() {
+        // Pure ASCII: the file stays UTF-8, the cookie is dead text.
+        let mut sources = manager();
+        sources.load_bytes(Path::new("/project/late.py"), b"x = 1\n# coding: latin-1\n");
+        let file = &sources.files()[0];
+        assert!(file.is_parsed());
+        assert_eq!(file.encoding().label, "utf-8");
+
+        // With a latin-1 byte later on, CPython raises (the file is
+        // decoded as UTF-8); manim-lint reports the decode MLC000.
+        let mut sources = manager();
+        sources.load_bytes(
+            Path::new("/project/late.py"),
+            b"x = 1\n# coding: latin-1\n# caf\xe9\n",
+        );
+        let file = &sources.files()[0];
+        assert!(!file.is_parsed(), "the ignored cookie must not decode");
+        assert_eq!(
+            file.parse_diagnostic().expect("decode failure").rule_id,
+            "MLC000"
+        );
+    }
+
+    /// Line 1 variants `blank_re` accepts: the line-2 cookie is honored
+    /// after a comment, an empty line, whitespace (space/tab/form feed),
+    /// a bare `\r` (from `\r\n`), and a shebang.
+    #[test]
+    fn cookie_on_line_two_is_honored_after_blank_or_comment_lines() {
+        for first_line in [
+            b"# hi\n".as_slice(),
+            b"\n",
+            b"  \t\x0c\n",
+            b"\r\n",
+            b"#!/usr/bin/env python\n",
+        ] {
+            let mut bytes = first_line.to_vec();
+            bytes.extend(b"# coding: latin-1\n# caf\xe9\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/two.py"), &bytes);
+            let file = &sources.files()[0];
+            // The decode is what is under test: rustpython's lexer happens
+            // to reject the tab-after-space indentation line, but the
+            // cookie must be honored for every blank_re-matching line 1.
+            assert_eq!(
+                file.encoding().label,
+                "latin-1",
+                "cookie after {first_line:?} must be honored"
+            );
+            assert!(file.text().contains("café"));
+        }
+    }
+
+    /// A vertical tab is NOT in `blank_re`/`cookie_re`'s `[ \t\f]`, and
+    /// line 3 is never examined (`CPython` reads at most two lines).
+    #[test]
+    fn cookie_after_vertical_tab_or_on_line_three_is_not_honored() {
+        for bytes in [
+            b"\x0b# coding: latin-1\n# caf\xe9\n".as_slice(),
+            b"# a\n# b\n# coding: latin-1\n# caf\xe9\n",
+        ] {
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/no.py"), bytes);
+            let file = &sources.files()[0];
+            assert!(!file.is_parsed(), "{bytes:?} must not honor the cookie");
+        }
+    }
+
+    /// `cookie_re` backtracks over `coding` occurrences: an occurrence
+    /// with no label after `:` falls through to a later `coding=`
+    /// (verified against `CPython` 3.12 `detect_encoding`).
+    #[test]
+    fn cookie_extraction_backtracks_like_cpython() {
+        let mut sources = manager();
+        sources.load_bytes(
+            Path::new("/project/bt.py"),
+            b"# coding: , coding=latin-1\n# caf\xe9\n",
+        );
+        let file = &sources.files()[0];
+        assert!(file.is_parsed());
+        assert!(file.text().contains("café"));
+        assert_eq!(file.encoding().label, "latin-1");
+    }
+
+    /// `CPython`'s `iso8859-9` codec, byte for byte: the WHATWG label
+    /// space resolves `iso-8859-9` (and `latin5`, `l5`, ...) to
+    /// windows-1254, whose 0x80–0x9F decode to punctuation (0x80 → '€');
+    /// `CPython` decodes them to the C1 controls. Everything else is
+    /// latin-1 except the six Turkish letters. Expected values generated
+    /// from `CPython` 3.12 `bytes(range(0x80, 0x100)).decode("iso8859_9")`.
+    #[test]
+    fn iso_8859_9_decodes_all_bytes_like_cpython() {
+        let expected: String = (0x80..=0xff_u32)
+            .map(|byte| match byte {
+                0xd0 => 'Ğ',
+                0xdd => 'İ',
+                0xde => 'Ş',
+                0xf0 => 'ğ',
+                0xfd => 'ı',
+                0xfe => 'ş',
+                other => char::from_u32(other).expect("latin-1 range"),
+            })
+            .collect();
+        for cookie in [
+            "iso-8859-9",
+            "iso8859-9",
+            "latin5",
+            "L5",
+            "iso-ir-148",
+            "csisolatin5",
+            "ISO_8859-9:1989",
+        ] {
+            let mut bytes = format!("# -*- coding: {cookie} -*-\nx = \"").into_bytes();
+            bytes.extend(0x80..=0xff_u8);
+            bytes.extend(b"\"\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/tr.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} must decode");
+            assert_eq!(file.encoding().label, "iso-8859-9");
+            assert!(
+                file.text().contains(&expected),
+                "{cookie}: full upper half must match CPython's iso8859-9"
+            );
+            assert!(
+                !file.text().contains('\u{20ac}'),
+                "{cookie}: 0x80 must not decode to windows-1254 '€'"
+            );
+        }
+    }
+
+    /// `CPython`'s `iso8859-11` codec: C1 controls, NBSP at 0xA0, Thai
+    /// letters at 0xA1–0xDA (U+0E01..) and 0xDF–0xFB (U+0E3F..). The
+    /// WHATWG counterpart windows-874 diverges only in 0x80–0x9F
+    /// (verified byte for byte against `CPython` 3.12).
+    #[test]
+    fn iso_8859_11_decodes_like_cpython() {
+        let expected: String = (0x80..=0xa0_u32)
+            .filter_map(char::from_u32)
+            .chain((0xa1..=0xda_u32).filter_map(|byte| char::from_u32(byte - 0xa1 + 0x0e01)))
+            .chain((0xdf..=0xfb_u32).filter_map(|byte| char::from_u32(byte - 0xdf + 0x0e3f)))
+            .collect();
+        for cookie in ["iso-8859-11", "thai", "iso8859_11"] {
+            let mut bytes = format!("# coding: {cookie}\nx = \"").into_bytes();
+            bytes.extend(0x80..=0xda_u8);
+            bytes.extend(0xdf..=0xfb_u8);
+            bytes.extend(b"\"\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/th.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} must decode");
+            assert_eq!(file.encoding().label, "iso-8859-11");
+            assert!(file.text().contains(&expected), "{cookie} table mismatch");
+        }
+    }
+
+    /// Bytes `CPython`'s `iso8859-11` rejects (0xDB–0xDE, 0xFC–0xFF) are a
+    /// decode failure here too — never silently replaced.
+    #[test]
+    fn iso_8859_11_undefined_bytes_are_a_decode_failure() {
+        let mut bytes = b"# coding: iso-8859-11\nx = \"".to_vec();
+        bytes.push(0xdb);
+        bytes.extend(b"\"\n");
+        let mut sources = manager();
+        sources.load_bytes(Path::new("/project/bad_thai.py"), &bytes);
+        let file = &sources.files()[0];
+        assert!(!file.is_parsed());
+        let diagnostic = file.parse_diagnostic().expect("undefined byte");
+        assert_eq!(diagnostic.rule_id, "MLC000");
+        assert!(diagnostic.message.contains("cannot decode"));
+    }
+
+    /// For every other ISO-8859-N `CPython` supports, the WHATWG decoder
+    /// was verified byte-for-byte identical to the `CPython` codec —
+    /// including the C1 controls and error positions — so those labels
+    /// decode through `encoding_rs` unchanged. The C1 range plus one
+    /// distinctive letter per encoding pin the verification.
+    #[test]
+    fn identical_iso_8859_family_decodes_c1_and_letters_like_cpython() {
+        let cases: [(&str, u8, char); 12] = [
+            ("iso-8859-2", 0xa3, 'Ł'),
+            ("iso-8859-3", 0xa1, 'Ħ'),
+            ("iso-8859-4", 0xff, '˙'),
+            ("iso-8859-5", 0xd4, 'д'),
+            ("iso-8859-6", 0xc1, 'ء'),
+            ("iso-8859-7", 0xd3, 'Σ'),
+            ("iso-8859-8", 0xe0, 'א'),
+            ("iso-8859-10", 0xa1, 'Ą'),
+            ("iso-8859-13", 0xd0, 'Š'),
+            ("iso-8859-14", 0xa1, 'Ḃ'),
+            ("iso-8859-15", 0xa4, '€'),
+            ("iso-8859-16", 0xa4, '€'),
+        ];
+        for (cookie, byte, letter) in cases {
+            let mut bytes = format!("# coding: {cookie}\nx = \"").into_bytes();
+            bytes.extend(0x80..=0x9f_u8);
+            bytes.push(byte);
+            bytes.extend(b"\"\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/iso.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} must decode");
+            let mut expected: String = ('\u{80}'..='\u{9f}').collect();
+            expected.push(letter);
+            assert!(
+                file.text().contains(&expected),
+                "{cookie}: C1 range + 0x{byte:02X} must match CPython"
+            );
+        }
+    }
+
+    /// `CPython`-only alias spellings of the verified-identical family
+    /// (`latin7`..`latin10`, `iso_celtic`, year variants) resolve to the
+    /// same decoders instead of being refused.
+    #[test]
+    fn cpython_only_iso_8859_aliases_resolve() {
+        let cases: [(&str, u8, char); 5] = [
+            ("latin7", 0xd0, 'Š'),
+            ("latin8", 0xa1, 'Ḃ'),
+            ("latin9", 0xa4, '€'),
+            ("latin10", 0xa4, '€'),
+            ("iso_8859_14_1998", 0xa1, 'Ḃ'),
+        ];
+        for (cookie, byte, letter) in cases {
+            let mut bytes = format!("# coding: {cookie}\nx = \"").into_bytes();
+            bytes.push(byte);
+            bytes.extend(b"\"\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/alias.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} must decode");
+            assert!(
+                file.text().contains(letter),
+                "{cookie}: 0x{byte:02X} must decode to {letter}"
             );
         }
     }
