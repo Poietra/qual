@@ -3,12 +3,15 @@
 //! Phase 1 implements the direct-call and literal rules over qualified call
 //! facts: `MLC101`-`MLC106`, `MLC109`, `MLC122`, `MLC126`, `MLC127`.
 //! Phase 2 adds the state-dependent rules over the abstract-interpreter
-//! facts: `MLC107`, `MLC108`, `MLC110`, `MLC113`, `MLC115`, `MLC117`,
-//! `MLC119`, `MLC120`, `MLC121`, `MLC124`, `MLC125`, `MLC128`, `MLC129`.
+//! facts: `MLC107`, `MLC108`, `MLC110`, `MLC111`, `MLC112`, `MLC113`,
+//! `MLC115`, `MLC117`, `MLC119`, `MLC120`, `MLC121`, `MLC123`, `MLC124`,
+//! `MLC125`, `MLC128`, `MLC129`.
 
 mod builder_rules;
+mod callbacks;
 mod constructors;
 mod membership;
+mod ownership;
 mod play_args;
 mod play_conflicts;
 mod state_targets;
@@ -36,6 +39,8 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(play_conflicts::ConflictingPlayWrites),
         Box::new(play_args::EmptyAnimationGroup),
         Box::new(structure::SelfOrCyclicChild),
+        Box::new(ownership::OrphanedUpdaterObject),
+        Box::new(updaters::FrozenWaitFrameVaryingUpdater),
         Box::new(builder_rules::AnimateKwargsAfterMethod),
         Box::new(structure::RemovedChildReappears),
         Box::new(builder_rules::StaleAnimateBuilder),
@@ -43,6 +48,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(state_targets::MissingSavedState),
         Box::new(updaters::TimelineReentry),
         Box::new(play_args::ApplyMethodCallResult),
+        Box::new(callbacks::ApplyFunctionCallbackNoMobject),
         Box::new(builder_rules::NonMutatingAnimateMethod),
         Box::new(updaters::RemoveUpdaterIdentityMismatch),
         Box::new(membership::InvalidFamilyChild),

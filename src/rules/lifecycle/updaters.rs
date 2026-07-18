@@ -419,6 +419,190 @@ impl Rule for RemoveUpdaterIdentityMismatch {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MLC112: default wait freezes while a frame-varying updater is active.
+// ---------------------------------------------------------------------------
+
+/// Metadata for [`FrozenWaitFrameVaryingUpdater`].
+pub const MLC112: RuleMetadata = RuleMetadata {
+    id: "MLC112",
+    summary: "Default wait() freezes while a frame-varying one-argument updater is active",
+    default_enabled: true,
+    default_severity: Severity::Warning,
+    minimum_confidence: Confidence::High,
+    implementation_phase: 2,
+    required_profiles: &[],
+    required_capabilities: &["lifecycle"],
+    supersedes: &[],
+};
+
+/// A provably static default `wait()` while a one-argument updater that
+/// provably reads frame-varying state is active on a scene-family member:
+/// the updater's visual change never renders (DESIGN §7.1 `MLC112`).
+///
+/// Every gate is a definite fact (DESIGN §15): the body dataflow must be
+/// `reads_frame_varying == Yes` and `uses_dt == No`, the wait must be
+/// `dynamic_wait == No` with no literal `frozen_frame`, the registration
+/// `Present`-certain, and the host provably in the scene family with the
+/// updater still attached at the wait. `Maybe` anywhere stays silent.
+pub struct FrozenWaitFrameVaryingUpdater;
+
+impl Rule for FrozenWaitFrameVaryingUpdater {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLC112
+    }
+
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        use crate::semantic::interpreter::{PlayKind, UpdaterHost};
+        use crate::semantic::values::{AllocationSite, Presence, Truth};
+        use std::collections::BTreeSet;
+
+        let mut seen: BTreeSet<AllocationSite> = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for scene in &context.lifecycle_facts().scenes {
+            for play in &scene.plays {
+                if play.kind != PlayKind::Wait
+                    || play.dynamic_wait != Truth::No
+                    || play.frozen_frame.is_some()
+                    || seen.contains(&play.site)
+                {
+                    continue;
+                }
+                for registration in &scene.updaters {
+                    let UpdaterHost::Mobject(object) = &registration.host else {
+                        continue;
+                    };
+                    if registration.certainty != Presence::Present
+                        || registration.body.reads_frame_varying != Truth::Yes
+                        || registration.body.uses_dt != Truth::No
+                    {
+                        continue;
+                    }
+                    // A removal that may match this host makes "still
+                    // active at the wait" unprovable: silence.
+                    let maybe_removed = scene.updater_removals.iter().any(|removal| {
+                        removal.matched != Truth::No
+                            && matches!(
+                                &removal.host,
+                                UpdaterHost::Mobject(host) if host.definitely_same(object)
+                            )
+                    });
+                    if maybe_removed {
+                        continue;
+                    }
+                    // The updater must still be attached and its host in
+                    // the scene family at the wait.
+                    let Some(snapshot) = scene.state_at(play.site.file, play.site.start) else {
+                        continue;
+                    };
+                    let Some(state) = snapshot.heap.object(object) else {
+                        continue;
+                    };
+                    if state.family_membership != Presence::Present
+                        || !state.updaters.contains(&registration.fact)
+                    {
+                        continue;
+                    }
+                    seen.insert(play.site);
+                    diagnostics.push(frozen_wait_diagnostic(context, scene, play, registration));
+                    break;
+                }
+            }
+        }
+        diagnostics
+    }
+}
+
+/// Assembles the `MLC112` diagnostic for one confirmed static wait with
+/// its frame-varying registration, including the unsafe
+/// `frozen_frame=False` insertion when the call text allows it.
+fn frozen_wait_diagnostic(
+    context: &RuleContext<'_>,
+    scene: &crate::semantic::interpreter::SceneLifecycle,
+    play: &crate::semantic::interpreter::PlayFact,
+    registration: &crate::semantic::interpreter::UpdaterRegistration,
+) -> Diagnostic {
+    use crate::diagnostic::{Fix, FixApplicability, RelatedLocation, TextEdit};
+    use rustpython_parser::text_size::TextRange;
+
+    let file = context.sources().file(play.site.file);
+    let registration_file = context.sources().file(registration.site.file);
+    let registration_span =
+        registration_file.span_of_range(super::support::site_range(&registration.site));
+    let mut evidence = BTreeMap::new();
+    evidence.insert(
+        "scene".to_owned(),
+        Value::String(scene.qualified_name.clone()),
+    );
+    evidence.insert("dynamic_wait".to_owned(), Value::String("no".to_owned()));
+    evidence.insert(
+        "frozen_frame".to_owned(),
+        Value::String("default".to_owned()),
+    );
+    evidence.insert(
+        "reads_frame_varying".to_owned(),
+        Value::String("yes".to_owned()),
+    );
+    evidence.insert("uses_dt".to_owned(), Value::String("no".to_owned()));
+    evidence.insert(
+        "registration".to_owned(),
+        Value::String(format!(
+            "{}:{}",
+            registration_file.relative_path(),
+            registration_span.start.line
+        )),
+    );
+    let mut diagnostic = build_diagnostic(
+        &MLC112,
+        context,
+        file,
+        super::support::site_range(&play.site),
+        format!(
+            "This `wait()` renders a single frozen frame: nothing makes it \
+             dynamic, and the updater registered at line {line} reads \
+             frame-varying state without a `dt` parameter, so its visual change \
+             never renders during the wait. Pass `frozen_frame=False`, or \
+             declare a `dt` parameter on the updater.",
+            line = registration_span.start.line,
+        ),
+        "A default `Scene.wait()` re-renders every frame only when a scene \
+         updater, `stop_condition`, `always_update_mobjects`, or a *time-based* \
+         family updater (one whose signature names a `dt` parameter) exists. A \
+         one-argument updater never makes a wait dynamic — even one that reads \
+         a `ValueTracker`, random source, or clock every frame — so the wait \
+         freezes and the updater's changes are invisible (DESIGN §3.3)."
+            .to_owned(),
+        evidence,
+    );
+    diagnostic.related_locations.push(RelatedLocation {
+        path: registration_file.relative_path().to_owned(),
+        span: registration_span,
+        message: "frame-varying one-argument updater registered here".to_owned(),
+    });
+    // Unsafe fix: force the wait dynamic. Inserting the keyword needs a
+    // plain `...(...)` call text.
+    let call_text = file.slice(super::support::site_range(&play.site));
+    if call_text.ends_with(')') && play.site.end > play.site.start {
+        let inner = &call_text[..call_text.len() - 1];
+        let replacement = if inner.trim_end().ends_with('(') {
+            "frozen_frame=False"
+        } else {
+            ", frozen_frame=False"
+        };
+        let insertion = TextRange::new((play.site.end - 1).into(), (play.site.end - 1).into());
+        diagnostic.fix = Some(Fix {
+            applicability: FixApplicability::Unsafe,
+            message: "Pass `frozen_frame=False` so the wait renders dynamically".to_owned(),
+            edits: vec![TextEdit {
+                path: file.relative_path().to_owned(),
+                span: file.span_of_range(insertion),
+                replacement: replacement.to_owned(),
+            }],
+        });
+    }
+    diagnostic
+}
+
 /// For a non-lambda mismatch the interpreter's registered-updater set must
 /// be provably complete: no registration on the same host with an unknown
 /// callback identity, and no unresolved call that may have registered one

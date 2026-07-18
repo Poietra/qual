@@ -428,6 +428,50 @@ fn mlc121_timeline_reentry_golden() {
 }
 
 #[test]
+fn mlc111_orphaned_updater_object_golden() {
+    // The fixture pyproject lowers min-confidence to low: the builtin
+    // default (high) would filter this medium-confidence rule out.
+    // invalid.py line 8 renders frames while `dot` (updater registered,
+    // never added) is orphaned; line 14 renders after `square` was
+    // removed from the scene with its updater still attached.
+    assert_golden(
+        "MLC111",
+        &[
+            "alias.py:8:9 MLC111 info medium",
+            "invalid.py:8:9 MLC111 info medium",
+            "invalid.py:14:9 MLC111 info medium",
+        ],
+    );
+}
+
+#[test]
+fn mlc112_frozen_wait_frame_varying_updater_golden() {
+    // The one-argument updater provably reads a ValueTracker every frame
+    // but never makes the default wait dynamic: the wait freezes.
+    assert_golden(
+        "MLC112",
+        &[
+            "alias.py:10:9 MLC112 warning high",
+            "invalid.py:10:9 MLC112 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc123_apply_function_callback_no_mobject_golden() {
+    // Named callback falling off the end, and a lambda returning a
+    // definite non-mobject (an Animation).
+    assert_golden(
+        "MLC123",
+        &[
+            "alias.py:12:36 MLC123 error high",
+            "invalid.py:12:33 MLC123 error high",
+            "invalid.py:13:33 MLC123 error high",
+        ],
+    );
+}
+
+#[test]
 fn mlc124_non_mutating_animate_method_golden() {
     assert_golden(
         "MLC124",
@@ -477,7 +521,7 @@ fn mlc129_play_lag_ratio_stagger_golden() {
 
 #[test]
 fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
-    let expected: [(&str, Severity, Confidence, &[&str]); 13] = [
+    let expected: [(&str, Severity, Confidence, &[&str]); 16] = [
         ("MLC107", Severity::Error, Confidence::High, &["lifecycle"]),
         (
             "MLC108",
@@ -489,6 +533,13 @@ fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
             "MLC110",
             Severity::Error,
             Confidence::Certain,
+            &["lifecycle"],
+        ),
+        ("MLC111", Severity::Info, Confidence::Medium, &["lifecycle"]),
+        (
+            "MLC112",
+            Severity::Warning,
+            Confidence::High,
             &["lifecycle"],
         ),
         (
@@ -521,6 +572,12 @@ fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
             Severity::Error,
             Confidence::High,
             &["qualified-calls", "cost-facts"],
+        ),
+        (
+            "MLC123",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls", "lifecycle"],
         ),
         (
             "MLC124",
