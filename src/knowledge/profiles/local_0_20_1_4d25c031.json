@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "local_0_20_1_4d25c031",
+  "manim_version": ">=0.20,<0.21",
+  "source_digest": "sha256:6c7379d3c3f93825b205d4fa9da1115067ef934657fa8eebec1a30e89aac3237",
+  "base_profile": {
+    "name": "upstream_0_20",
+    "source_digest": "sha256:b8c6a680098fac9d666ff52779252ab6783e5a54e3dc8a456feb86b3724752f3"
+  },
+  "symbols": {
+    "manim.constants.CAIRO_ANTIALIAS_MODES": {
+      "kind": "constant",
+      "note": "Fork-only: Cairo image-backend antialias modes; absent from upstream 4d25c031."
+    },
+    "manim.constants.VIDEO_ENCODERS": {
+      "kind": "constant",
+      "note": "Fork-only: accepted `video_encoder` names; absent from upstream 4d25c031."
+    },
+    "manim.constants.X264_PRESETS": {
+      "kind": "constant",
+      "note": "Fork-only: libx264 preset names; absent from upstream 4d25c031."
+    }
+  },
+  "exports": {
+    "CAIRO_ANTIALIAS_MODES": "manim.constants.CAIRO_ANTIALIAS_MODES",
+    "VIDEO_ENCODERS": "manim.constants.VIDEO_ENCODERS",
+    "X264_PRESETS": "manim.constants.X264_PRESETS"
+  }
+}

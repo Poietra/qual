@@ -10,9 +10,10 @@
 //! - [`list_available`] enumerates the shipped profile names.
 //!
 //! The shipped `v0_20.json` carries the name `upstream_0_20` and describes
-//! upstream Manim Community 0.20 public semantics; local fork overlays
-//! (e.g. `local_0_20_1_4d25c031`) are added later as separate files that
-//! replace whole symbol entries of their base.
+//! upstream Manim Community 0.20 public semantics as of the clean base
+//! commit `4d25c031`. The shipped `local_0_20_1_4d25c031.json` overlay
+//! carries the sibling fork's local additions on top of that base; overlays
+//! replace whole symbol entries of their base (see `profiles/README.md`).
 
 pub mod generator;
 pub mod model;
@@ -31,7 +32,13 @@ pub use model::{
 pub const DEFAULT_PROFILE: &str = "upstream_0_20";
 
 /// Profile JSON files embedded at compile time: `(file name, content)`.
-const EMBEDDED_PROFILES: &[(&str, &str)] = &[("v0_20.json", include_str!("profiles/v0_20.json"))];
+const EMBEDDED_PROFILES: &[(&str, &str)] = &[
+    ("v0_20.json", include_str!("profiles/v0_20.json")),
+    (
+        "local_0_20_1_4d25c031.json",
+        include_str!("profiles/local_0_20_1_4d25c031.json"),
+    ),
+];
 
 /// Accepted alternate spellings: `(alias, canonical profile name)`.
 ///

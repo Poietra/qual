@@ -61,6 +61,30 @@ pub enum GeneratorError {
         /// Stringified I/O error.
         message: String,
     },
+    /// `git archive` could not produce the requested tree.
+    #[error("`git -C {repo} archive {git_ref}` failed: {message}")]
+    GitArchive {
+        /// The repository the archive was requested from.
+        repo: String,
+        /// The commit-ish that was requested.
+        git_ref: String,
+        /// Stringified spawn error or captured stderr.
+        message: String,
+    },
+    /// The tar stream produced by `git archive` was malformed.
+    #[error("malformed tar archive from `{origin}`: {message}")]
+    Tar {
+        /// Where the archive came from (`<repo>@<ref>`).
+        origin: String,
+        /// What was wrong with the stream.
+        message: String,
+    },
+    /// The archived tree contains no `manim/__init__.py`.
+    #[error("archive of `{origin}` contains no `manim/__init__.py`")]
+    ArchivePackageNotFound {
+        /// Where the archive came from (`<repo>@<ref>`).
+        origin: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -844,6 +868,180 @@ pub fn generate_from_sources(package: &str, files: &[(&str, &str)]) -> Generated
         .map(|(path, source)| ((*path).to_owned(), source.as_bytes().to_vec()))
         .collect();
     build_candidates(package, &owned)
+}
+
+/// Generates candidates from a committed tree of a Manim git repository
+/// **without touching its working tree**: the tree is materialized in
+/// memory via `git -C <repo> archive <git_ref>` (a read-only plumbing
+/// command) and parsed from the tar stream. This is how drift checks target
+/// the clean upstream base commit instead of a possibly dirty checkout.
+pub fn generate_from_git_ref(
+    repo: &Path,
+    git_ref: &str,
+) -> Result<GeneratedCandidates, GeneratorError> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("archive")
+        .arg("--format=tar")
+        .arg(git_ref)
+        .output()
+        .map_err(|error| GeneratorError::GitArchive {
+            repo: repo.display().to_string(),
+            git_ref: git_ref.to_owned(),
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(GeneratorError::GitArchive {
+            repo: repo.display().to_string(),
+            git_ref: git_ref.to_owned(),
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    let origin = format!("{}@{git_ref}", repo.display());
+    generate_from_tar(&origin, &output.stdout)
+}
+
+/// Generates candidates from an in-memory tar stream (as produced by
+/// `git archive`). `origin` names the source for error messages. Only
+/// `manim/**/*.py` entries contribute; the archive must contain
+/// `manim/__init__.py`.
+pub fn generate_from_tar(
+    origin: &str,
+    tar_bytes: &[u8],
+) -> Result<GeneratedCandidates, GeneratorError> {
+    let entries = parse_tar(origin, tar_bytes)?;
+    let files: Vec<(String, Vec<u8>)> = entries
+        .into_iter()
+        .filter(|(path, _)| {
+            // Same case-sensitive `.py` match as the directory walk and the
+            // digest recipe (`find manim -name '*.py'`).
+            path.starts_with("manim/")
+                && Path::new(path).extension().is_some_and(|ext| ext == "py")
+                && !path.contains("__pycache__")
+        })
+        .collect();
+    if !files.iter().any(|(path, _)| path == "manim/__init__.py") {
+        return Err(GeneratorError::ArchivePackageNotFound {
+            origin: origin.to_owned(),
+        });
+    }
+    Ok(build_candidates("manim", &files))
+}
+
+/// Minimal POSIX ustar / pax reader covering what `git archive` emits:
+/// regular files, directories, the pax global header carrying the commit
+/// id, per-entry pax `path` overrides, and GNU `L` long-name entries.
+fn parse_tar(origin: &str, bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, GeneratorError> {
+    let malformed = |message: String| GeneratorError::Tar {
+        origin: origin.to_owned(),
+        message,
+    };
+    let mut entries = Vec::new();
+    let mut offset = 0usize;
+    let mut next_long_name: Option<String> = None;
+    while offset + 512 <= bytes.len() {
+        let header = &bytes[offset..offset + 512];
+        offset += 512;
+        if header.iter().all(|byte| *byte == 0) {
+            break; // end-of-archive marker
+        }
+        let size = octal_field(&header[124..136])
+            .ok_or_else(|| malformed("unparsable size field".to_owned()))?;
+        let data_end = offset
+            .checked_add(size)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| malformed("entry data extends past end of archive".to_owned()))?;
+        let data = &bytes[offset..data_end];
+        offset = data_end.next_multiple_of(512);
+        let type_flag = header[156];
+        match type_flag {
+            // Pax global header (`g`): git stores the commit id here.
+            b'g' => {}
+            // Pax extended header (`x`): may override the next entry's path.
+            b'x' => {
+                if let Some(path) = pax_path(data) {
+                    next_long_name = Some(path);
+                }
+            }
+            // GNU long-name entry: data is the next entry's path.
+            b'L' => {
+                let name = data.split(|byte| *byte == 0).next().unwrap_or_default();
+                next_long_name = Some(String::from_utf8_lossy(name).into_owned());
+            }
+            // Regular file.
+            b'0' | 0 => {
+                let name = match next_long_name.take() {
+                    Some(long) => long,
+                    None => header_name(header),
+                };
+                entries.push((name, data.to_vec()));
+            }
+            // Directories, links, and anything else carry no source text.
+            _ => {
+                next_long_name = None;
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Entry name from the fixed header: ustar `prefix` + `name`.
+fn header_name(header: &[u8]) -> String {
+    let name_bytes = header[0..100]
+        .split(|byte| *byte == 0)
+        .next()
+        .unwrap_or_default();
+    let name = String::from_utf8_lossy(name_bytes).into_owned();
+    if &header[257..262] == b"ustar" {
+        let prefix_bytes = header[345..500]
+            .split(|byte| *byte == 0)
+            .next()
+            .unwrap_or_default();
+        if !prefix_bytes.is_empty() {
+            let prefix = String::from_utf8_lossy(prefix_bytes);
+            return format!("{prefix}/{name}");
+        }
+    }
+    name
+}
+
+/// Octal number in a tar header field (NUL/space terminated).
+fn octal_field(field: &[u8]) -> Option<usize> {
+    let text = field
+        .split(|byte| *byte == 0 || *byte == b' ')
+        .next()
+        .unwrap_or_default();
+    if text.is_empty() {
+        return Some(0);
+    }
+    let mut value = 0usize;
+    for byte in text {
+        if !(b'0'..=b'7').contains(byte) {
+            return None;
+        }
+        value = value
+            .checked_mul(8)?
+            .checked_add(usize::from(byte - b'0'))?;
+    }
+    Some(value)
+}
+
+/// Extracts the `path` record from a pax extended header body
+/// (`<len> <key>=<value>\n` records).
+fn pax_path(data: &[u8]) -> Option<String> {
+    let mut rest = data;
+    while !rest.is_empty() {
+        let space = rest.iter().position(|byte| *byte == b' ')?;
+        let length: usize = std::str::from_utf8(&rest[..space]).ok()?.parse().ok()?;
+        let record = rest.get(space + 1..length.checked_sub(1)?)?;
+        rest = rest.get(length..)?;
+        let record = record.strip_suffix(b"\n").unwrap_or(record);
+        if let Some(value) = record.strip_prefix(b"path=") {
+            return Some(String::from_utf8_lossy(value).into_owned());
+        }
+    }
+    None
 }
 
 fn locate_package(root: &Path) -> Result<(PathBuf, String), GeneratorError> {

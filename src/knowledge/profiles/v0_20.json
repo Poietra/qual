@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "upstream_0_20",
   "manim_version": ">=0.20,<0.21",
-  "source_digest": "sha256:6c7379d3c3f93825b205d4fa9da1115067ef934657fa8eebec1a30e89aac3237",
+  "source_digest": "sha256:b8c6a680098fac9d666ff52779252ab6783e5a54e3dc8a456feb86b3724752f3",
   "base_profile": null,
   "symbols": {
     "manim.animation.animation.Animation": {
@@ -333,9 +333,6 @@
     "manim.constants.BOOK": {
       "kind": "constant"
     },
-    "manim.constants.CAIRO_ANTIALIAS_MODES": {
-      "kind": "constant"
-    },
     "manim.constants.CHOOSE_NUMBER_MESSAGE": {
       "kind": "constant"
     },
@@ -529,12 +526,6 @@
     "manim.constants.UR": {
       "kind": "constant",
       "note": "Unit vector UP + RIGHT (1, 1, 0)."
-    },
-    "manim.constants.VIDEO_ENCODERS": {
-      "kind": "constant"
-    },
-    "manim.constants.X264_PRESETS": {
-      "kind": "constant"
     },
     "manim.constants.X_AXIS": {
       "kind": "constant",
@@ -1510,7 +1501,6 @@
     "BLUE_E": "manim.utils.color.manim_colors.BLUE_E",
     "BOLD": "manim.constants.BOLD",
     "BOOK": "manim.constants.BOOK",
-    "CAIRO_ANTIALIAS_MODES": "manim.constants.CAIRO_ANTIALIAS_MODES",
     "CHOOSE_NUMBER_MESSAGE": "manim.constants.CHOOSE_NUMBER_MESSAGE",
     "CONTEXT_SETTINGS": "manim.constants.CONTEXT_SETTINGS",
     "CTRL_VALUE": "manim.constants.CTRL_VALUE",
@@ -1708,13 +1698,11 @@
     "UpdateFromAlphaFunc": "manim.animation.updaters.update.UpdateFromAlphaFunc",
     "UpdateFromFunc": "manim.animation.updaters.update.UpdateFromFunc",
     "VGroup": "manim.mobject.types.vectorized_mobject.VGroup",
-    "VIDEO_ENCODERS": "manim.constants.VIDEO_ENCODERS",
     "VMobject": "manim.mobject.types.vectorized_mobject.VMobject",
     "ValueTracker": "manim.mobject.value_tracker.ValueTracker",
     "WHITE": "manim.utils.color.manim_colors.WHITE",
     "Wait": "manim.animation.animation.Wait",
     "Write": "manim.animation.creation.Write",
-    "X264_PRESETS": "manim.constants.X264_PRESETS",
     "X_AXIS": "manim.constants.X_AXIS",
     "YELLOW": "manim.utils.color.manim_colors.YELLOW",
     "YELLOW_A": "manim.utils.color.manim_colors.YELLOW_A",

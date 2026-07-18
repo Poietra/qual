@@ -435,12 +435,19 @@ All four gates must pass.
 
 Knowledge-profile maintenance: the `sync_manim_knowledge` binary statically
 reads a Manim checkout, generates reviewable profile candidates, and checks
-the shipped profile for drift (exit 1 on contradictions) — see
-[src/knowledge/profiles/README.md](src/knowledge/profiles/README.md):
+the shipped profiles for drift (exit 1 on contradictions) — see
+[src/knowledge/profiles/README.md](src/knowledge/profiles/README.md).
+Provenance is split: `upstream_0_20` describes the **clean** upstream base
+commit `4d25c031` (read via `git archive`, never the working tree), and the
+`local_0_20_1_4d25c031` overlay carries what the sibling fork's working
+tree adds on top:
 
 ```bash
+# working tree (fork) — informational against upstream
 cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff
-cargo test --test knowledge_drift -- --ignored   # layer-9 drift gate
+# clean upstream base — must be contradiction-free
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+cargo test --test knowledge_drift -- --ignored   # layer-9 drift gate (both)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the

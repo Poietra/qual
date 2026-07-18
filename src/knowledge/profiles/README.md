@@ -10,8 +10,22 @@ embedded into the binary at compile time and loaded via
   upstream Manim Community 0.20 public semantics. There is no separate
   `upstream_0_20.json` file; `v0_20.json` *is* the upstream profile, named
   to match the `knowledge-profile` config examples in DESIGN §8.2.
-- `local_*.json` (future): local fork overlays. An overlay names its base
-  by `base_profile` (`name` **and** `source_digest` must match exactly),
+  **Provenance:** the clean upstream base commit `4d25c031`
+  (`v0.20.1-49-g4d25c031`, 0.20.1 lineage) of the sibling checkout at
+  `/home/hosi/manim`, materialized read-only via `git archive 4d25c031` —
+  never the working tree, which carries uncommitted fork changes. Verified
+  drift-free against that clean tree by
+  `sync_manim_knowledge --manim-ref 4d25c031 --diff`: 0 missing symbols,
+  0 contradictions, 0 warnings.
+- `local_0_20_1_4d25c031.json` — profile name **`local_0_20_1_4d25c031`**:
+  the local-fork overlay on `base_profile = upstream_0_20`. It carries what
+  the fork's working tree adds on top of the base commit — currently the
+  three fork-only `manim.constants` names (`CAIRO_ANTIALIAS_MODES`,
+  `VIDEO_ENCODERS`, `X264_PRESETS`) and their star exports, which were
+  moved out of the upstream profile because the clean base tree disproves
+  them. Its own `source_digest` covers the fork working tree it describes
+  (as of 2026-07-19). Overlay semantics: an overlay names its base by
+  `base_profile` (`name` **and** `source_digest` must match exactly),
   replaces whole symbol entries by qualified key, deletes base symbols via
   `deleted_symbols` and base exports via `deleted_exports`. There is no
   recursive deep merge, and overlay chains (an overlay whose base is itself
@@ -19,14 +33,10 @@ embedded into the binary at compile time and loaded via
 
 ## Source digest
 
-`source_digest` of `v0_20.json` is a SHA-256 over the Python sources of the
-sibling Manim checkout's package directory (working tree as of 2026-07-18,
-0.20.1 lineage, base commit `4d25c031` plus uncommitted fork changes,
-verified drift-free by `sync_manim_knowledge --diff`: 0 missing symbols,
-0 contradictions, 0 warnings), computed as:
+Every `source_digest` is a SHA-256 over the Python sources of the tree the
+profile was curated against, computed as:
 
 ```sh
-cd /home/hosi/manim
 find manim -name '*.py' -not -path '*__pycache__*' \
   | LC_ALL=C sort | xargs sha256sum | sha256sum
 ```
@@ -34,6 +44,12 @@ find manim -name '*.py' -not -path '*__pycache__*' \
 i.e. the digest of the `sha256sum` manifest (per-file hash + path lines) of
 all `manim/**/*.py` files in byte-wise sorted order. It covers Python
 sources only — no assets, docs, or build metadata.
+
+For `upstream_0_20` the tree is the clean base commit (`git -C
+/home/hosi/manim archive 4d25c031 | tar -x` into an empty directory, or
+equivalently `sync_manim_knowledge --manim-ref 4d25c031`, which reads the
+archive in memory). For `local_0_20_1_4d25c031` the tree is the fork's
+working tree at `/home/hosi/manim`.
 
 ## Curated decisions
 
@@ -112,6 +128,14 @@ cargo run --bin sync_manim_knowledge -- --manim-root ../manim --emit candidates.
 # drift check against the shipped profile (default upstream_0_20);
 # exit 1 when the profile contradicts the source
 cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff --report drift.json
+
+# drift check against a committed tree instead of the working tree:
+# `git archive` materializes it in memory (read-only) — this is how the
+# upstream profile is checked against the clean base commit
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+
+# fork overlay vs the working tree it describes
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff local_0_20_1_4d25c031
 ```
 
 Every generated entry is marked `"generated": true`; curated-only semantic
@@ -124,6 +148,13 @@ also run by `cargo test --test knowledge_drift -- --ignored`), and
 `source_digest` mismatch is informational only; the digest itself follows
 the manifest recipe above. Humans review candidates and edit profiles by
 hand — the tool never writes into this directory.
+
+The ignored drift tests check both provenances: `upstream_0_20` against the
+clean base commit must be fully contradiction-free, while its drift against
+the fork working tree is informational — the gate only fails on facts the
+clean base **also** disproves (i.e. facts that were never true upstream).
+The `local_0_20_1_4d25c031` overlay must itself be drift-free against the
+working tree it describes.
 
 ## Review rules
 

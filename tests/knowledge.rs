@@ -8,6 +8,7 @@ use manim_lint::knowledge::{
 };
 
 const UPSTREAM: &str = "upstream_0_20";
+const LOCAL_OVERLAY: &str = "local_0_20_1_4d25c031";
 
 #[test]
 fn upstream_profile_loads_and_validates() {
@@ -28,9 +29,60 @@ fn v0_20_alias_resolves_to_upstream() {
 }
 
 #[test]
-fn list_available_contains_upstream() {
+fn list_available_contains_upstream_and_local_overlay() {
     let names = knowledge::list_available();
     assert!(names.contains(&UPSTREAM), "available: {names:?}");
+    assert!(names.contains(&LOCAL_OVERLAY), "available: {names:?}");
+}
+
+#[test]
+fn upstream_profile_carries_no_fork_only_symbols() {
+    // The three fork-only `manim.constants` additions live in the overlay;
+    // upstream provenance stays clean (drift-checked against the base
+    // commit `4d25c031` via `git archive`).
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    for name in ["CAIRO_ANTIALIAS_MODES", "VIDEO_ENCODERS", "X264_PRESETS"] {
+        assert!(profile.resolve_export(name).is_none(), "{name}");
+        assert!(
+            profile.symbol(&format!("manim.constants.{name}")).is_none(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn local_fork_overlay_loads_end_to_end() {
+    // `knowledge-profile = "local_0_20_1_4d25c031"` resolves the shipped
+    // overlay against its upstream base: fork-only additions are present,
+    // untouched upstream facts carry over.
+    let profile = knowledge::load(LOCAL_OVERLAY).expect("shipped overlay must load");
+    assert_eq!(profile.name, LOCAL_OVERLAY);
+    assert_eq!(profile.base_profile.as_deref(), Some(UPSTREAM));
+
+    let upstream = knowledge::load(UPSTREAM).expect("load base");
+    assert_ne!(
+        profile.source_digest, upstream.source_digest,
+        "overlay digest covers the fork working tree, not the clean base"
+    );
+
+    for name in ["CAIRO_ANTIALIAS_MODES", "VIDEO_ENCODERS", "X264_PRESETS"] {
+        let (id, entry) = profile.resolve_export(name).expect(name);
+        assert_eq!(id, format!("manim.constants.{name}"));
+        assert_eq!(entry.kind, SymbolKind::Constant, "{name}");
+    }
+
+    // Upstream facts are inherited unchanged.
+    let create = profile
+        .symbol("manim.animation.creation.Create")
+        .expect("Create inherited from base");
+    assert_eq!(
+        create
+            .effects
+            .as_ref()
+            .and_then(|effects| effects.introducer),
+        Some(true)
+    );
+    assert!(profile.symbol("manim.scene.scene.Scene.add").is_some());
 }
 
 #[test]

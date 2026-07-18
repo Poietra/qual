@@ -10,7 +10,14 @@
 //! sync_manim_knowledge --manim-root ../manim --emit candidates.json
 //! sync_manim_knowledge --manim-root ../manim --diff            # upstream_0_20
 //! sync_manim_knowledge --manim-root ../manim --diff my.json --report drift.json
+//! sync_manim_knowledge --manim-root ../manim --manim-ref 4d25c031 --diff
 //! ```
+//!
+//! By default candidates come from the working tree under `--manim-root`.
+//! With `--manim-ref <commit-ish>` they come from that committed tree
+//! instead, materialized in memory via `git archive` (read-only) — the way
+//! to check drift against the clean upstream base when the checkout carries
+//! local fork changes.
 //!
 //! Exit codes: `0` no contradictions, `1` the curated profile contradicts
 //! the source (category b), `2` usage / I/O / profile errors. Generated
@@ -37,6 +44,13 @@ struct Cli {
     /// directory itself. Read-only.
     #[arg(long, value_name = "PATH")]
     manim_root: PathBuf,
+
+    /// Read this committed tree (via `git -C <manim-root> archive`, a
+    /// read-only plumbing command) instead of the working tree. Use the
+    /// clean base commit to separate upstream truth from local fork
+    /// changes in the checkout.
+    #[arg(long, value_name = "COMMIT")]
+    manim_ref: Option<String>,
 
     /// Write the generated candidates JSON to this path.
     #[arg(long, value_name = "PATH")]
@@ -71,7 +85,11 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, String> {
-    let candidates = generator::generate(&cli.manim_root).map_err(|error| error.to_string())?;
+    let candidates = match &cli.manim_ref {
+        Some(git_ref) => generator::generate_from_git_ref(&cli.manim_root, git_ref)
+            .map_err(|error| error.to_string())?,
+        None => generator::generate(&cli.manim_root).map_err(|error| error.to_string())?,
+    };
     if let Some(path) = &cli.emit {
         let json = generator::to_stable_json(&candidates).map_err(|error| error.to_string())?;
         std::fs::write(path, json)

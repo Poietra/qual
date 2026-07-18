@@ -1,9 +1,12 @@
 //! Knowledge-profile generator and drift check (DESIGN §5.4, §11.2 layer 9).
 //!
 //! The non-ignored tests exercise the extractor on small inline Python
-//! fixtures. The `#[ignore]`d test is the layer-9 drift gate: it reads the
-//! sibling Manim checkout at `/home/hosi/manim` (statically, read-only) and
-//! asserts the shipped profile has zero category-(b) contradictions:
+//! fixtures. The `#[ignore]`d tests are the layer-9 drift gate: they read
+//! the sibling Manim git checkout at `/home/hosi/manim` (statically,
+//! read-only) and check the shipped profiles against both provenances —
+//! the clean upstream base commit (must be contradiction-free) and the
+//! working tree carrying local fork changes (informational, except for
+//! facts the clean base also disproves):
 //!
 //! ```sh
 //! cargo test --test knowledge_drift -- --ignored
@@ -13,10 +16,20 @@ use std::path::Path;
 
 use manim_lint::knowledge;
 use manim_lint::knowledge::generator::{
-    GeneratedCandidates, ReturnEvidence, diff, generate, generate_from_sources, sha256_hex,
-    to_stable_json,
+    GeneratedCandidates, ReturnEvidence, diff, generate, generate_from_git_ref,
+    generate_from_sources, generate_from_tar, sha256_hex, to_stable_json,
 };
 use manim_lint::knowledge::model::ProfileDocument;
+
+/// The clean upstream base commit of the sibling checkout's fork lineage
+/// (v0.20.1 lineage; `git -C /home/hosi/manim describe` names it
+/// `v0.20.1-49-g4d25c031`). The shipped `upstream_0_20` digest is computed
+/// over this tree; everything the working tree adds on top belongs to the
+/// `local_0_20_1_4d25c031` overlay.
+const UPSTREAM_BASE_COMMIT: &str = "4d25c031";
+
+/// Shipped fork-overlay profile name.
+const LOCAL_OVERLAY: &str = "local_0_20_1_4d25c031";
 
 /// A miniature Manim-shaped package covering classes with bases across
 /// modules, returns-`self` shapes, `__all__`, and a star-import closure.
@@ -318,28 +331,163 @@ fn diff_reports_missing_contradictions_and_gaps() {
     assert!(text.contains("(b) contradictions: 3"));
 }
 
-/// DESIGN §11.2 layer 9: the shipped profile must not contradict the Manim
-/// source it describes. Ignored by default because it needs the sibling
-/// checkout at `/home/hosi/manim`.
+// --- tar-based generation (the `--manim-ref` path) -------------------------
+
+/// One 512-byte ustar header. Only the fields the reader consumes are
+/// filled; the checksum is left blank (the reader does not verify it).
+fn tar_header(name: &str, size: usize, type_flag: u8) -> [u8; 512] {
+    let mut header = [0u8; 512];
+    header[..name.len()].copy_from_slice(name.as_bytes());
+    let size_octal = format!("{size:011o}\0");
+    header[124..136].copy_from_slice(size_octal.as_bytes());
+    header[156] = type_flag;
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    header
+}
+
+fn tar_entry(archive: &mut Vec<u8>, name: &str, data: &[u8], type_flag: u8) {
+    archive.extend_from_slice(&tar_header(name, data.len(), type_flag));
+    archive.extend_from_slice(data);
+    let padding = data.len().next_multiple_of(512) - data.len();
+    archive.extend(std::iter::repeat_n(0u8, padding));
+}
+
 #[test]
-#[ignore = "requires the sibling Manim checkout at /home/hosi/manim"]
-fn shipped_profile_has_no_contradictions_against_sibling_checkout() {
+fn tar_stream_yields_the_same_candidates_as_loose_sources() {
+    let init = "from .constants import *\n";
+    let constants = "__all__ = [\"RIGHT\"]\nRIGHT = 1\n";
+    let mut archive = Vec::new();
+    // `git archive` opens with a pax global header carrying the commit id.
+    tar_entry(
+        archive.as_mut(),
+        "pax_global_header",
+        b"52 comment=4d25c031ffe71c602e20935afd54a96f33545a6e\n",
+        b'g',
+    );
+    tar_entry(archive.as_mut(), "manim/", b"", b'5');
+    tar_entry(archive.as_mut(), "manim/__init__.py", init.as_bytes(), b'0');
+    tar_entry(
+        archive.as_mut(),
+        "manim/constants.py",
+        constants.as_bytes(),
+        b'0',
+    );
+    // Non-package and non-Python entries are ignored.
+    tar_entry(archive.as_mut(), "README.md", b"docs\n", b'0');
+    tar_entry(archive.as_mut(), "manim/py.typed", b"", b'0');
+    archive.extend(std::iter::repeat_n(0u8, 1024)); // end-of-archive marker
+
+    let from_tar = generate_from_tar("test@ref", &archive).expect("tar candidates");
+    let from_sources = generate_from_sources(
+        "manim",
+        &[
+            ("manim/__init__.py", init),
+            ("manim/constants.py", constants),
+        ],
+    );
+    assert_eq!(from_tar, from_sources);
+    assert_eq!(from_tar.exports["RIGHT"], "manim.constants.RIGHT");
+}
+
+#[test]
+fn tar_without_the_manim_package_is_an_error() {
+    let mut archive = Vec::new();
+    tar_entry(archive.as_mut(), "other/__init__.py", b"x = 1\n", b'0');
+    archive.extend(std::iter::repeat_n(0u8, 1024));
+    let error = generate_from_tar("test@ref", &archive).expect_err("must fail");
+    assert!(error.to_string().contains("manim/__init__.py"), "{error}");
+}
+
+// --- layer-9 drift gate (ignored: needs the sibling checkout) --------------
+
+fn sibling_checkout() -> &'static Path {
     let root = Path::new("/home/hosi/manim");
     assert!(
         root.join("manim").join("__init__.py").is_file(),
         "sibling Manim checkout not found at /home/hosi/manim"
     );
-    let candidates = generate(root).expect("generate candidates from sibling checkout");
-    let profile = knowledge::load(knowledge::DEFAULT_PROFILE).expect("load shipped profile");
+    root
+}
+
+/// DESIGN §11.2 layer 9, upstream provenance: the shipped `upstream_0_20`
+/// profile describes the **clean** upstream base commit — read via
+/// `git archive` so the checkout's uncommitted fork changes never leak into
+/// upstream facts. Everything must verify: no contradictions, no missing
+/// symbols, and the profile digest must equal the clean-tree digest.
+#[test]
+#[ignore = "requires the sibling Manim git checkout at /home/hosi/manim"]
+fn upstream_profile_matches_clean_base_commit() {
+    let candidates = generate_from_git_ref(sibling_checkout(), UPSTREAM_BASE_COMMIT)
+        .expect("archive candidates from the clean base commit");
+    let profile = knowledge::load(knowledge::DEFAULT_PROFILE).expect("load upstream profile");
     let report = diff(&candidates, &profile);
     assert!(
         !report.has_contradictions(),
-        "shipped profile contradicts the Manim source:\n{}",
+        "upstream profile contradicts the clean upstream source:\n{}",
         report.render_text()
     );
     assert!(
         report.missing.is_empty(),
-        "curated symbols missing from the Manim source:\n{}",
+        "curated upstream symbols missing from the clean upstream source:\n{}",
         report.render_text()
+    );
+    assert!(
+        report.digest_match,
+        "upstream_0_20 source_digest must be computed over the clean base tree \
+         {UPSTREAM_BASE_COMMIT} (profile: {}, clean tree: {})",
+        report.profile_digest, report.source_digest
+    );
+}
+
+/// DESIGN §11.2 layer 9, fork provenance: the working tree carries local
+/// fork changes, so upstream-profile drift against it is informational —
+/// the gate fails only on facts the **clean base** also disproves (i.e.
+/// facts that were never true upstream). The fork overlay itself must be
+/// drift-free against the working tree it describes.
+#[test]
+#[ignore = "requires the sibling Manim git checkout at /home/hosi/manim"]
+fn working_tree_drift_is_informational_for_fork_only_changes() {
+    let root = sibling_checkout();
+    let clean = generate_from_git_ref(root, UPSTREAM_BASE_COMMIT)
+        .expect("archive candidates from the clean base commit");
+    let working = generate(root).expect("generate candidates from the working tree");
+    let upstream = knowledge::load(knowledge::DEFAULT_PROFILE).expect("load upstream profile");
+
+    let clean_report = diff(&clean, &upstream);
+    let working_report = diff(&working, &upstream);
+    println!(
+        "informational upstream-vs-working-tree drift:\n{}",
+        working_report.render_text()
+    );
+    let never_true_upstream: Vec<String> = working_report
+        .contradictions
+        .iter()
+        .filter(|finding| {
+            clean_report
+                .contradictions
+                .iter()
+                .any(|clean| clean.id == finding.id && clean.field == finding.field)
+        })
+        .map(|finding| format!("{} [{}]", finding.id, finding.field))
+        .collect();
+    assert!(
+        never_true_upstream.is_empty(),
+        "curated upstream facts contradicted by both the working tree and the clean \
+         base (never true upstream): {never_true_upstream:?}\n{}",
+        working_report.render_text()
+    );
+
+    let overlay = knowledge::load(LOCAL_OVERLAY).expect("load fork overlay profile");
+    let overlay_report = diff(&working, &overlay);
+    assert!(
+        !overlay_report.has_contradictions(),
+        "fork overlay contradicts the working tree it describes:\n{}",
+        overlay_report.render_text()
+    );
+    assert!(
+        overlay_report.missing.is_empty(),
+        "fork-overlay symbols missing from the working tree:\n{}",
+        overlay_report.render_text()
     );
 }
