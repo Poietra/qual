@@ -218,6 +218,14 @@ label = always_redraw(...)
 # manim-lint: file-ignore[MLP]   # whole file; must appear in the file header
 ```
 
+Suppressions target **whole statements**, not single lines: an end-of-line
+comment (or a standalone comment directly above) covers the entire
+statement, including continuation lines of a multi-line call, so a
+diagnostic anchored anywhere inside the statement is suppressed. For
+compound statements (`def`, `for`, `if`, `with`, ...) the suppression
+covers only the header up to its colon — one comment can never silence an
+entire suite.
+
 An unknown rule ID inside an inline suppression does **not** suppress
 anything; it is reported as a dedicated warning:
 
@@ -240,8 +248,11 @@ manim-lint check . --baseline .manim-lint-baseline.json        # report only new
 Baseline fingerprints (`schemas/baseline-v1.json`) contain **no line
 numbers** — they are built from rule ID, relative path, qualified scene name,
 and a surrounding token hash — so inserting unrelated lines elsewhere in a
-file does not invalidate entries. A corrupt or wrong-schema baseline file
-exits 2 with a clear message.
+file does not invalidate entries. The `scene` field records the qualified
+enclosing Scene class (empty outside any scene), so identical findings in
+different scenes get distinct fingerprints; baselines written before scene
+attribution (with an empty `scene`) still match as a wildcard. A corrupt
+or wrong-schema baseline file exits 2 with a clear message.
 
 ## Autofix
 

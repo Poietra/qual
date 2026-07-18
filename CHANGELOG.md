@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+External-review fixes.
+
+### Added
+
+- Per-updater execution liveness (`src/cost/liveness.rs`): every
+  hot-context performance fact is now gated on plays/waits where the
+  callback **provably** executes per frame (registration live in the heap,
+  host present and not suspended by the play's own animations —
+  `suspend_mobject_updating` honored at constructor and play level —
+  and frames actually rendered, including `frozen_frame` handling), with
+  three-valued verdicts and auditable `execution` play-span evidence on
+  diagnostics.
+- Configuration is validated honestly (exit 2): zero/negative/non-finite
+  frame rates and zero-dimension resolutions from any tier (CLI, profile,
+  `manim.cfg`), non-empty `stub-paths` (unimplemented), `manim-version`
+  outside the loaded knowledge profile's range, and malformed or
+  out-of-range `target-python` (3.0–3.12, the bundled parser's grammar).
+  `manim-lint config` gained an `enforcement` section.
+- Baseline fingerprints now record the qualified enclosing Scene class in
+  the `scene` field, so identical findings in different scenes no longer
+  collide; old baselines with an empty `scene` still match as a wildcard.
+
+### Changed
+
+- MLP201/MLP202/MLP203/MLP204/MLP224/MLP226 fire only with at least one
+  proven execution play and quantify over proven plays only;
+  MLP211/MLP216 use qualitative wording when execution is unproven; all
+  hot-context rules are silent when the callback provably never runs.
+  The `cost` command reports proven execution plays per callback and
+  never fabricates invocation counts.
+- MLC104 diagnoses from lifecycle play facts: fires on played
+  `wait`/`pause`/`play` with literal non-positive durations (including
+  per-animation `run_time` literals inside `play(...)`), stays silent on
+  unplayed constructions and when a play-level `run_time` kwarg overrides
+  constructor literals.
+- Inline suppressions cover whole statements (all continuation lines of a
+  multi-line statement); compound-statement suppressions cover only the
+  header up to its colon.
+- PEP 263 handling matches CPython: a UTF-8 BOM with a conflicting
+  non-UTF-8 coding cookie is reported as an `MLC000` decode diagnostic;
+  latin-1-family cookies decode as true Latin-1 (not windows-1252) and
+  `--fix` round-trips the matching encode.
+- MLP206 message and docs corrected: such a play renders a single frame
+  sampled near the start state (not the final state).
+
+### Fixed
+
+- Directory walking no longer hangs on symlink cycles (canonicalized
+  visited set; each file reported once).
+
 ## [0.1.0] - 2026-07-18
 
 First release: a standalone Rust static analyzer for Manim Community 0.20
