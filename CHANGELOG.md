@@ -7,18 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-External-review fixes (two waves) and structural hardening (knowledge
-provenance split, release quality gates, frontend fact promotion,
-interpreter modularization).
+Everything since 0.1.0: two external-review waves verified and fixed
+point-by-point, structural hardening (knowledge provenance split, release
+quality gates, frontend fact promotion, interpreter modularization),
+helper-analysis completion, analysis-coverage reporting, and the
+fork-first analysis layer. Rule catalog now **83 implemented / 9
+reserved** (was 79 / 13 at 0.1.0): `MLR123`, `MLP214`, `MLP217`, and
+`MLP225` were implemented.
 
 ### Added
 
-- Fork-first analysis layer over the curated `fork_capabilities` block of
-  the local knowledge profile `local_0_20_1_4d25c031` (all of it inert
-  under `upstream_0_20`, whose accessors return `None`):
-  - The local overlay now declares the fork's TeX parallel compilation
-    (entry points `MathTex.precompile` / `tex_to_svg_file_async`, with
-    in-flight futures forcing the Cairo fork serial fallback), the Cairo
+- **Analysis-coverage reporting** (the review's "trust feature"): a new
+  `manim-lint coverage [PATH...] [--format text|json]` subcommand and a
+  `check --analysis-summary` flag (same report on stderr after the
+  diagnostics; stdout and the exit code are untouched) that surface what
+  the conservative analysis could NOT resolve — unresolved imports
+  (unknown-module star imports, relative imports escaping the project
+  tree), calls with empty candidate sets (with top offending names),
+  plays with unknown durations, `.animate` builders with untracked
+  targets, constructs above `target-python` (MLC000), resolved `manim.*`
+  candidates absent from the knowledge profile, scenes with unknown
+  constructor state, and helper call sites where inlining fell back to an
+  effect summary (`helper_inline_fallbacks`, recorded project-wide and
+  deduplicated across scenes sharing a helper chain) — per file, per
+  scene, and as project totals with a count-based confidence line.
+  Numbers are counts of computed facts; output is deterministic; the JSON
+  keys are documented in the README.
+- **Helper-analysis completion** (DESIGN §2.1, §5.1 step 5, §5.7):
+  - Plays and waits inside `self.<helper>()` / `super().<helper>()`
+    methods **and** project module-level helpers (same-module or imported
+    from other project files, with the scene argument flowing as live
+    scene state in any parameter position) materialize as real
+    per-call-site lifecycle play facts anchored in the helper's file,
+    with a recorded `call_path`, call-site branch/loop certainty, and
+    exact per-animation argument facts. Lifecycle state queries are
+    method-scoped, so liveness resolves the correct pre-play state at
+    helper play sites. Third-party imports are never inlined and keep the
+    DESIGN §5.3 widening semantics.
+  - Summary-derived play records: method summaries carry the play/wait
+    sites of the summarized body, and summary application rehydrates them
+    as conservative `Maybe`-certainty `PlayFact`s with open repetitions —
+    recursion and the inlining frontier no longer lose plays entirely
+    (literal-duration checks such as MLC104 still fire; every
+    caller-state-dependent judgment stays degraded and is listed on
+    `SceneLifecycle::summary_derived_plays`).
+  - `LifecycleFacts::inline_fallbacks`: every scene-run call site where
+    helper inlining fell back to the effect summary, with its reason
+    (`Recursion` / `DepthCap` / `Unresolvable`) — the analysis-coverage
+    frontier.
+  - Loop-aware play repetition facts: a `play`/`wait` inside a loop with
+    a literal `range(...)` trip count multiplies its frame contribution
+    by the trip-count interval; an unknown trip count opens the upper
+    bound instead of counting the play once. Repetition bounds compose
+    through helper inlining (call-site loops × helper-internal loops).
+- **Fork-first analysis layer** over the curated `fork_capabilities`
+  block of the local knowledge profile `local_0_20_1_4d25c031` (all of it
+  inert under `upstream_0_20`, whose accessors return `None`):
+  - The local overlay declares the fork's TeX parallel compilation (entry
+    points `MathTex.precompile` / `tex_to_svg_file_async`, with in-flight
+    futures forcing the Cairo fork serial fallback), the Cairo
     fork-per-play pipeline (eligibility gates, exact-type animation
     allowlist, curated blockers, and the renderer-wide monotonic disable
     after the first parent-encoded serial play), static-layer retention,
@@ -36,50 +83,13 @@ interpreter modularization).
     never count.
   - `MLP217` (warning/high): frame-varying `use_svg_cache=True` keys in
     hot callbacks growing the declared process-global unbounded SVG cache
-    every frame (O(frames x family) memory growth evidence).
+    every frame (O(frames × family) memory growth evidence).
   - `MLP225` (info/high, opt-in): the cost report's fast-path blocker
     explanations as per-play diagnostics; `default_enabled: false`, only
-    an exact `--select MLP225` evaluates it, and the registry now
-    supports opt-in rules cleanly (prefix selects never enable them).
+    an exact `--select MLP225` evaluates it, and the registry supports
+    opt-in rules cleanly (prefix selects never enable them).
   - README (en/ja) "Using the optimized fork profile" section with the
-    pyproject template; rule catalog now 83 implemented / 9 reserved.
-- Helper reach (DESIGN §2.1 "Scene helper", §5.1 step 5): scene runs now
-  inline project *module-level* helpers — same-module and imported from
-  other project files, with the scene argument flowing as the live scene
-  state in any parameter position — exactly like `self.<helper>()`
-  methods, so their plays, waits, returned objects, created animations,
-  and updater registrations materialize as real per-call-site lifecycle
-  facts anchored in the helper's file. Third-party imports are never
-  inlined and keep the DESIGN §5.3 widening semantics.
-- Summary-derived play records (DESIGN §5.7): method summaries now carry
-  the play/wait sites of the summarized body (site, kind, literal-derived
-  duration, argument sites, stop-condition / frozen-frame / `*args`
-  flags), and summary application rehydrates them as conservative
-  `Maybe`-certainty `PlayFact`s with open repetitions — recursion and the
-  inline depth cap no longer lose plays entirely (literal-duration checks
-  such as MLC104 still fire; every caller-state-dependent judgment stays
-  degraded and is listed on `SceneLifecycle::summary_derived_plays`).
-- `LifecycleFacts::inline_fallbacks`: every scene-run call site where
-  helper inlining fell back to the effect summary, with its reason
-  (`Recursion` / `DepthCap` / `Unresolvable`) — the analysis-coverage
-  frontier.
-- Analysis-coverage reporting (the review's "trust feature"): a new
-  `manim-lint coverage [PATH...] [--format text|json]` subcommand and a
-  `check --analysis-summary` flag (same report on stderr after the
-  diagnostics; stdout and the exit code are untouched) that surface what
-  the conservative analysis could NOT resolve — unresolved imports
-  (unknown-module star imports, relative imports escaping the project
-  tree), calls with empty candidate sets (with top offending names),
-  plays with unknown durations, `.animate` builders with untracked
-  targets, constructs above `target-python` (MLC000), resolved `manim.*`
-  candidates absent from the knowledge profile, and scenes with unknown
-  constructor state — per file, per scene, and as project totals with a
-  count-based confidence line. Numbers are counts of computed facts;
-  output is deterministic. The JSON keys are documented in the README;
-  the `helper_inline_fallbacks` count reports the
-  `LifecycleFacts::inline_fallbacks` frontier on the project totals
-  (recorded project-wide and deduplicated across scenes sharing a helper
-  chain, so the count appears on `project` only — never split per scene).
+    pyproject template.
 - New rule `MLR123` (error/high, phase 4): a curated OpenGL-only mesh
   mobject (`Object3D` / `Mesh` / `FullScreenQuad` from
   `manim.renderer.shader`, the `OpenGLSurface` family, or a project
@@ -90,104 +100,90 @@ interpreter modularization).
   Seven upstream mesh classes were curated into
   `src/knowledge/profiles/v0_20.json` (verified against the pinned clean
   base commit); as a side effect `MLR101`/`MLR126` now correctly see the
-  `OpenGLSurface` family's kinds. Rule counts: 80 implemented /
-  12 reserved.
-- Reverse-direction `target-python` hint on parse failures: when a file
-  fails to parse, the configured target is below 3.7, and the failing
-  line (or the parser message) mentions `async`/`await` as a word, the
-  `MLC000` message notes that the source may be valid Python 3.6 (where
-  the two were still soft keywords) and that manim-lint parses with the
-  3.12 grammar — a hedged hint, not a claim (`docs/rules/MLC000.md`).
-- Release quality gates (DESIGN §11.4): a labeled corpus gate
+  `OpenGLSurface` family's kinds.
+- **`target-python` gates syntax completely, with an honest floor**:
+  after parsing, a gate over the AST, the token stream, and f-string
+  token text emits `MLC000` (error) for every parse-level construct newer
+  than the configured target — `async`/`await` syntax outside `async def`
+  (3.7); walrus `:=`, positional-only `/`, and f-string self-documenting
+  `=` (3.8); relaxed decorators and parenthesized context managers with
+  `as` (3.9); `match` (3.10); `except*` and PEP 646 `*` unpacking in
+  subscripts/annotations (3.11); `type` alias statements, PEP 695
+  type-parameter lists, and PEP 701 f-string expressions with
+  backslashes/newlines/comments (3.12) — while the gated file keeps its
+  AST and is still fully analyzed. A file the gate passes silently is
+  guaranteed parseable by the target's own parser; each minimum version
+  is oracle-checked against CPython `ast.parse(feature_version=...)`
+  where that oracle gates the construct. `--fix` rolls a file back when
+  its edits would introduce gated syntax, token-detected constructs
+  included. The accepted `target-python` range is **3.6–3.12**: below 3.6
+  the guarantee cannot be kept (Python 3.6's own additions include
+  oracle-unverifiable constructs), so older targets are explicit exit-2
+  configuration errors instead of silently unenforced promises. A
+  reverse-direction hint: when a file fails to parse, the configured
+  target is below 3.7, and the failing line mentions `async`/`await` as a
+  word, the `MLC000` message notes the source may be valid Python 3.6
+  (where the two were still soft keywords).
+- **Honest configuration enforcement** (exit 2 on violation):
+  zero/negative/non-finite frame rates and zero-dimension resolutions
+  from any tier (CLI, profile, `manim.cfg`), non-empty `stub-paths`
+  (unimplemented), `manim-version` outside the loaded knowledge profile's
+  supported range, and malformed or out-of-range `target-python`.
+  `manim-lint config` gained an `enforcement` section stating which
+  settings are enforced and which are informational.
+- **Release quality gates** (DESIGN §11.4): a labeled corpus gate
   (`tests/corpus/manifest-v1.json`, 35 cases pinning sha256 and exact
   expected diagnostics — true positives and false-positive guards across
   all four rule families, including pinned real-Manim `example_scenes`
   snapshots and the adversarial review probes) that runs inside
   `cargo test`; an explicit benchmark gate over a pinned 10k-LOC fixture
-  (cold ≤ 2 s, peak RSS < 300 MiB, asserted only on the reference
-  machine; the warm ≤ 0.5 s budget is recorded but unenforced until the
-  on-disk cache exists); and a scheduled knowledge-drift CI job against
-  the pinned upstream base commit.
-- A shipped `local_0_20_1_4d25c031` knowledge-profile overlay carrying
-  the sibling fork's working-tree additions on top of `upstream_0_20`
-  (currently the three fork-only `manim.constants` names
-  `CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`).
-- `sync_manim_knowledge --manim-ref <commit>` generates candidates from a
-  clean `git archive` of a commit instead of the working tree, so
-  profile provenance can be checked against pristine upstream.
-- Frontend statement and binding facts (`src/frontend/statements.rs`):
-  per-call enclosing-statement spans and roles (bare expression, `with`
-  context, assignment RHS, return value, decorator), and per-file import
-  binding facts with unified rebind poisoning and canonical dotted-path
-  resolution, exposed to rules via
-  `RuleContext::statement_facts()`/`binding_facts()`.
-- Baseline files now carry a `scene_attribution: "attributed"` provenance
-  marker (additive; `schema_version` stays 1). In attributed files an
-  empty `scene` means literally "outside any Scene" and matches exactly,
-  so a module-level entry can no longer wildcard-suppress a
-  same-fingerprint diagnostic inside a scene. Files without the marker are
-  read as legacy pre-attribution baselines and keep their empty-scene
-  wildcard behavior.
-- Loop-aware play repetition facts: a `play`/`wait` inside a loop whose
-  trip count is a literal `range(...)` multiplies its frame contribution
-  by the trip-count interval; an unknown trip count opens the upper bound
-  instead of counting the play once. Repetition bounds compose through
-  helper inlining (call-site loops × helper-internal loops).
-- Plays and waits inside `self.<helper>()` (and `super().<helper>()`)
-  methods now materialize as real lifecycle play facts: resolvable helper
-  calls are inlined during scene interpretation (bounded depth, recursion
-  falls back to the effect summary), so MLC104/MLC108/MLC117/MLR102/
-  MLP226 and the `cost` command see helper-reached plays with their sites
-  in the helper body, a recorded `call_path` of the inlining call sites,
-  call-site branch/loop certainty, and exact per-animation argument
-  facts. Lifecycle state queries are method-scoped, so liveness resolves
-  the correct pre-play state at helper play sites.
-- `target-python` now gates syntax completely, with an honest floor:
-  after parsing, a gate over the AST, the token stream, and f-string
-  token text emits `MLC000` (error) for every parse-level construct
-  newer than the configured target — `async`/`await` syntax outside
-  `async def` (3.7); walrus `:=`, positional-only `/`, and f-string
-  self-documenting `=` (3.8); relaxed decorators and parenthesized
-  context managers with `as` (3.9); `match` (3.10); `except*` and
-  PEP 646 `*` unpacking in subscripts/annotations (3.11); `type` alias
-  statements, PEP 695 type-parameter lists, and PEP 701 f-string
-  expressions with backslashes/newlines/comments (3.12) — while the
-  gated file keeps its AST and is still fully analyzed. A file the gate
-  passes silently is guaranteed parseable by the target's own parser;
-  each minimum version is oracle-checked against CPython
-  `ast.parse(feature_version=...)` where that oracle gates the
-  construct. `--fix` rolls a file back when its edits would introduce
-  gated syntax, token-detected constructs included. The accepted
-  `target-python` range shrank from 3.0–3.12 to 3.6–3.12: below 3.6 the
-  guarantee cannot be kept (Python 3.6's own additions include
-  oracle-unverifiable constructs), so older targets are now explicit
-  exit-2 configuration errors instead of silently unenforced promises.
-
-- Per-updater execution liveness (`src/cost/liveness.rs`): every
-  hot-context performance fact is now gated on plays/waits where the
-  callback **provably** executes per frame (registration live in the heap,
-  host present and not suspended by the play's own animations —
-  `suspend_mobject_updating` honored at constructor and play level —
-  and frames actually rendered, including `frozen_frame` handling), with
+  (cold ≤ 2 s, peak RSS < 300 MiB, asserted only on the machine matching
+  `benchmarks/reference-machine.json`; the warm ≤ 0.5 s budget is
+  recorded but unenforced until the on-disk cache exists); and a
+  scheduled knowledge-drift CI job against the pinned upstream base
+  commit. Corpus re-adjudication follows the labeling protocol in
+  CONTRIBUTING.md.
+- **Knowledge provenance split**: `sync_manim_knowledge --manim-ref
+  <commit>` generates candidates from a clean `git archive` of a commit
+  instead of the working tree, so profile provenance can be checked
+  against pristine upstream; the shipped `local_0_20_1_4d25c031` overlay
+  carries the sibling fork's working-tree additions on top of
+  `upstream_0_20` (the three fork-only `manim.constants` names, the two
+  fork TeX API symbols, and the curated `fork_capabilities` block).
+- **Per-updater execution liveness** (`src/cost/liveness.rs`): every
+  hot-context performance fact is gated on plays/waits where the callback
+  **provably** executes per frame (registration live in the heap, host
+  present and not suspended by the play's own animations —
+  `suspend_mobject_updating` honored at constructor and play level — and
+  frames actually rendered, including `frozen_frame` handling), with
   three-valued verdicts and auditable `execution` play-span evidence on
   diagnostics.
-- Configuration is validated honestly (exit 2): zero/negative/non-finite
-  frame rates and zero-dimension resolutions from any tier (CLI, profile,
-  `manim.cfg`), non-empty `stub-paths` (unimplemented), `manim-version`
-  outside the loaded knowledge profile's range, and malformed or
-  out-of-range `target-python` (3.0–3.12, the bundled parser's grammar).
-  `manim-lint config` gained an `enforcement` section.
-- Baseline fingerprints now record the qualified enclosing Scene class in
-  the `scene` field, so identical findings in different scenes no longer
-  collide; old baselines with an empty `scene` still match as a wildcard.
+- **Frontend statement and binding facts**
+  (`src/frontend/statements.rs`): per-call enclosing-statement spans and
+  roles (bare expression, `with` context, assignment RHS, return value,
+  decorator), and per-file import binding facts with unified rebind
+  poisoning and canonical dotted-path resolution, exposed to rules via
+  `RuleContext::statement_facts()` / `binding_facts()`.
+- **Scene-aware baselines**: fingerprints record the qualified enclosing
+  Scene class in the `scene` field, so identical findings in different
+  scenes no longer collide; files carry a
+  `scene_attribution: "attributed"` provenance marker (additive;
+  `schema_version` stays 1) under which an empty `scene` means literally
+  "outside any Scene" and matches exactly. Files without the marker are
+  read as legacy pre-attribution baselines and keep their empty-scene
+  wildcard behavior.
 
 ### Changed
 
-- The `upstream_0_20` knowledge profile now describes only the clean
-  upstream base commit `4d25c031`: the three fork-only `manim.constants`
-  names (`CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`)
-  moved to the new `local_0_20_1_4d25c031` overlay, and resolve to
-  Unknown under `knowledge-profile = "upstream_0_20"`.
+- The `upstream_0_20` knowledge profile describes only the clean upstream
+  base commit `4d25c031`: the three fork-only `manim.constants` names
+  (`CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`) moved to
+  the `local_0_20_1_4d25c031` overlay and resolve to Unknown under
+  `knowledge-profile = "upstream_0_20"`.
+- The lifecycle interpreter (`src/semantic/interpreter.rs`, 7,602 lines)
+  is split into nine cohesive modules under
+  `src/semantic/interpreter/`; the public API is frozen via `pub use`
+  re-exports and lint output is byte-identical.
 - Helper inlining during scene interpretation is bounded by call-cycle
   detection (a helper already on the active inlining path falls back to
   its effect summary) instead of a fixed depth limit, so deep
@@ -195,13 +191,11 @@ interpreter modularization).
 - Cost execution facts are keyed by the helper `call_path` of the play
   they prove, so the same helper reached through different call sites no
   longer merges its per-frame execution evidence across paths.
-- Frontend fact computation is gated on the selected rule capabilities:
-  a run that selects no rule needing statement, binding, or lifecycle
-  facts skips computing them.
-- The lifecycle interpreter (`src/semantic/interpreter.rs`, 7,602 lines)
-  is split into nine cohesive modules under
-  `src/semantic/interpreter/`; the public API is frozen via `pub use`
-  re-exports and lint output is byte-identical.
+- Frontend fact computation is gated on the selected rules'
+  `required_capabilities`: a run that selects no rule needing statement,
+  binding, or lifecycle facts skips computing them; rules superseding a
+  selected rule still run, so a narrow `--select` never resurrects a
+  superseded diagnostic.
 - Rule-layer private AST walks are gone (DESIGN §5.6): MLR106/107/112/
   117/119/121/127 and MLD301/302/304/307 now consume promoted frontend
   facts instead of re-walking the module tree; the remaining two local

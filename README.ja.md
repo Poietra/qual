@@ -30,13 +30,14 @@ class TrackerDemo(Scene):
 ```console
 $ manim-lint check .
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
-scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`).
+scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
 scenes/demo.py:12:38: MLD301 warning Updater lambda applies `rotate` with a fixed step every frame but declares no `dt` parameter; the motion speed depends on the profile frame rate
-scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is non-positive and `Scene` rejects it with `ValueError` before rendering.
+scenes/demo.py:14:9: MLC112 warning This `wait()` renders a single frozen frame: nothing makes it dynamic, and the updater registered at line 9 reads frame-varying state without a `dt` parameter, so its visual change never renders during the wait. Pass `frozen_frame=False`, or declare a `dt` parameter on the updater.
+scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is non-positive and playing it aborts the render.
 ```
 
-このうち 2 件はレンダリングをクラッシュさせ(`MLC102`、`MLC104`)、1 件はタイトルを不可視のまま描画し(`MLR115`)、1 件はフレームレートによって動きの速さが変わり(`MLD301`)、1 件は毎フレーム新しいキャッシュキーで外部 TeX コンパイラを起動します(`MLP226`)。
+このうち 2 件はレンダリングをクラッシュさせ(`MLC102`、`MLC104`)、1 件はタイトルを不可視のまま描画し(`MLR115`)、1 件はフレームレートによって動きの速さが変わり(`MLD301`)、1 件は動くはずの wait を凍結し(`MLC112`)、1 件は毎フレーム新しいキャッシュキーで外部 TeX コンパイラを起動します(`MLP226`)— しかもそのコストは定量化されます: 60 FPS で `run_time=8` なら少なくとも約 480 個の相異なるキーであることが証明できます。
 
 ## 検出できるもの
 
@@ -83,7 +84,7 @@ manim-lint coverage .                   # 解析が解決できなかったも�
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
 
-主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。
+主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。`--select` は解析そのものも絞り込みます: 選択したルールが必要としない事実レイヤー(ライフサイクル解釈器、記号的コストモデル)の計算をスキップするため、狭い select はフル実行より高速です。報告される診断はどちらでも同一です — 選択したルールを supersede するルールは常に実行されるので、狭い select が supersede 済みの診断を復活させることはありません。
 
 `--format full` は各診断の下に説明と機械可読な根拠を表示します。
 
@@ -92,7 +93,9 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
     A frame-varying key defeats the `MathTex` cache: instead of one shaping/compile job reused every frame,
     each frame pays construction plus a cache miss, and for TeX classes each distinct key also launches the
     external TeX compiler and `dvisvgm`, leaving one disk asset per key. ...
-    evidence.distinct_resource_keys: "per-frame"
+    evidence.distinct_resource_keys: {"lower":480,"upper":null}
+    evidence.execution: {"plays":[{"certainty":"proven","kind":"play","location":"scenes/demo.py:13:9"},{"certainty":"maybe","kind":"play","location":"scenes/demo.py:11:9"}],"unresolved_entries":false}
+    evidence.frames: {"lower":480,"upper":null}
     evidence.invocation_context: "frame-callback"
     evidence.multiplicity: ["frames"]
     evidence.state_path: ["construct","always_redraw:9"]
@@ -187,7 +190,7 @@ label = always_redraw(...)
 インライン抑制内の未知のルール ID は何も抑制せず、専用の警告として報告されます。
 
 ```text
-scene.py:8:23: MLC001 warning unknown rule ID in suppression: MLC999
+scene.py:8:41: MLC001 warning unknown rule ID in suppression: MLC999
 ```
 
 ディレクトリ単位には `pyproject.toml` の `per-file-ignores` を使ってください(上の例を参照)。
@@ -214,13 +217,13 @@ safe と unsafe は厳密に分離されています。`--fix` 単体では挙�
 
 ```console
 $ manim-lint check . --fix
-scene.py:8:37: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
+scene.py:8:40: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
 fixed 1 issue(s) in 1 file(s)
 ```
 
 ## cost コマンド
 
-`manim-lint cost` はシーンごとの記号的コスト内訳を表示します — フレーム数区間つきの play リスト、由来つきの hot context、毎フレーム構築、リソースキーの成長。未知の duration は unknown と表示し、数値を捏造しません。
+`manim-lint cost` はシーンごとの記号的コスト内訳を表示します — フレーム数区間つきの play リスト、由来とコールバックの実行が証明された play つきの hot context、毎フレーム構築、リソースキーの成長。未知の duration は unknown と表示し、数値を捏造しません。
 
 ```console
 $ manim-lint cost scenes/demo.py
@@ -232,19 +235,68 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
     scenes/demo.py:13:9 play duration 8 s -> frames ~480
     scenes/demo.py:14:9 wait duration 0 s -> frames ~0
   hot contexts:
-    scenes/demo.py:9:31 entry always_redraw; path construct -> always_redraw:9; factors frames
-    scenes/demo.py:12:28 entry updater; path construct -> updater:12; factors frames
+    scenes/demo.py:9:31 entry always_redraw; path construct -> always_redraw:9; factors frames; proven execution plays: scenes/demo.py:13:9
+    scenes/demo.py:12:28 entry updater; path construct -> updater:12; factors frames; proven execution plays: scenes/demo.py:13:9
   per-frame constructions:
-    scenes/demo.py:9:39 MathTex construction x per-frame
+    scenes/demo.py:9:39 MathTex construction x at least ~480 invocations across 1 proven play(s)
   resource-key growth:
-    scenes/demo.py:9:39 MathTex distinct cache keys: one per rendered frame (f-string key varies per frame)
+    scenes/demo.py:9:39 MathTex distinct cache keys: at least ~480 across 1 proven play(s) (f-string key varies per frame)
+```
+
+ローカルフォークの knowledge profile の下では、レポートにシーンごとの「fork fast paths」セクションが加わります(上の「最適化フォークプロファイルの利用」を参照)。例えばプロファイルに `cairo-fork-workers = 4` と `cairo-static-layers = true` を設定した場合:
+
+```console
+$ manim-lint cost scene.py
+...
+  fork fast paths (profile production, knowledge local_0_20_1_4d25c031):
+    fork-per-play (cairo_fork_workers 4):
+      scene.py:9:9 play #1: no static blocker found (fork-eligible pending the runtime audit)
+      scene.py:10:9 play #2: no static blocker found (fork-eligible pending the runtime audit)
+    static layers (cairo_static_layers on):
+      scene.py:9:9 play #1: no static blocker found
+      scene.py:10:9 play #2: no static blocker found
+    packed interpolation:
+      scene.py:9:9 play #1: canonical per-member interpolation because the animation type FadeIn is outside the audited allowlist at scene.py:9:19 (blocker unsupported_animation_type); an updater-bearing mobject is in the scene family (updater registered here) at scene.py:8:9 (blocker updater_bearing_family)
+      scene.py:10:9 play #2: canonical per-member interpolation because an updater-bearing mobject is in the scene family (updater registered here) at scene.py:8:9 (blocker updater_bearing_family)
+      evidence: measured packed interpolation on the calibration machine, 300 members / 60 frames: 130.658 -> 33.004 ms/play, steady state 2.0761 -> 0.1890 ms/frame (docs/research/perf-evidence.md)
+    note: the features named above can be correct expression; this section explains the render-path consequence and never advises removing them
 ```
 
 ## 解析カバレッジ
 
-保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のかを区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン、インライン化されずサマリーへフォールバックしたヘルパー呼び出し(再帰・深さ上限・解決不能。プロジェクト全体で重複排除して集計)。
+保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のか — その沈黙は安全なのか、それとも盲目なのか — を区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン、インライン化されずサマリーへフォールバックしたヘルパー呼び出し(再帰・解決不能。プロジェクト全体で重複排除して集計)。
 
-すべての数値は計算済みファクトの個数であり、比率は「解決済み / 総数」の単純なカウント対のみです。`--format json` は安定したキーを持つ機械可読ドキュメントを出力します(トップレベルキー: `knowledge_profile`、`target_python`、`files`、`scenes`、`project`。詳細は英語版 README を参照)。出力は決定的で、同一入力に対してバイト単位で安定です。
+解決できないモジュールからの star import、プロジェクト木を出る相対 import、`target-python = "3.9"` を超える `match` 文、未解決ヘルパー呼び出しに包まれた play を含むファイルの例:
+
+```console
+$ manim-lint coverage .
+analysis coverage (knowledge profile upstream_0_20, target-python 3.9)
+
+scene.py
+  constructs above target-python (MLC000): 1
+  star imports from unresolved modules: 1
+  unresolved relative imports: 1
+  calls with no resolved target: 1 of 6 (mystery x1)
+
+scene scene.Demo (scene.py)
+  plays with unknown duration: 1 of 2
+  .animate builders with unknown target: 0 of 0
+
+project
+  files parsed: 1 of 1
+  calls resolved: 5 of 6
+  play durations known: 1 of 2
+  scene constructors resolved: 1 of 1
+  constructs above target-python (MLC000): 1
+  unresolved imports: 2 (1 star, 1 relative)
+  manim APIs not in the knowledge profile: 0
+  helper calls summarized, not inlined: 0
+  top unresolved calls: mystery x1
+
+analysis confidence: 1/1 files parsed, 5/6 calls resolved, 1/2 play durations known, 1/1 scene constructors resolved (counts of analyzed facts, not estimates)
+```
+
+すべての数値は計算済みファクトの個数であり、比率は「解決済み / 総数」の単純なカウント対のみです。`--format json` は安定したトップレベルキー `knowledge_profile`、`target_python`、`files[]`(`path`、`parsed`、`gated_constructs`、`unresolved_star_imports`、`unresolved_relative_imports`、`calls`、`unresolved_calls`、`unresolved_call_names`、`apis_not_in_profile`)、`scenes[]`(`name`、`path`、`constructor_state_unknown`、`plays`、`plays_with_unknown_duration`、`builders`、`builders_with_unknown_target`)、`project`(総計に加えて `top_unresolved_call_names` と `helper_inline_fallbacks` — サマリーへフォールバックしたヘルパー呼び出しサイト数。ヘルパー連鎖を共有するシーン間で重複排除されるため `project` にのみ現れます)を持つ機械可読ドキュメントを出力します。出力は決定的で、同一入力に対してバイト単位で安定です。
 
 ## CI 連携
 
@@ -313,13 +365,16 @@ suppressions, supersedes, baseline
 output ................... concise | full | json | sarif | github, fixes, cost report
 ```
 
-意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。出力は決定的で、同じ入力に対して byte 単位で安定です。
+[docs/architecture.md](docs/architecture.md)(英語)は新しいコントリビューター向けにこのパイプラインを解説します: 各事実レイヤーが何を提供しどこにあるか、knowledge profile システム、そして 1 つの診断がエンドツーエンドでどう流れるか。意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。出力は決定的で、同じ入力に対して byte 単位で安定です。
 
 ## 既知の制限
 
 - **対象バージョン。** 同梱の knowledge profile は Manim Community **0.20 のみ** を対象とします。他のバージョンのプロファイルはまだありません。
 - **アセット検査は lint 実行マシンを調べます。** `MLR104` はリテラルなアセットパスを、lint を実行しているマシン上で Manim 自身のランタイム探索により解決します。プロジェクトツリー外の絶対パスについては、それは lint ホストに関する証拠であり、必ずしもレンダーホストのものではありません(例: CI で lint し、別マシンでレンダーするリポジトリ)。そのような診断は根拠として `environment_dependent: true` を持ちます。case-only の不一致は大文字小文字を区別する対象プラットフォーム(`linux`)に対してのみ報告されます。影響するプロファイルがすべて windows / macos を対象とする場合、宣言されたレンダーは書かれたとおりにファイルを解決できるため、linter は沈黙します。
 - **ソースエンコーディング。** PEP 263 宣言は WHATWG ラベルと CPython コーデック別名テーブル(`latin-1`、`cp932`、`koi8_r`、...)で解決します。linter が表現できない稀な Python コーデックは、明示的な `MLC000` の「not supported by manim-lint」通知とともにスキップされます — 対象の Python がそのファイルをデコードできない、という主張には決してなりません。
+- **duration はリテラルのみから導出します。** Manim の*デフォルト*に依存する play(`run_time` を一切書かない `self.play(m.animate.shift(RIGHT))`、`self.wait()`)の duration は unknown と報告され、フレーム数は数値の代わりに per-frame 表現になります(保守的: 欠落はしても捏造はしない)。リテラルな play レベルの `run_time` は play 全体の duration を正確に決定します — Scene ヘルパー内の play も呼び出しサイトごとに、呼び出しサイトが異なる(あるいは追跡不能な)mobject をパラメーター上の `.animate` ビルダーに渡す場合も含めて — 一方、*非リテラル*な `run_time`(や `**kwargs` splat)は、それが上書きするコンストラクタリテラルを正直に unknown へ広げます。
+- **サマリー由来の play は保守的です。** ヘルパーのインライン化が effect summary へフォールバックした場合(再帰、解決不能な呼び出し — カバレッジレポートの `helper calls summarized, not inlined` に計上)、そのヘルパーの play は `Maybe` 確度・開いた繰り返し回数のレコードとして現れます: `MLC104` のようなリテラル duration 検査はそこでも発火しますが、呼び出し元の状態に依存する判定はすべて degrade されたままです。
+- **`TracedPath` がコンストラクタで登録する updater はコスト専用です。** `TracedPath` が構築時に自身へ登録する updater はコスト目的ではモデル化されます(`MLP220` のスパン、lambda を渡した場合の hot context)が、ライフサイクル上の updater 登録ではありません: `TracedPath` 単独ではデフォルトの `wait()` はライフサイクルモデル上 dynamic にならず、バウンドメソッドの `traced_point_func` 本体は hot context として解析されません。
 - **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
 - **未実装。** 9 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
@@ -332,7 +387,50 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-4 つのゲートすべてが通る必要があります。リリース時にはさらに 3 つの品質ゲート(ラベル付きコーパスゲート・ベンチマークゲート・knowledge ドリフトゲート、DESIGN §11.4)があります。実行方法は [README.md の Release quality gates 節](README.md#release-quality-gates-design-114) を参照してください。リポジトリ構成、ルール追加の手順、すべての変更が守るべき不変条件は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。`DESIGN.md` が正典であり、公開契約の変更は DESIGN.md・スキーマテスト・ルールドキュメントを同時に更新する必要があります。
+4 つのゲートすべてが通る必要があります。
+
+knowledge profile のメンテナンス: `sync_manim_knowledge` バイナリは Manim のチェックアウトを静的に読み、レビュー可能なプロファイル候補を生成し、同梱プロファイルのドリフトを検査します(矛盾があれば exit 1)— [src/knowledge/profiles/README.md](src/knowledge/profiles/README.md) を参照してください。来歴(provenance)は分離されています: `upstream_0_20` は**クリーンな** upstream ベースコミット `4d25c031`(working tree ではなく `git archive` 経由で読む)を記述し、`local_0_20_1_4d25c031` オーバーレイは兄弟フォークの working tree がその上に追加するものを記述します:
+
+```bash
+# working tree(フォーク)— upstream に対しては情報提供のみ
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff
+# クリーンな upstream ベース — 矛盾ゼロでなければならない
+cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+cargo test --test knowledge_drift -- --ignored   # layer-9 ドリフトゲート(両方)
+```
+
+### リリース品質ゲート(DESIGN §11.4)
+
+リリースはさらに 3 つのゲートで守られます:
+
+```bash
+# ラベル付きコーパスゲート — `cargo test` の中で自動的に実行される。
+# tests/corpus/manifest-v1.json が全コーパスケースの sha256 と
+# 期待される診断の正確な内容(true positive と false-positive ガード)を
+# ピン留めする。実 Manim example_scenes のスナップショットと
+# 敵対的レビュープローブを含む。
+cargo test --test corpus_gate
+
+# ベンチマークゲート — 明示的に実行、release ビルド、静かなマシンで。
+# ピン留めされた 10k-LOC フィクスチャ(tests/corpus/benchmark_10kloc)で
+# cold ≤ 2 s / peak RSS < 300 MiB。閾値は benchmarks/reference-machine.json
+# に一致するマシンでのみ assert され、それ以外では情報提供のみ。
+# warm ≤ 0.5 s のバジェットは記録されるが、オンディスクキャッシュが
+# 実装されるまで強制されない(同ファイルの `enforced` を参照)。
+# リファレンスマシンでの実測(2026-07-19): cold 1.769 s、
+# warm 1.506 s(キャッシュなしの完全再解析、情報提供のみ)、
+# peak RSS 219.7 MiB — すべてバジェット内。
+cargo test --release --test benchmark_gate -- --ignored benchmark
+
+# knowledge ドリフトゲート — 兄弟の Manim チェックアウトが必要。CI では
+# schedule / dispatch 時に、ピン留めされたベースコミットの shallow clone に
+# 対して実行される。
+cargo test --test knowledge_drift -- --ignored
+```
+
+コーパスケースを機械的に記録し直すことはありません: 不一致は [CONTRIBUTING.md](CONTRIBUTING.md#corpus-labeling) のラベリングプロトコルに基づく再判定(re-adjudication)を意味します。
+
+リポジトリ構成、ルール追加の手順、すべての変更が守るべき不変条件は [CONTRIBUTING.md](CONTRIBUTING.md) を、パイプラインと事実レイヤーの概観は [docs/architecture.md](docs/architecture.md) を参照してください。`DESIGN.md` が正典であり、公開契約の変更は DESIGN.md・スキーマテスト・ルールドキュメントを同時に更新する必要があります。
 
 ## ライセンス
 

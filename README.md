@@ -37,16 +37,19 @@ class TrackerDemo(Scene):
 ```console
 $ manim-lint check .
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
-scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`).
+scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
 scenes/demo.py:12:38: MLD301 warning Updater lambda applies `rotate` with a fixed step every frame but declares no `dt` parameter; the motion speed depends on the profile frame rate
-scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is non-positive and `Scene` rejects it with `ValueError` before rendering.
+scenes/demo.py:14:9: MLC112 warning This `wait()` renders a single frozen frame: nothing makes it dynamic, and the updater registered at line 9 reads frame-varying state without a `dt` parameter, so its visual change never renders during the wait. Pass `frozen_frame=False`, or declare a `dt` parameter on the updater.
+scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is non-positive and playing it aborts the render.
 ```
 
 Two of these would crash the render (`MLC102`, `MLC104`), one renders an
 invisible title (`MLR115`), one silently changes speed with the frame rate
-(`MLD301`), and one launches the external TeX compiler for a fresh cache key
-on every rendered frame (`MLP226`).
+(`MLD301`), one freezes a wait that the author expected to animate
+(`MLC112`), and one launches the external TeX compiler for a fresh cache
+key on every rendered frame (`MLP226`) — and the linter can bound that
+cost: `run_time=8` at 60 FPS is provably at least ~480 distinct keys.
 
 ## What it checks
 
@@ -145,7 +148,9 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
     A frame-varying key defeats the `MathTex` cache: instead of one shaping/compile job reused every frame,
     each frame pays construction plus a cache miss, and for TeX classes each distinct key also launches the
     external TeX compiler and `dvisvgm`, leaving one disk asset per key. ...
-    evidence.distinct_resource_keys: "per-frame"
+    evidence.distinct_resource_keys: {"lower":480,"upper":null}
+    evidence.execution: {"plays":[{"certainty":"proven","kind":"play","location":"scenes/demo.py:13:9"},{"certainty":"maybe","kind":"play","location":"scenes/demo.py:11:9"}],"unresolved_entries":false}
+    evidence.frames: {"lower":480,"upper":null}
     evidence.invocation_context: "frame-callback"
     evidence.multiplicity: ["frames"]
     evidence.state_path: ["construct","always_redraw:9"]
@@ -291,7 +296,7 @@ An unknown rule ID inside an inline suppression does **not** suppress
 anything; it is reported as a dedicated warning:
 
 ```text
-scene.py:8:23: MLC001 warning unknown rule ID in suppression: MLC999
+scene.py:8:41: MLC001 warning unknown rule ID in suppression: MLC999
 ```
 
 For whole directories, use `per-file-ignores` in `pyproject.toml` (see
@@ -335,16 +340,17 @@ validation; a file whose fix does not survive re-parsing is rolled back.
 
 ```console
 $ manim-lint check . --fix
-scene.py:8:37: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
+scene.py:8:40: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
 fixed 1 issue(s) in 1 file(s)
 ```
 
 ## Cost command
 
 `manim-lint cost` prints the symbolic cost breakdown per scene — play list
-with frame intervals, hot contexts with provenance, per-frame constructions,
-and resource-key growth. Unknown durations are printed as unknown, never as
-fabricated numbers:
+with frame intervals, hot contexts with provenance and the plays where the
+callback provably executes, per-frame constructions, and resource-key
+growth. Unknown durations are printed as unknown, never as fabricated
+numbers:
 
 ```console
 $ manim-lint cost scenes/demo.py
@@ -356,12 +362,33 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
     scenes/demo.py:13:9 play duration 8 s -> frames ~480
     scenes/demo.py:14:9 wait duration 0 s -> frames ~0
   hot contexts:
-    scenes/demo.py:9:31 entry always_redraw; path construct -> always_redraw:9; factors frames
-    scenes/demo.py:12:28 entry updater; path construct -> updater:12; factors frames
+    scenes/demo.py:9:31 entry always_redraw; path construct -> always_redraw:9; factors frames; proven execution plays: scenes/demo.py:13:9
+    scenes/demo.py:12:28 entry updater; path construct -> updater:12; factors frames; proven execution plays: scenes/demo.py:13:9
   per-frame constructions:
-    scenes/demo.py:9:39 MathTex construction x per-frame
+    scenes/demo.py:9:39 MathTex construction x at least ~480 invocations across 1 proven play(s)
   resource-key growth:
-    scenes/demo.py:9:39 MathTex distinct cache keys: one per rendered frame (f-string key varies per frame)
+    scenes/demo.py:9:39 MathTex distinct cache keys: at least ~480 across 1 proven play(s) (f-string key varies per frame)
+```
+
+Under the local fork knowledge profile the report gains a per-scene
+"fork fast paths" section (see below). For example, with
+`cairo-fork-workers = 4` and `cairo-static-layers = true` in the profile:
+
+```console
+$ manim-lint cost scene.py
+...
+  fork fast paths (profile production, knowledge local_0_20_1_4d25c031):
+    fork-per-play (cairo_fork_workers 4):
+      scene.py:9:9 play #1: no static blocker found (fork-eligible pending the runtime audit)
+      scene.py:10:9 play #2: no static blocker found (fork-eligible pending the runtime audit)
+    static layers (cairo_static_layers on):
+      scene.py:9:9 play #1: no static blocker found
+      scene.py:10:9 play #2: no static blocker found
+    packed interpolation:
+      scene.py:9:9 play #1: canonical per-member interpolation because the animation type FadeIn is outside the audited allowlist at scene.py:9:19 (blocker unsupported_animation_type); an updater-bearing mobject is in the scene family (updater registered here) at scene.py:8:9 (blocker updater_bearing_family)
+      scene.py:10:9 play #2: canonical per-member interpolation because an updater-bearing mobject is in the scene family (updater registered here) at scene.py:8:9 (blocker updater_bearing_family)
+      evidence: measured packed interpolation on the calibration machine, 300 members / 60 frames: 130.658 -> 33.004 ms/play, steady state 2.0761 -> 0.1890 ms/frame (docs/research/perf-evidence.md)
+    note: the features named above can be correct expression; this section explains the render-path consequence and never advises removing them
 ```
 
 ## Analysis coverage
@@ -373,6 +400,10 @@ project could not be analyzed. `manim-lint coverage` (and
 stderr without touching stdout or the exit code) surfaces everything the
 analysis could **not** resolve:
 
+For a file with a star import from an unresolvable module, a relative
+import escaping the project tree, a `match` statement above
+`target-python = "3.9"`, and a play wrapped in an unresolved helper call:
+
 ```console
 $ manim-lint coverage .
 analysis coverage (knowledge profile upstream_0_20, target-python 3.9)
@@ -381,8 +412,7 @@ scene.py
   constructs above target-python (MLC000): 1
   star imports from unresolved modules: 1
   unresolved relative imports: 1
-  calls with no resolved target: 1 of 7 (mystery x1)
-  manim APIs not in the knowledge profile: manim.utils.rate_functions.ease_in_sine
+  calls with no resolved target: 1 of 6 (mystery x1)
 
 scene scene.Demo (scene.py)
   plays with unknown duration: 1 of 2
@@ -390,16 +420,16 @@ scene scene.Demo (scene.py)
 
 project
   files parsed: 1 of 1
-  calls resolved: 6 of 7
+  calls resolved: 5 of 6
   play durations known: 1 of 2
   scene constructors resolved: 1 of 1
   constructs above target-python (MLC000): 1
   unresolved imports: 2 (1 star, 1 relative)
-  manim APIs not in the knowledge profile: 1
+  manim APIs not in the knowledge profile: 0
   helper calls summarized, not inlined: 0
   top unresolved calls: mystery x1
 
-analysis confidence: 1/1 files parsed, 6/7 calls resolved, 1/2 play durations known, 1/1 scene constructors resolved (counts of analyzed facts, not estimates)
+analysis confidence: 1/1 files parsed, 5/6 calls resolved, 1/2 play durations known, 1/1 scene constructors resolved (counts of analyzed facts, not estimates)
 ```
 
 Every number is a count of computed facts; the only ratios are plain
@@ -497,6 +527,9 @@ suppressions, supersedes, baseline
 output ................... concise | full | json | sarif | github, fixes, cost report
 ```
 
+[docs/architecture.md](docs/architecture.md) walks a new contributor
+through this pipeline: what each fact layer provides, where it lives, the
+knowledge-profile system, and how one diagnostic flows end to end.
 [`DESIGN.md`](DESIGN.md) is the authoritative specification for the semantic
 model, the rule catalog, and every public contract. JSON output follows
 [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json); baselines
@@ -531,6 +564,18 @@ deterministic and byte-stable for the same input.
   `.animate` builder on the parameter — and a *non-literal* `run_time`
   (or a `**kwargs` splat) honestly widens constructor literals it
   overrides.
+- **Summary-derived plays are conservative.** When helper inlining falls
+  back to an effect summary (recursion, an unresolvable call — counted as
+  `helper calls summarized, not inlined` in the coverage report), the
+  helper's plays still materialize, but as `Maybe`-certainty records with
+  open repetitions: literal-duration checks such as `MLC104` still fire
+  there, while every caller-state-dependent judgment stays degraded.
+- **`TracedPath`'s constructor-registered updater is cost-only.** The
+  updater `TracedPath` registers on itself at construction is modeled for
+  cost purposes (`MLP220` spans, hot-context entry for a traced lambda),
+  but it is not a lifecycle updater registration: a `TracedPath` alone
+  does not make a default `wait()` dynamic in the lifecycle model, and a
+  bound-method `traced_point_func` body is not analyzed as a hot context.
 - **Deliberately conservative silences.** Some detections are narrower than
   their catalog prose and stay silent rather than guess: `MLR106` sees
   NaN/inf only in literal form, not through `float("nan")` calls; `MLD301`
@@ -590,7 +635,9 @@ cargo test --test corpus_gate
 # (tests/corpus/benchmark_10kloc); thresholds assert only on the machine
 # matching benchmarks/reference-machine.json, informational elsewhere.
 # The warm ≤ 0.5 s budget is recorded but not enforced until the on-disk
-# cache exists (see `enforced` in that file).
+# cache exists (see `enforced` in that file). A run on the reference
+# machine (2026-07-19): cold 1.769 s, warm 1.506 s (uncached full
+# re-analysis, informational), peak RSS 219.7 MiB — all within budget.
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # Knowledge drift gate — needs the sibling Manim checkout; in CI it runs
@@ -604,7 +651,9 @@ re-adjudication under the labeling protocol in
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 repository layout, the step-by-step guide to adding a rule, and the
-invariants every change must keep. `DESIGN.md` is authoritative; changes to
+invariants every change must keep, and
+[docs/architecture.md](docs/architecture.md) for the pipeline and
+fact-layer overview. `DESIGN.md` is authoritative; changes to
 public contracts must update it, its schema tests, and the rule docs
 together.
 

@@ -10,6 +10,9 @@ Thank you for contributing. Two documents outrank this one:
   contract, update `DESIGN.md`, its schema tests, and the rule documentation
   **in the same change**.
 
+For a guided tour of the pipeline and the fact layers before diving into
+code, read [docs/architecture.md](docs/architecture.md).
+
 ## Development environment
 
 - Rust **1.85+** (stable). No other runtime dependency; the analyzer never
@@ -30,21 +33,38 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+`cargo test` already includes the labeled corpus gate
+(`tests/corpus_gate.rs`, see [Corpus labeling](#corpus-labeling)). The
+two explicit release gates — the benchmark gate and the knowledge-drift
+gate — are described in the
+[README's release quality gates section](README.md#release-quality-gates-design-114).
+
 ## Repository layout
 
 ```text
-src/source.rs        SourceManager: encodings (PEP 263), newlines, Unicode column mapping
-src/config/          config model + loader: pyproject/manim.cfg precedence, profiles, per-file-ignores
-src/frontend/        parsing, imports/aliases, project symbol index, CFG, qualified call facts
-src/knowledge/       versioned Manim knowledge profiles (embedded JSON) and their loader
-src/semantic/        lifecycle abstract interpreter: values, heap, events, summaries -> LifecycleFacts
-src/cost/            symbolic cost model: hot contexts, frame intervals, evidence -> CostFacts
-src/rules/           rule groups (lifecycle, rendering, performance, portability) + registry
-src/reporting/       suppressions, text/json/sarif output, fixes, baseline
-src/application.rs   command orchestration (check/explain/rules/config/cost)
-docs/rules/          one document per implemented rule + the catalog index
-schemas/             diagnostics-v1.json, baseline-v1.json (public contracts)
-tests/               integration tests + golden rule fixtures under tests/fixtures/
+src/source.rs             SourceManager: encodings (PEP 263), newlines, Unicode column mapping
+src/config/               config model + loader: pyproject/manim.cfg precedence, profiles, enforcement
+src/frontend/             parsing, imports/aliases, project symbol index, CFG, qualified call facts,
+                          statement/binding facts (statements.rs), target-python gate (features.rs)
+src/knowledge/            versioned Manim knowledge profiles (embedded JSON), loader, generator
+src/semantic/             lifecycle abstract interpreter -> LifecycleFacts; the interpreter itself is
+                          a directory (src/semantic/interpreter/: exec, dispatch, play, inline, mro,
+                          heap_ops, callbacks, snapshots) with values/heap/events/summaries beside it
+src/cost/                 symbolic cost model: hot contexts, frame intervals, execution liveness
+                          (liveness.rs), fork fast-path gates (fork.rs), evidence -> CostFacts
+src/render_order.rs       Cairo effective display order / moving-suffix estimation
+src/rules/                rule group directories (lifecycle/, rendering/, performance/, portability/)
+                          + registry (selection, capability gating, supersedes dedup)
+src/reporting/            suppressions, text/json/sarif output, fixes, baseline, coverage report
+src/application.rs        command orchestration (check/explain/rules/config/cost/coverage) + DOCS table
+src/bin/                  sync_manim_knowledge (profile candidates + drift check)
+docs/rules/               one document per implemented rule + the catalog index
+docs/architecture.md      pipeline and fact-layer overview for contributors
+docs/research/            versioned calibration evidence (machine-specific measurements)
+schemas/                  diagnostics-v1.json, baseline-v1.json (public contracts)
+benchmarks/               reference-machine.json (benchmark-gate thresholds + fingerprint)
+tests/                    integration tests, golden rule fixtures (tests/fixtures/), labeled corpus
+                          (tests/corpus/ + manifest-v1.json), benchmark and drift gates
 ```
 
 ## How to add a rule
@@ -58,10 +78,25 @@ default severity, and minimum confidence. Implementing one:
    `implementation_phase`, `required_profiles`, `required_capabilities`,
    `supersedes`. Do not invent a new ID and do not change the meaning of an
    existing one — rule splits get a new ID.
-2. **Implement the rule** in the matching group module (`src/rules/lifecycle`,
-   `rendering`, `performance`, or `portability`). Rules have no visitors of
-   their own; they query the `RuleContext` fact layers (qualified calls,
-   `LifecycleFacts`, `CostFacts`, profiles).
+   `required_capabilities` is load-bearing, not decorative: it names the
+   fact layers the rule consumes (`qualified-calls`, `lifecycle`,
+   `cost-facts`, `statement-facts`, ...), and `--select` gating uses it to
+   skip computing fact layers no selected rule needs. A rule that queries
+   a layer it does not declare will silently see nothing under a narrow
+   select. Opt-in rules set `default_enabled: false` (e.g. `MLP225`);
+   prefix selects never enable them — only an exact `--select <ID>` does.
+2. **Implement the rule** in the matching group directory
+   (`src/rules/lifecycle/`, `rendering/`, `performance/`, or
+   `portability/`). Rules have no visitors of their own; they query the
+   `RuleContext` fact layers (qualified calls, `LifecycleFacts`,
+   `CostFacts`, statement/binding facts, profiles).
+   **The canonical traversal rule (DESIGN §5.6): no module-root AST walks
+   in rule code.** If your rule needs a position or binding the facts do
+   not carry yet, promote it into a frontend fact
+   (`src/frontend/statements.rs` or `index.rs`) instead of re-walking the
+   tree; the only acceptable local traversals are fact-anchored (starting
+   at a node a fact already located) and reuse the canonical frontend
+   walker.
 3. **Register it in your group module's `rules()` function only.** The
    registry (`src/rules/registry.rs`) composes the group lists; nothing else
    needs to change for registration.
@@ -116,6 +151,25 @@ generated dumps (see the README in that directory):
   semantics and local-fork overlays strictly separate (AGENTS.md rule 5).
 - Never propose an API or setting that does not exist in the targeted
   profile.
+
+Fork-overlay curation (the `fork_capabilities` block of
+`local_0_20_1_4d25c031.json`) has additional rules:
+
+- The block is **reviewer-curated only**: the generator neither emits nor
+  drift-checks `fork_capabilities`. Every capability carries a `note`
+  citing the exact fork source it was read from.
+- Overlay *symbols* (e.g. the fork's TeX precompile APIs) are still
+  drift-checked against the fork working tree
+  (`sync_manim_knowledge --manim-root ../manim --diff
+  local_0_20_1_4d25c031` must be clean).
+- Everything fork-gated must be provably inert under `upstream_0_20`:
+  the upstream profile has no `fork_capabilities` block and its accessors
+  return `None` — a fork-gated rule or cost section must key off that,
+  never off the profile name.
+- Capability `entry_points` must be curated symbols of the resolved
+  profile, so advice can never cite an API the selected profile lacks.
+- Calibration numbers quoted in capability notes are machine-specific
+  evidence (`docs/research/perf-evidence.md`), never portable truth.
 
 Calibration measurements belong in versioned evidence under
 `docs/research/`, not in machine-independent rule logic.
