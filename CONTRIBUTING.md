@@ -120,6 +120,57 @@ generated dumps (see the README in that directory):
 Calibration measurements belong in versioned evidence under
 `docs/research/`, not in machine-independent rule logic.
 
+## Corpus labeling
+
+`tests/corpus/manifest-v1.json` is the labeled release corpus (DESIGN
+§11.4), enforced by `tests/corpus_gate.rs` on every `cargo test`. Each
+case pins:
+
+- `path` — the case source under `tests/corpus/`;
+- `sha256` — digest of that exact source (label-revision safety: labels
+  describe one byte-exact input);
+- `label_revision` — bumped on every re-adjudication;
+- `classification` — `true-positive` (all expected diagnostics are
+  adjudicated real defects), `false-positive-guard` (adjudicated silent:
+  any diagnostic is a false positive), or `mixed` (expected true
+  positives plus rules that must stay silent, listed under `guards`);
+- `expected` — the exact diagnostics (`rule`, `line`, `column`,
+  `severity`, `confidence`), each itself classified `true-positive`;
+- `provenance` — where the adjudication happened (a golden test, a review
+  probe, or the real-Manim example_scenes verdict).
+
+### Adding a new case
+
+1. Put the standalone source under `tests/corpus/cases/` (external
+   snapshots keep a license note — see
+   `tests/corpus/cases/manim_example_scenes/README.md`).
+2. Run the default check over the file **in isolation** and adjudicate
+   every diagnostic by hand against Manim semantics (the DESIGN §3
+   model / the pinned Manim source). A diagnostic you cannot justify as a
+   true positive is a bug to fix first, not a label to record.
+3. Add the manifest entry with `label_revision: 1`, the source sha256,
+   and the adjudicated expectations; state the provenance.
+4. `cargo test --test corpus_gate` must pass.
+
+### Re-adjudication (label revision bumping)
+
+The gate fails in two distinct ways, and neither may be answered by
+mechanically re-recording observed output:
+
+- **sha256 mismatch** — the case source changed after labeling. Restore
+  the pinned source, or re-adjudicate from scratch: repeat step 2 above
+  on the new source, then update `sha256`, the expectations, and bump
+  `label_revision` in the same change.
+- **diagnostic mismatch** — analyzer behavior changed. If the new
+  behavior is wrong, fix the analyzer. If it is intentionally better,
+  re-adjudicate each changed diagnostic by hand, update `expected`, and
+  bump `label_revision`; the PR must say *why* every changed line is now
+  the correct verdict.
+
+Deleting or weakening a `false-positive-guard` case needs the same
+justification as deleting a regression test: these cases are the pinned
+form of real review findings.
+
 ## Contributor checklist — the DESIGN §15 invariants
 
 Every change must keep all of these:

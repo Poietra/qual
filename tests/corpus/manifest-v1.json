@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "description": "Labeled corpus for the release quality gate (DESIGN 11.4). Every case pins the sha256 of its source, a label revision, and the exact expected diagnostics under the default configuration; tests/corpus_gate.rs enforces the labels. Protocol: CONTRIBUTING.md, 'Corpus labeling'.",
+  "cases": [
+    {
+      "path": "cases/manim_example_scenes/basic.py",
+      "sha256": "d75fa2596a5dd2c15d833bdb41846006b931617998dc87f88b723048a323af4f",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Real-Manim corpus verdict (wave-6 MLP208 size-gate adjudication; re-verified by both external review rounds): the whole example_scenes corpus yields exactly one diagnostic, this MLP208 info on the OpeningManim Tex transform.",
+      "license": "MIT (Manim Community; Copyright (c) 2018 3Blue1Brown LLC and Copyright (c) 2024, the Manim Community Developers); unmodified snapshot of example_scenes at ManimCommunity/manim commit 4d25c031ffe71c602e20935afd54a96f33545a6e",
+      "expected": [
+        {
+          "rule": "MLP208",
+          "line": 68,
+          "column": 19,
+          "severity": "info",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/manim_example_scenes/advanced_tex_fonts.py",
+      "sha256": "eda587227eee7774a561567a68b2fbf5eb67b7b45389ceefdcaff3c75310397f",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "provenance": "Real-Manim corpus verdict: adjudicated silent; any diagnostic on this file is a false positive.",
+      "license": "MIT (Manim Community; Copyright (c) 2018 3Blue1Brown LLC and Copyright (c) 2024, the Manim Community Developers); unmodified snapshot of example_scenes at ManimCommunity/manim commit 4d25c031ffe71c602e20935afd54a96f33545a6e",
+      "expected": []
+    },
+    {
+      "path": "cases/manim_example_scenes/customtex.py",
+      "sha256": "d9434d1bc20e65a49e96e365829a1185f5c76818ba57e9f657f4442ddd9ab687",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "provenance": "Real-Manim corpus verdict: adjudicated silent; any diagnostic on this file is a false positive.",
+      "license": "MIT (Manim Community; Copyright (c) 2018 3Blue1Brown LLC and Copyright (c) 2024, the Manim Community Developers); unmodified snapshot of example_scenes at ManimCommunity/manim commit 4d25c031ffe71c602e20935afd54a96f33545a6e",
+      "expected": []
+    },
+    {
+      "path": "cases/manim_example_scenes/opengl.py",
+      "sha256": "c28b9a34b0163f7ab6bd2def8baa97f26d35c3afd764976ccaf847ff2c87a42c",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "provenance": "Real-Manim corpus verdict: adjudicated silent; any diagnostic on this file is a false positive.",
+      "license": "MIT (Manim Community; Copyright (c) 2018 3Blue1Brown LLC and Copyright (c) 2024, the Manim Community Developers); unmodified snapshot of example_scenes at ManimCommunity/manim commit 4d25c031ffe71c602e20935afd54a96f33545a6e",
+      "expected": []
+    },
+    {
+      "path": "cases/probes/suspended_always_redraw.py",
+      "sha256": "6b6fcdee51ff3226850239b8e0451d800afad1cb5a90cf9f1b1bd6aa09dc1579",
+      "label_revision": 1,
+      "classification": "mixed",
+      "guards": [
+        "MLP201",
+        "MLP226"
+      ],
+      "provenance": "The wave-7 review's canonical false positive (DESIGN 3.2/3.3): FadeIn(label) suspends the animated mobject's updaters and the un-dt'd always_redraw leaves wait(3) a static frame, so MLP226/MLP201 must never fabricate a per-frame claim here; the scene's real defect is the frozen-wait MLC112. Adjudicated in tests/rules_performance.rs mlp226_suspended_always_redraw_is_never_a_performance_claim.",
+      "expected": [
+        {
+          "rule": "MLC112",
+          "line": 10,
+          "column": 9,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/probes/helper_play_zero_run_time.py",
+      "sha256": "76b4810bb41f7bcf50593c06168d5eb4149fce5248ea9a3b72b2a9f7983eab3d",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "The wave-8 review's empirically confirmed repro: a zero run_time play inside a self.show(...) helper body must fire MLC104 at the helper play span (helper plays materialize as real lifecycle facts). Adjudicated in tests/rules_lifecycle.rs mlc104_non_positive_duration_golden (helper.py leg).",
+      "expected": [
+        {
+          "rule": "MLC104",
+          "line": 6,
+          "column": 40,
+          "severity": "error",
+          "confidence": "certain",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/probes/loop_generate_target.py",
+      "sha256": "7a93e902a488f18f5fd34771b0e3496b27ec4018e32fd17674b27d91c9ad4def",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLC107"
+      ],
+      "provenance": "Loop generate_target guard: the loop may abstractly run zero times, so target presence is Maybe and MLC107 (all-paths-absent) must stay silent; a pre-fixpoint fact emission bug used to report this as absent-on-all-paths. Reconstructed from tests/fixtures/rules/MLC107/valid.py (LoopGenerated scene).",
+      "expected": []
+    },
+    {
+      "path": "cases/probes/two_millisecond_plays.py",
+      "sha256": "44c4688b478327a5ac89e25e00198f9289d8b36469bab57834f932cea0c307ba",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "The wave-8 per-play frame-math case: two 1 ms plays at 60 fps render 1 + 1 = 2 frames (never ceil(0.002 x 60) = 1 from summing durations first), so MLP226 claims ~2 distinct keys and each sub-frame play carries MLP206. Adjudicated in tests/cost.rs two_millisecond_plays_prove_two_frames_not_one and frame_totals_apply_ceil_per_play_then_sum.",
+      "expected": [
+        {
+          "rule": "MLP226",
+          "line": 8,
+          "column": 39,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLP206",
+          "line": 10,
+          "column": 9,
+          "severity": "warning",
+          "confidence": "certain",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLP206",
+          "line": 11,
+          "column": 9,
+          "severity": "warning",
+          "confidence": "certain",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/probes/multiline_suppression.py",
+      "sha256": "173997654c2d04f3110e9708b14ca84a409235530b1265a2b8f05e2546659089",
+      "label_revision": 1,
+      "classification": "mixed",
+      "guards": [
+        "MLC001",
+        "MLC101"
+      ],
+      "provenance": "Statement-span suppression case (DESIGN 8.3, wave-7 spec-fidelity fix): an inline suppression above a multi-line play() covers the whole statement (and is itself valid, no MLC001), while the next single-line empty play still reports MLC101. Adjudicated in tests/phase0.rs inline_suppression_covers_a_multiline_statement.",
+      "expected": [
+        {
+          "rule": "MLC101",
+          "line": 9,
+          "column": 9,
+          "severity": "error",
+          "confidence": "certain",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc101_invalid.py",
+      "sha256": "33be5e16342d0035037f0039969e0e96b58e94a478dc6ede4bbe5879eac8e38a",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs mlc101_empty_play_golden.",
+      "expected": [
+        {
+          "rule": "MLC101",
+          "line": 6,
+          "column": 9,
+          "severity": "error",
+          "confidence": "certain",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC101",
+          "line": 7,
+          "column": 9,
+          "severity": "error",
+          "confidence": "certain",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc101_valid.py",
+      "sha256": "7a1e82c2b52d94a611a655c3cb88aaf212fe722d1158f0f0c8adddd4a77ca9c1",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLC101"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs mlc101_empty_play_golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlc102_invalid.py",
+      "sha256": "857597f4123f72e9f23c518c517a503bd6eb1b7a0e6eed35eee2cb61bb805318",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs mlc102_non_animation_play_argument_golden.",
+      "expected": [
+        {
+          "rule": "MLC102",
+          "line": 7,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC102",
+          "line": 8,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC102",
+          "line": 9,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC102",
+          "line": 10,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC102",
+          "line": 11,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc102_valid.py",
+      "sha256": "0354c52ddc1cf667a299e45d5e6a6daebfca06212c37a22f19e9fa90640d2712",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLC102"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs mlc102_non_animation_play_argument_golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlc107_invalid.py",
+      "sha256": "ba613c2cdbdcc78a485b407635f553029f0965afaa6865ca5320b9269e46b130",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs mlc107_move_to_target_without_target_golden.",
+      "expected": [
+        {
+          "rule": "MLC107",
+          "line": 8,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC107",
+          "line": 10,
+          "column": 19,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc108_invalid.py",
+      "sha256": "91d3e2d711d1f47de44f846816df8ecb4749875c7193c356a3b36ad34e477fac",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs MLC108 golden.",
+      "expected": [
+        {
+          "rule": "MLC108",
+          "line": 8,
+          "column": 48,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLC108",
+          "line": 10,
+          "column": 32,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc108_valid.py",
+      "sha256": "5baf0fdbd0300493ae52f81218fb963f97c0b036663510745327afe7a24b7926",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLC108"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs MLC108 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlc112_invalid.py",
+      "sha256": "097cdad4280158c1f4126dba6b1cc7b980d9de40d9501716ee90e2fcc777e31f",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs MLC112 golden.",
+      "expected": [
+        {
+          "rule": "MLC112",
+          "line": 10,
+          "column": 9,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlc112_valid.py",
+      "sha256": "3a6c4dba60d73233dfef62a3482cd5d91551fda8a565237793865af6320e1816",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLC112"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_lifecycle.rs MLC112 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlr101_invalid.py",
+      "sha256": "1399a1b4520f43f82ccaa346d10806f50b4667a6b4577358b75f4ca55575c96b",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR101 golden.",
+      "expected": [
+        {
+          "rule": "MLR101",
+          "line": 7,
+          "column": 26,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLR101",
+          "line": 8,
+          "column": 25,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLR101",
+          "line": 9,
+          "column": 38,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLR101",
+          "line": 10,
+          "column": 28,
+          "severity": "error",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlr101_valid.py",
+      "sha256": "e431bab7631c2aef337932c3bda8c37fc68b78c9e852fe3b0c5e731c4f777a09",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLR101"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR101 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlr113_invalid.py",
+      "sha256": "8241443f73540f0c510b704d535b2c81c74d303c46cd3113fcae272aad14573c",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR113 golden.",
+      "expected": [
+        {
+          "rule": "MLR113",
+          "line": 8,
+          "column": 19,
+          "severity": "info",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLR113",
+          "line": 9,
+          "column": 19,
+          "severity": "info",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlr113_valid.py",
+      "sha256": "aaa646d42ee0380389f141a25cf14561e48a84046c63e3b74d5c9f67508514d9",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLR113"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR113 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlr124_invalid.py",
+      "sha256": "7fddeb06d499cc25c555c1f8ed9b671897fc5d59c427736f23746e55d1dc3c07",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR124 golden.",
+      "expected": [
+        {
+          "rule": "MLR124",
+          "line": 6,
+          "column": 18,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLR124",
+          "line": 7,
+          "column": 18,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlr124_valid.py",
+      "sha256": "f7ef7740d09cf534beed2a53305f31bde55af67f76acbee65430889be3b4c222",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLR124"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR124 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlp201_invalid.py",
+      "sha256": "bd56461622bedb87166fca9c932a8ed2431d2a36070309b112539b603609b607",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs MLP201 golden.",
+      "expected": [
+        {
+          "rule": "MLP201",
+          "line": 8,
+          "column": 47,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLP201",
+          "line": 9,
+          "column": 39,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlp201_valid.py",
+      "sha256": "d53c9a426975440b8c08585328bb52f5cec0975ecfa883e95c4a06712a36c71e",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLP201"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs MLP201 golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlp208_invalid.py",
+      "sha256": "6b1e8f66cc155c4873b566a7fe37870d4730e392f9f02c18bd4fc5bcf42957af",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs / rules_performance2.rs MLP208 golden.",
+      "expected": [
+        {
+          "rule": "MLP208",
+          "line": 9,
+          "column": 19,
+          "severity": "info",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlp208_valid.py",
+      "sha256": "83ee3156a6795c62cc0cd824960ad5a7f24bae62f75d7a93a73e5c7b2e6711b4",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLP208"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by wave-6 MLP208 size-gate adjudication: idiomatic small title transforms stay silent (fixture valid.py leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlp220_invalid.py",
+      "sha256": "b273ea475d1a0228afea1aa00c40b000c4a8bf29cbbb8e1584682480a6412b6b",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs mlp220_unbounded_traced_path_golden.",
+      "expected": [
+        {
+          "rule": "MLP220",
+          "line": 7,
+          "column": 17,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlp220_valid.py",
+      "sha256": "7578608e72032a33fbd5595020502b98e17bfbb6693e0a47e775f36298738265",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLP220"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs mlp220_unbounded_traced_path_golden (dissipating_time bound / short span silent legs).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mlp226_invalid.py",
+      "sha256": "11d79548c4601ef0caec850f8d1280819985db935b1a479532b62c1a1f3dffee",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs mlp226_frame_varying_resource_key_golden (also pins the MLP226-supersedes-MLP201 dedup on the f-string span).",
+      "expected": [
+        {
+          "rule": "MLP226",
+          "line": 7,
+          "column": 39,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLP201",
+          "line": 8,
+          "column": 40,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mlp226_valid.py",
+      "sha256": "d33a4cbd06caeeb1f48ee20cb32c3b569c434277dab524efd830a28283bde119",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLP226",
+        "MLP201"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_performance.rs mlp226_frame_varying_resource_key_golden (valid.py silent leg).",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mld301_invalid.py",
+      "sha256": "fd9f7d171f3f7f7b701e4dd54da443902c5dcc32ad1667665669a4859d50a450",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_portability.rs mld301_flags_fixed_step_updater_mutations_without_dt.",
+      "expected": [
+        {
+          "rule": "MLD301",
+          "line": 9,
+          "column": 35,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD301",
+          "line": 10,
+          "column": 38,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD301",
+          "line": 11,
+          "column": 39,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD301",
+          "line": 14,
+          "column": 13,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    },
+    {
+      "path": "cases/rules/mld301_branch.py",
+      "sha256": "68f5923db9431449b3f0751d7eab3f1a68aeec216f57d7a0748f50fc574f7676",
+      "label_revision": 1,
+      "classification": "false-positive-guard",
+      "guards": [
+        "MLD301"
+      ],
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_portability.rs mld301 branch leg: a branch-dependent step coefficient is not a provable fixed step.",
+      "expected": []
+    },
+    {
+      "path": "cases/rules/mld303_invalid.py",
+      "sha256": "8c3a1ee90cfa3a2cc10455f69a9f7f3b0fea0a71519c3f924e3f11814709f7ef",
+      "label_revision": 1,
+      "classification": "true-positive",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_portability.rs MLD303 windows-path adjudication.",
+      "expected": [
+        {
+          "rule": "MLD303",
+          "line": 6,
+          "column": 27,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD303",
+          "line": 7,
+          "column": 27,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD303",
+          "line": 8,
+          "column": 30,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        },
+        {
+          "rule": "MLD303",
+          "line": 9,
+          "column": 26,
+          "severity": "warning",
+          "confidence": "high",
+          "classification": "true-positive"
+        }
+      ]
+    }
+  ]
+}

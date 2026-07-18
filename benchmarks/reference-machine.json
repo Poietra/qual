@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "description": "Reference machine for the DESIGN 11.4 benchmark gate (tests/benchmark_gate.rs). Thresholds are asserted only when the current machine matches `fingerprint` (CPU model + OS pretty name); elsewhere the gate prints measurements informationally.",
+  "fingerprint": {
+    "cpu_model": "Intel(R) Core(TM) Ultra 7 255H",
+    "os": "Ubuntu 24.04.3 LTS"
+  },
+  "machine": {
+    "logical_cpus": 16,
+    "memory_total_kib": 32602292,
+    "kernel": "Linux 6.6.87.2-microsoft-standard-WSL2 (WSL2)"
+  },
+  "thresholds": {
+    "cold_seconds": 2.0,
+    "warm_seconds": 0.5,
+    "peak_rss_mib": 300
+  },
+  "enforced": {
+    "cold_seconds": true,
+    "warm_seconds": false,
+    "peak_rss_mib": true,
+    "note": "DESIGN 11.4 defines warm as the second run immediately after warming the on-disk cache; the .manim-lint-cache (DESIGN 9, Phase 5) is not implemented yet, so no cached second run exists to measure. The warm measurement below is a full uncached re-analysis and is reported informationally until the cache lands, at which point warm_seconds must be flipped to enforced."
+  },
+  "measured": {
+    "date": "2026-07-19",
+    "build": "cargo test --release --test benchmark_gate -- --ignored benchmark",
+    "fixture": "tests/corpus/benchmark_10kloc (20 files, 10810 physical lines)",
+    "cold_seconds": 0.714,
+    "warm_seconds": 0.626,
+    "peak_rss_mib": 215.2
+  },
+  "conditions": "No .manim-lint-cache exists (the on-disk cache is not implemented yet), so cold vs warm differ only by OS filesystem cache and process warm-up: cold is the first in-process check() over the fixture after test start, warm is an immediately following identical uncached run in the same process. Filesystem contents were already in the OS page cache from the build. Peak RSS is VmHWM of the test process, covering both runs."
+}

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly scheduled run: executes every job below, including the
+  # network-dependent knowledge-drift gate (which is skipped on push/PR).
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,4 +39,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The labeled-corpus release gate (DESIGN 11.4) is a plain test and
+      # also runs inside `cargo test`; surfacing it as its own step makes a
+      # corpus regression identifiable at a glance.
+      - name: Corpus gate
+        run: cargo test --test corpus_gate
       - run: cargo test
+
+  # Layer-9 drift gate (DESIGN 11.2): regenerates knowledge candidates from
+  # the Manim source at the profile's pinned base commit and asserts the
+  # shipped profile has no contradictions. Needs network for the clone, so
+  # it runs on schedule / manual dispatch only, never per PR.
+  knowledge-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch Manim at the pinned base commit
+        # The drift test reads the sibling checkout path /home/hosi/manim
+        # (tests/knowledge_drift.rs). Shallow-fetch exactly the base commit
+        # the shipped profile is pinned to (src/knowledge/profiles/README.md).
+        run: |
+          sudo mkdir -p /home/hosi
+          sudo chown "$(id -u):$(id -g)" /home/hosi
+          git init /home/hosi/manim
+          git -C /home/hosi/manim remote add origin https://github.com/ManimCommunity/manim.git
+          git -C /home/hosi/manim fetch --depth 1 origin 4d25c031ffe71c602e20935afd54a96f33545a6e
+          git -C /home/hosi/manim checkout --detach FETCH_HEAD
+      - name: Knowledge drift gate
+        run: cargo test --test knowledge_drift -- --ignored

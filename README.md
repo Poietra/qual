@@ -450,6 +450,35 @@ cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c0
 cargo test --test knowledge_drift -- --ignored   # layer-9 drift gate (both)
 ```
 
+### Release quality gates (DESIGN §11.4)
+
+Three additional gates guard releases:
+
+```bash
+# Labeled corpus gate — runs automatically inside `cargo test`.
+# tests/corpus/manifest-v1.json pins sha256 + exact expected diagnostics
+# (true positives and false-positive guards) for every corpus case,
+# including pinned real-Manim example_scenes snapshots and the
+# adversarial review probes.
+cargo test --test corpus_gate
+
+# Benchmark gate — explicit, release build, quiet machine.
+# Cold ≤ 2 s / peak RSS < 300 MiB over the pinned 10k-LOC fixture
+# (tests/corpus/benchmark_10kloc); thresholds assert only on the machine
+# matching benchmarks/reference-machine.json, informational elsewhere.
+# The warm ≤ 0.5 s budget is recorded but not enforced until the on-disk
+# cache exists (see `enforced` in that file).
+cargo test --release --test benchmark_gate -- --ignored benchmark
+
+# Knowledge drift gate — needs the sibling Manim checkout; in CI it runs
+# on schedule/dispatch against a shallow clone of the pinned base commit.
+cargo test --test knowledge_drift -- --ignored
+```
+
+Corpus cases are never re-recorded mechanically: a mismatch means
+re-adjudication under the labeling protocol in
+[CONTRIBUTING.md](CONTRIBUTING.md#corpus-labeling).
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 repository layout, the step-by-step guide to adding a rule, and the
 invariants every change must keep. `DESIGN.md` is authoritative; changes to
