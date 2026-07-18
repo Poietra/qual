@@ -686,6 +686,51 @@ fn per_frame_allocation_bytes_from_literal_ndarray_sizes_only() {
     assert_eq!(cost.per_frame_allocation_bytes(typed), Num::int(400_000));
 }
 
+const TUPLE_ALLOCATION_SCENE: &str = "\
+from manim import *
+import numpy as np
+
+
+class Demo(Scene):
+    def construct(self):
+        n = 100
+        sq = Square()
+        sq.add_updater(lambda m: np.zeros((400, 400)))
+        sq.add_updater(lambda m: np.zeros(()))
+        sq.add_updater(lambda m: np.zeros((n, 400)))
+        sq.add_updater(lambda m: np.zeros((400, -1)))
+        sq.add_updater(lambda m: np.ones([64, 128], dtype=\"float32\"))
+        self.wait(1)
+";
+
+#[test]
+fn per_frame_allocation_bytes_multiplies_literal_tuple_shapes() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", TUPLE_ALLOCATION_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // (400, 400) float64: 160_000 × 8 bytes, above the 64 KiB gate.
+    let matrix = call_index(&facts, NUMPY_ZEROS, 0);
+    let bytes = cost.per_frame_allocation_bytes(matrix);
+    assert_eq!(bytes, Num::int(1_280_000));
+    assert!(PER_FRAME_ALLOCATION_GATE.confirmed_by(&bytes));
+
+    // An empty shape is a 0-d array holding exactly one element.
+    let scalar = call_index(&facts, NUMPY_ZEROS, 1);
+    assert_eq!(cost.per_frame_allocation_bytes(scalar), Num::int(8));
+
+    // A non-literal dimension voids the whole shape — never guessed.
+    let dynamic = call_index(&facts, NUMPY_ZEROS, 2);
+    assert_eq!(cost.per_frame_allocation_bytes(dynamic), Num::Unknown);
+
+    // A negative dimension is a runtime error, not an allocation proof.
+    let negative = call_index(&facts, NUMPY_ZEROS, 3);
+    assert_eq!(cost.per_frame_allocation_bytes(negative), Num::Unknown);
+
+    // List shapes multiply the same way, and the dtype argument applies.
+    let listed = call_index(&facts, "numpy.ones", 0);
+    assert_eq!(cost.per_frame_allocation_bytes(listed), Num::int(32_768));
+}
+
 #[test]
 fn unknown_and_symbolic_sizes_never_confirm_thresholds() {
     for gate in &manim_lint::cost::thresholds::ALL_GATES {

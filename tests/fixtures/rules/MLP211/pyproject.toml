@@ -1,0 +1,2 @@
+[tool.manim-lint]
+min-confidence = "medium"

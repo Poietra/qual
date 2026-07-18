@@ -250,6 +250,142 @@ fn mlp220_evidence_quantifies_span_and_points() {
 }
 
 #[test]
+fn mlp202_hot_family_copy_golden() {
+    // `valid.py` (a per-frame copy of a single Square: family 1, gate
+    // shut; a cold `group.copy()` in construct) and `branch.py` (a group
+    // grown in a loop: the family widens to an open-above interval that
+    // never confirms the gate) stay silent.
+    assert_golden(
+        "MLP202",
+        &[
+            "invalid.py:8:37 MLP202 warning high",
+            "invalid.py:9:37 MLP202 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlp203_hot_family_walk_golden() {
+    // `valid.py` (a single `next_to` on a small Dot and a `get_family`
+    // on a lone Square — the DESIGN §7.3 near-misses) and `branch.py`
+    // (loop-grown family: open-above interval) stay silent.
+    assert_golden("MLP203", &["invalid.py:7:37 MLP203 info high"]);
+}
+
+#[test]
+fn mlp207_transform_begin_gate_golden() {
+    // `valid.py` (Square → Circle: family 2, curve delta 4 — both gates
+    // shut) and `branch.py` (loop-grown source family: open-above
+    // interval never confirms) stay silent. The fixture pyproject lowers
+    // min-confidence so the medium-confidence diagnostic surfaces.
+    assert_golden("MLP207", &["invalid.py:9:19 MLP207 info medium"]);
+}
+
+#[test]
+fn mlp208_text_family_transform_golden() {
+    // `valid.py` (Square → Circle transform: no Text kind) and
+    // `branch.py` (an unresolvable helper value: kind unknown, never
+    // guessed) stay silent.
+    assert_golden("MLP208", &["invalid.py:9:19 MLP208 info high"]);
+}
+
+#[test]
+fn mlp211_hot_large_allocation_golden() {
+    // `valid.py` (a cold 800 KB buffer in construct; a per-frame
+    // 24-byte coordinate vector below the gate) and `branch.py` (a
+    // non-literal length: bytes Unknown, never guessed) stay silent.
+    // The second row is a literal tuple shape (`np.zeros((400, 400))`).
+    assert_golden(
+        "MLP211",
+        &[
+            "invalid.py:8:34 MLP211 info medium",
+            "invalid.py:9:34 MLP211 info medium",
+        ],
+    );
+}
+
+#[test]
+fn mlp216_stable_geometry_redraw_golden() {
+    // `valid.py` (`Circle(num_components=14)`: a banned kwarg voids the
+    // curated topology proof; a `VGroup(...)` factory constructs no
+    // provable leaf) and `branch.py` (a named-function factory is outside
+    // the lambda-scoped proof) stay silent.
+    assert_golden(
+        "MLP216",
+        &[
+            "invalid.py:7:16 MLP216 info medium",
+            "invalid.py:8:15 MLP216 info medium",
+        ],
+    );
+}
+
+#[test]
+fn mlp224_point_from_proportion_golden() {
+    // The 32-circle path proves exactly 1024 points, so `MLP224` claims
+    // the `point_from_proportion` query; the generic `MLP203` must stay
+    // out even though the family gate would also pass (specificity,
+    // DESIGN §7.3). `valid.py` (a lone Circle: 32 points) and `branch.py`
+    // (loop-grown path: open-above interval) stay silent.
+    assert_golden("MLP224", &["invalid.py:7:36 MLP224 info high"]);
+}
+
+#[test]
+fn mlp202_evidence_carries_gate_and_real_bounds() {
+    let project = copy_fixture("MLP202");
+    let report = check(&args_for(project.path())).unwrap();
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule_id == "MLP202")
+        .expect("MLP202 fires on invalid.py");
+    // The 40-square group plus itself: 41 family members, exactly.
+    let family = diagnostic
+        .evidence
+        .get("family_size")
+        .expect("evidence carries the family bounds");
+    assert_eq!(family["lower"], serde_json::json!(41));
+    assert_eq!(family["upper"], serde_json::json!(41));
+    let gates = diagnostic
+        .evidence
+        .get("gates")
+        .and_then(|gates| gates.as_array())
+        .expect("evidence carries the emission gates");
+    assert!(
+        gates
+            .iter()
+            .any(|gate| gate["threshold"] == "large-family-gate" && gate["confirmed"] == true),
+        "the large-family gate must be cited as confirmed: {gates:?}"
+    );
+}
+
+#[test]
+fn mlp208_evidence_omits_unprovable_numbers() {
+    let project = copy_fixture("MLP208");
+    let report = check(&args_for(project.path())).unwrap();
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule_id == "MLP208")
+        .expect("MLP208 fires on invalid.py");
+    // Text / TeX cardinalities are content-dependent: the kind facts are
+    // present, the unprovable curve insertion is absent — never a
+    // fabricated number (DESIGN §15).
+    assert!(
+        diagnostic.evidence.contains_key("source_kind"),
+        "kind evidence fires the specialization"
+    );
+    assert!(
+        !diagnostic.evidence.contains_key("curve_insertion"),
+        "no fabricated curve numbers for content-dependent kinds"
+    );
+    assert!(
+        !diagnostic.evidence.contains_key("family_size"),
+        "the structural family count of a Text source is not meaningful \
+         glyph evidence and must be omitted"
+    );
+}
+
+#[test]
 fn performance_rule_metadata_matches_the_design_catalog() {
     let expected: [(&str, Severity, Confidence, &[&str]); 6] = [
         ("MLP201", Severity::Warning, Confidence::High, &[]),
@@ -290,6 +426,32 @@ fn performance_rule_metadata_matches_the_design_catalog() {
         assert!(
             registry::is_reserved_rule_id(reserved),
             "{reserved} keeps its reserved id"
+        );
+    }
+}
+
+#[test]
+fn cardinality_tranche_metadata_matches_the_design_catalog() {
+    let expected: [(&str, Severity, Confidence, &[&str]); 7] = [
+        ("MLP202", Severity::Warning, Confidence::High, &[]),
+        ("MLP203", Severity::Info, Confidence::High, &[]),
+        ("MLP207", Severity::Info, Confidence::Medium, &[]),
+        ("MLP208", Severity::Info, Confidence::High, &["MLP207"]),
+        ("MLP211", Severity::Info, Confidence::Medium, &[]),
+        ("MLP216", Severity::Info, Confidence::Medium, &[]),
+        ("MLP224", Severity::Info, Confidence::High, &["MLP203"]),
+    ];
+    for (rule, severity, confidence, supersedes) in expected {
+        let metadata = registry::metadata_for(rule)
+            .unwrap_or_else(|| panic!("{rule} must be registered as implemented"));
+        assert!(metadata.default_enabled, "{rule} defaults to enabled");
+        assert_eq!(metadata.default_severity, severity, "{rule} severity");
+        assert_eq!(metadata.minimum_confidence, confidence, "{rule} confidence");
+        assert_eq!(metadata.implementation_phase, 3, "{rule} phase");
+        assert_eq!(metadata.supersedes, supersedes, "{rule} supersedes");
+        assert!(
+            metadata.required_capabilities.contains(&"cost-facts"),
+            "{rule} must declare the cost-fact layer it relies on"
         );
     }
 }

@@ -95,11 +95,12 @@ const TEX_CONSTRUCTORS: [&str; 3] = [
 ];
 
 /// Qualified ids of ndarray constructors whose byte size is statically
-/// provable from a literal length (`MLP211`). `NumPy`'s default dtype for
+/// provable from a literal shape (`MLP211`). `NumPy`'s default dtype for
 /// `zeros` / `ones` / `empty` is `float64` (8 bytes per element).
 ///
-/// Tuple-literal shapes are not yet analyzable (the frontend carries no
-/// tuple literal facts); those calls stay `Unknown` rather than guessed.
+/// A literal integer length and literal tuple / list shapes whose
+/// dimensions are all integer literals (`np.zeros((w, h))`) are analyzable;
+/// anything else stays `Unknown` rather than guessed.
 const NDARRAY_CONSTRUCTORS: [&str; 4] = ["numpy.empty", "numpy.full", "numpy.ones", "numpy.zeros"];
 
 /// Mobject method names that copy the receiver (`mobject.py`
@@ -908,8 +909,37 @@ fn dtype_bytes(label: &str) -> Option<i64> {
     Some(bytes)
 }
 
+/// Element count of a literal ndarray shape argument: a non-negative
+/// integer length, or the product of a tuple / list of non-negative
+/// integer dimensions (`np.zeros((w, h))`). `None` for anything `NumPy`
+/// would reject or that is not fully literal — never guessed.
+fn ndarray_element_count(shape: &crate::frontend::index::LiteralFact) -> Option<i64> {
+    use crate::frontend::index::LiteralFact;
+    match shape {
+        LiteralFact::Int(length) if *length >= 0 => Some(*length),
+        // NumPy multiplies the dimensions; an empty shape is a 0-d array
+        // holding exactly one element. Negative or non-integer dimensions
+        // raise at runtime and prove nothing.
+        LiteralFact::Tuple(dimensions) | LiteralFact::List(dimensions) => {
+            let mut elements: i64 = 1;
+            for dimension in dimensions {
+                let LiteralFact::Int(extent) = dimension else {
+                    return None;
+                };
+                if *extent < 0 {
+                    return None;
+                }
+                elements = elements.checked_mul(*extent)?;
+            }
+            Some(elements)
+        }
+        _ => None,
+    }
+}
+
 /// Statically proven allocation size of one ndarray constructor call:
-/// literal integer length × element size ([`Num::Unknown`] otherwise).
+/// literal shape element count × element size ([`Num::Unknown`]
+/// otherwise).
 fn ndarray_allocation_bytes(call: &crate::frontend::index::QualifiedCall) -> Num {
     use crate::frontend::index::LiteralFact;
     if call.has_star_args || call.has_star_star_kwargs {
@@ -918,13 +948,10 @@ fn ndarray_allocation_bytes(call: &crate::frontend::index::QualifiedCall) -> Num
     let Some(shape) = call.positional(0) else {
         return Num::Unknown;
     };
-    let Some(LiteralFact::Int(length)) = shape.literal else {
-        // Tuple shapes carry no literal fact yet; never guessed.
+    let Some(length) = shape.literal.as_ref().and_then(ndarray_element_count) else {
+        // Non-literal (or partially literal) shapes are never guessed.
         return Num::Unknown;
     };
-    if length < 0 {
-        return Num::Unknown;
-    }
     let element_bytes = if let Some(argument) = call.keyword("dtype") {
         let label = match (&argument.literal, &argument.shape) {
             (Some(LiteralFact::Str { value, .. }), _) => Some(value.clone()),
