@@ -53,9 +53,196 @@ pub enum ConfigError {
     /// Profiles are defined but no `default-profile` is set.
     #[error("profiles are defined but default-profile is not set")]
     MissingDefaultProfile,
-    /// A CLI value could not be interpreted.
+    /// A CLI value could not be interpreted, or a configured value
+    /// failed validation.
     #[error("{0}")]
     InvalidValue(String),
+    /// `stub-paths` is configured but stub loading does not exist yet;
+    /// silently ignoring the paths would give false assurance.
+    #[error(
+        "stub-paths is not implemented yet: the configured paths would be \
+         silently ignored; remove `stub-paths` from the configuration"
+    )]
+    StubPathsUnimplemented,
+    /// The declared `manim-version` is outside the loaded knowledge
+    /// profile's supported Manim range.
+    #[error(
+        "manim-version {declared} is outside the range {range} supported by \
+         knowledge profile {profile}; pick a matching knowledge-profile or \
+         fix manim-version"
+    )]
+    ManimVersionOutOfRange {
+        /// `manim-version` as declared in configuration.
+        declared: String,
+        /// Name of the loaded knowledge profile.
+        profile: String,
+        /// The profile's supported Manim version range.
+        range: String,
+    },
+}
+
+/// Highest Python grammar the bundled parser actually implements.
+///
+/// Verified against the vendored `python.lalrpop` of rustpython-parser
+/// 0.4.0: `match` statements (3.10), `except*` (3.11), and PEP 695 `type`
+/// aliases / type-parameter lists (3.12) are all grammar rules, but PEP 696
+/// type-parameter defaults (`class C[T = int]`, new in Python 3.13) are
+/// absent — `TypeParam` has no default clause — so 3.12 is the newest
+/// grammar the parser implements. A newer `target-python` must be an
+/// explicit configuration error (DESIGN §5.2), never a silent downgrade.
+pub const MAX_TARGET_PYTHON: (u32, u32) = (3, 12);
+
+/// Lowest `target-python` the bundled parser meaningfully supports: it is
+/// a Python 3 parser (Python 2 constructs such as `print x` or
+/// `except E, e:` are grammar errors), and its fixed grammar cannot be
+/// narrowed per version, so every Python 3 target up to
+/// [`MAX_TARGET_PYTHON`] is accepted as "parse with the fixed grammar".
+pub const MIN_TARGET_PYTHON: (u32, u32) = (3, 0);
+
+/// Validates the `target-python` format (`X.Y`) and parser bounds.
+///
+/// The bundled parser has no `feature_version` pinning: `target-python`
+/// only gates acceptance, it never changes how sources are parsed.
+fn validate_target_python(value: &str) -> Result<(), ConfigError> {
+    let parsed = value.split_once('.').and_then(|(major, minor)| {
+        let major: u32 = parse_ascii_number(major)?;
+        let minor: u32 = parse_ascii_number(minor)?;
+        Some((major, minor))
+    });
+    let Some(version) = parsed else {
+        return Err(ConfigError::InvalidValue(format!(
+            "invalid target-python {value:?}: expected MAJOR.MINOR, e.g. \"3.11\""
+        )));
+    };
+    if version < MIN_TARGET_PYTHON {
+        return Err(ConfigError::InvalidValue(format!(
+            "target-python {value} is older than Python \
+             {major}.{minor}, the oldest version the bundled parser \
+             meaningfully supports",
+            major = MIN_TARGET_PYTHON.0,
+            minor = MIN_TARGET_PYTHON.1,
+        )));
+    }
+    if version > MAX_TARGET_PYTHON {
+        return Err(ConfigError::InvalidValue(format!(
+            "target-python {value} is newer than the Python grammar bundled \
+             with manim-lint (rustpython-parser 0.4 implements the Python \
+             {major}.{minor} grammar); lower target-python or use a \
+             manim-lint build with a newer parser",
+            major = MAX_TARGET_PYTHON.0,
+            minor = MAX_TARGET_PYTHON.1,
+        )));
+    }
+    Ok(())
+}
+
+/// Parses a plain ASCII decimal number (no sign, no leading `+`).
+fn parse_ascii_number(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// A dotted numeric version, padded to three components (`0.20` reads as
+/// `0.20.0`). The semver-ish subset both `manim-version` values and
+/// knowledge-profile ranges use; no external dependency.
+fn parse_version(text: &str) -> Option<[u64; 3]> {
+    let mut parts = [0_u64; 3];
+    let mut count = 0;
+    for piece in text.trim().split('.') {
+        if count == parts.len() || piece.is_empty() {
+            return None;
+        }
+        if !piece.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        parts[count] = piece.parse().ok()?;
+        count += 1;
+    }
+    (count >= 1).then_some(parts)
+}
+
+/// Evaluates `version` against a comma-separated comparator list
+/// (`>=0.20,<0.21`). A bare version means exact equality.
+///
+/// Returns `None` when the range spec itself cannot be parsed: an
+/// unintelligible profile range is informational, and inventing an error
+/// from it would be a fabricated finding (DESIGN §15).
+fn version_in_range(version: [u64; 3], range: &str) -> Option<bool> {
+    let mut satisfied = true;
+    for comparator in range.split(',') {
+        let comparator = comparator.trim();
+        let (operator, bound_text) = ["<=", ">=", "==", "<", ">", "="]
+            .iter()
+            .find_map(|prefix| {
+                comparator
+                    .strip_prefix(prefix)
+                    .map(|rest| (*prefix, rest.trim()))
+            })
+            .unwrap_or(("==", comparator));
+        let bound = parse_version(bound_text)?;
+        satisfied &= match operator {
+            "<" => version < bound,
+            "<=" => version <= bound,
+            ">" => version > bound,
+            ">=" => version >= bound,
+            _ => version == bound,
+        };
+    }
+    Some(satisfied)
+}
+
+/// Validates a declared `manim-version` against a knowledge profile's
+/// supported Manim range (DESIGN §8.2 honesty: a declared version the
+/// loaded profile does not cover must be an explicit exit-2 error, not a
+/// silently ignored setting).
+pub fn validate_manim_version(
+    declared: &str,
+    profile: &str,
+    range: &str,
+) -> Result<(), ConfigError> {
+    let Some(version) = parse_version(declared) else {
+        return Err(ConfigError::InvalidValue(format!(
+            "invalid manim-version {declared:?}: expected a dotted numeric \
+             version, e.g. \"0.20\""
+        )));
+    };
+    match version_in_range(version, range) {
+        Some(false) => Err(ConfigError::ManimVersionOutOfRange {
+            declared: declared.to_owned(),
+            profile: profile.to_owned(),
+            range: range.to_owned(),
+        }),
+        // `None`: the profile's range spec is unparsable, so the declared
+        // version cannot be checked against it — informational only.
+        Some(true) | None => Ok(()),
+    }
+}
+
+/// Rejects resolved profile numbers no analysis can honor: a non-positive
+/// or non-finite frame rate and a zero pixel dimension would silently
+/// produce meaningless frame math, so they are configuration errors
+/// regardless of which tier (CLI flag, profile, `manim.cfg`) supplied them.
+fn validate_profile_numbers(profile: &RenderProfile) -> Result<(), ConfigError> {
+    if !profile.frame_rate.is_finite() || profile.frame_rate <= 0.0 {
+        return Err(ConfigError::InvalidValue(format!(
+            "frame rate must be a positive finite number; profile \
+             \"{name}\" resolved to {value}",
+            name = profile.name,
+            value = profile.frame_rate,
+        )));
+    }
+    if profile.pixel_width == 0 || profile.pixel_height == 0 {
+        return Err(ConfigError::InvalidValue(format!(
+            "resolution dimensions must be nonzero; profile \"{name}\" \
+             resolved to {width}x{height}",
+            name = profile.name,
+            width = profile.pixel_width,
+            height = profile.pixel_height,
+        )));
+    }
+    Ok(())
 }
 
 /// `[tool.manim-lint]` exactly as written in `pyproject.toml`.
@@ -367,15 +554,40 @@ pub fn resolve(input: &ResolutionInput) -> Result<ResolvedConfig, ConfigError> {
     let (default_profile, all_profile_names, active) =
         select_profiles(&pyproject, &lint, &input.profile_selection)?;
 
-    let active_profiles = active
+    let active_profiles: Vec<RenderProfile> = active
         .iter()
         .map(|section| resolve_profile(section, &input.cli, &base, &manim_cfg, &defaults))
         .collect();
+    for profile in &active_profiles {
+        validate_profile_numbers(profile)?;
+    }
+
+    // Honesty checks (DESIGN §8.2): settings that cannot be honored are
+    // explicit errors, never silently accepted.
+    let stub_paths = lint.stub_paths.unwrap_or_default();
+    if !stub_paths.is_empty() {
+        return Err(ConfigError::StubPathsUnimplemented);
+    }
+    let target_python = lint.target_python.unwrap_or_default();
+    validate_target_python(&target_python)?;
+    // A declared manim-version must at least be a parseable version here;
+    // the range check against the loaded knowledge profile happens in the
+    // application layer, which owns profile loading.
+    let declared_manim_version = base.manim_version.clone();
+    if let Some(declared) = &declared_manim_version {
+        if parse_version(declared).is_none() {
+            return Err(ConfigError::InvalidValue(format!(
+                "invalid manim-version {declared:?}: expected a dotted \
+                 numeric version, e.g. \"0.20\""
+            )));
+        }
+    }
 
     Ok(ResolvedConfig {
         project_root: input.project_root.clone(),
         manim_version: lint.manim_version.unwrap_or_default(),
-        target_python: lint.target_python.unwrap_or_default(),
+        declared_manim_version,
+        target_python,
         select,
         ignore,
         min_confidence: lint.min_confidence.unwrap_or(Confidence::High),
@@ -385,7 +597,7 @@ pub fn resolve(input: &ResolutionInput) -> Result<ResolvedConfig, ConfigError> {
         exclude: lint.exclude.unwrap_or_default(),
         per_file_ignores,
         source_roots: lint.source_roots.unwrap_or_default(),
-        stub_paths: lint.stub_paths.unwrap_or_default(),
+        stub_paths,
         default_profile,
         all_profile_names,
         active_profiles,
@@ -708,5 +920,199 @@ name = "a"
     #[test]
     fn invalid_manim_cfg_number_is_an_error() {
         assert!(parse_manim_cfg("[CLI]\npixel_width = wide\n").is_err());
+    }
+
+    // --- configuration honesty (review finding: accepted-but-ignored /
+    // accepted-but-nonsensical values must be exit-2 config errors) ------
+
+    #[test]
+    fn cli_zero_or_non_finite_frame_rate_is_rejected() {
+        for bad in [0.0, -24.0, f64::INFINITY, f64::NAN] {
+            let mut input = input_with(PYPROJECT);
+            input.cli.frame_rate = Some(bad);
+            assert!(
+                matches!(resolve(&input), Err(ConfigError::InvalidValue(_))),
+                "fps {bad} must be a config error"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_zero_resolution_is_rejected() {
+        let mut input = input_with(PYPROJECT);
+        input.cli.pixel_width = Some(0);
+        input.cli.pixel_height = Some(0);
+        assert!(matches!(resolve(&input), Err(ConfigError::InvalidValue(_))));
+    }
+
+    #[test]
+    fn profile_zero_frame_rate_is_rejected() {
+        let pyproject = r#"
+[tool.manim-lint]
+default-profile = "p"
+[[tool.manim-lint.profile]]
+name = "p"
+frame-rate = 0
+"#;
+        assert!(matches!(
+            resolve(&input_with(pyproject)),
+            Err(ConfigError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn profile_non_finite_frame_rate_is_rejected() {
+        let pyproject = r#"
+[tool.manim-lint]
+default-profile = "p"
+[[tool.manim-lint.profile]]
+name = "p"
+frame-rate = inf
+"#;
+        assert!(matches!(
+            resolve(&input_with(pyproject)),
+            Err(ConfigError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn profile_zero_pixel_dimension_is_rejected() {
+        let pyproject = r#"
+[tool.manim-lint]
+default-profile = "p"
+[[tool.manim-lint.profile]]
+name = "p"
+pixel-width = 0
+"#;
+        assert!(matches!(
+            resolve(&input_with(pyproject)),
+            Err(ConfigError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn manim_cfg_zero_values_are_rejected() {
+        let mut input = input_with("[tool.manim-lint]\n");
+        input.manim_cfg = Some(ManimCfgValues {
+            frame_rate: Some(0.0),
+            ..ManimCfgValues::default()
+        });
+        assert!(matches!(resolve(&input), Err(ConfigError::InvalidValue(_))));
+
+        let mut input = input_with("[tool.manim-lint]\n");
+        input.manim_cfg = Some(ManimCfgValues {
+            pixel_width: Some(0),
+            ..ManimCfgValues::default()
+        });
+        assert!(matches!(resolve(&input), Err(ConfigError::InvalidValue(_))));
+    }
+
+    /// An invalid tier value that a higher-precedence tier overrides is
+    /// never consulted, so it does not error: only resolved values are
+    /// validated.
+    #[test]
+    fn overridden_invalid_manim_cfg_value_is_not_consulted() {
+        let mut input = input_with(PYPROJECT);
+        input.manim_cfg = Some(ManimCfgValues {
+            frame_rate: Some(0.0),
+            ..ManimCfgValues::default()
+        });
+        // The "production" profile sets frame-rate = 30, which wins.
+        assert!(resolve(&input).is_ok());
+    }
+
+    #[test]
+    fn non_empty_stub_paths_is_an_explicit_refusal() {
+        let pyproject = "[tool.manim-lint]\nstub-paths = [\"stubs\"]\n";
+        let error = resolve(&input_with(pyproject)).expect_err("must refuse");
+        assert!(matches!(error, ConfigError::StubPathsUnimplemented));
+        assert!(
+            error
+                .to_string()
+                .contains("stub-paths is not implemented yet")
+        );
+    }
+
+    #[test]
+    fn target_python_format_and_bounds_are_validated() {
+        for good in ["3.0", "3.8", "3.11", "3.12"] {
+            let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{good}\"\n");
+            assert!(
+                resolve(&input_with(&pyproject)).is_ok(),
+                "{good} must be accepted"
+            );
+        }
+        for bad in ["2.7", "3.13", "4.0", "3", "3.11.2", "py3", "3.x", ""] {
+            let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n");
+            assert!(
+                matches!(
+                    resolve(&input_with(&pyproject)),
+                    Err(ConfigError::InvalidValue(_))
+                ),
+                "{bad:?} must be a config error"
+            );
+        }
+    }
+
+    #[test]
+    fn target_python_newer_than_parser_grammar_names_the_bound() {
+        let pyproject = "[tool.manim-lint]\ntarget-python = \"3.13\"\n";
+        let error = resolve(&input_with(pyproject)).expect_err("must refuse");
+        let message = error.to_string();
+        assert!(message.contains("3.13"), "{message}");
+        assert!(message.contains("3.12"), "{message}");
+    }
+
+    #[test]
+    fn declared_manim_version_is_tracked_and_format_checked() {
+        let config = resolve(&input_with(
+            "[tool.manim-lint]\nmanim-version = \"0.20.1\"\n",
+        ))
+        .unwrap();
+        assert_eq!(config.declared_manim_version.as_deref(), Some("0.20.1"));
+
+        let config = resolve(&input_with("[tool.manim-lint]\n")).unwrap();
+        assert_eq!(config.declared_manim_version, None);
+        assert_eq!(config.manim_version, "0.20", "builtin default kept");
+
+        assert!(matches!(
+            resolve(&input_with(
+                "[tool.manim-lint]\nmanim-version = \"latest\"\n"
+            )),
+            Err(ConfigError::InvalidValue(_))
+        ));
+    }
+
+    #[test]
+    fn manim_version_range_validation() {
+        assert!(validate_manim_version("0.20", "profile", ">=0.20,<0.21").is_ok());
+        assert!(validate_manim_version("0.20.5", "profile", ">=0.20,<0.21").is_ok());
+        let error = validate_manim_version("0.19", "upstream_0_20", ">=0.20,<0.21")
+            .expect_err("below range");
+        assert!(matches!(
+            &error,
+            ConfigError::ManimVersionOutOfRange { profile, range, .. }
+                if profile == "upstream_0_20" && range == ">=0.20,<0.21"
+        ));
+        assert!(validate_manim_version("0.21", "profile", ">=0.20,<0.21").is_err());
+        // Exact comparators, with and without an operator.
+        assert!(validate_manim_version("0.20", "profile", "0.20").is_ok());
+        assert!(validate_manim_version("0.20", "profile", "==0.20").is_ok());
+        assert!(validate_manim_version("0.20.1", "profile", "=0.20").is_err());
+        // An unparsable range cannot be enforced: accepted as informational.
+        assert!(validate_manim_version("0.19", "profile", "whatever").is_ok());
+        // An unparsable declared version is always an error.
+        assert!(validate_manim_version("dev", "profile", ">=0.20").is_err());
+    }
+
+    #[test]
+    fn version_parsing_is_strictly_numeric() {
+        assert_eq!(parse_version("0.20"), Some([0, 20, 0]));
+        assert_eq!(parse_version("0.20.1"), Some([0, 20, 1]));
+        assert_eq!(parse_version(" 3 "), Some([3, 0, 0]));
+        assert_eq!(parse_version("0.20.1.2"), None);
+        assert_eq!(parse_version("0..1"), None);
+        assert_eq!(parse_version("v0.20"), None);
+        assert_eq!(parse_version(""), None);
     }
 }

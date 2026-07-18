@@ -118,11 +118,13 @@ impl Rule for SubFrameDuration {
                     duration = display_seconds(&duration),
                 ),
                 "The frame grid is `np.arange(0, run_time, 1/frame_rate)`: a run \
-                 time below one frame period still renders exactly one frame, so \
-                 the animation shows only its final state while the per-play \
-                 fixed costs remain. Either extend the duration to cover the \
-                 intended motion or apply the final state directly without a \
-                 play."
+                 time below one frame period renders exactly one frame, sampled \
+                 at t=0 — a single frame near the start state of the animation. \
+                 `finish()` then moves the live geometry to its final state but \
+                 writes no extra frame, so the intended motion is never shown \
+                 while the per-play fixed costs remain. Either extend the \
+                 duration to cover the intended motion or apply the final state \
+                 directly without a play."
                     .to_owned(),
                 evidence,
             ));

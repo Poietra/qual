@@ -188,6 +188,25 @@ references are configuration errors (exit 2). `--profile all` analyzes every
 defined profile and merges same-evidence diagnostics, listing the affected
 profiles per diagnostic.
 
+Configuration is validated honestly (exit 2 on violation):
+
+- A declared `manim-version` must fall inside the Manim range supported by
+  the configured knowledge profile (e.g. `upstream_0_20` supports
+  `>=0.20,<0.21`); when absent, nothing is validated.
+- `target-python` must be `MAJOR.MINOR` between 3.0 and 3.12 — the Python
+  grammar the bundled parser (rustpython-parser 0.4) implements. The
+  grammar is fixed (no `feature_version` pinning), so `target-python` only
+  gates acceptance; it does not change parsing.
+- A frame rate that is zero, negative, or non-finite, and a resolution
+  with a zero dimension, are rejected wherever they come from (`--fps` /
+  `--resolution`, a profile, or `manim.cfg`).
+- `stub-paths` is not implemented yet; a non-empty list is rejected
+  instead of being silently ignored.
+
+`manim-lint config` prints the resolved configuration plus an
+`enforcement` section stating which settings are enforced and which are
+informational.
+
 ## Suppressions
 
 ```python

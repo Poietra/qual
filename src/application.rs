@@ -1,7 +1,7 @@
 //! Command orchestration (DESIGN §8.1): resolve config, collect files,
 //! parse, run rules, apply suppressions, filter, sort, render.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -131,6 +131,7 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         .clone()
         .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
     let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
 
     let files = collect_python_files(&paths, &project_root, &config.exclude)?;
     let mut sources = SourceManager::new(project_root.clone());
@@ -339,6 +340,7 @@ pub fn run_cost(path: &Path, scene_filter: Option<&str>) -> Result<Execution, Ap
         .clone()
         .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
     let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
     let files = collect_python_files(&paths, &project_root, &config.exclude)?;
     let mut sources = SourceManager::new(project_root);
     for file in &files {
@@ -656,6 +658,20 @@ fn discover_project_root(paths: &[PathBuf]) -> Result<PathBuf, ApplicationError>
         .unwrap_or(base))
 }
 
+/// DESIGN §8.2 honesty check: a `manim-version` declared in configuration
+/// must fall inside the loaded knowledge profile's supported Manim range
+/// (exit 2 otherwise). An absent declaration is not validated — the
+/// builtin default is informational only.
+fn validate_declared_manim_version(
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+) -> Result<(), ApplicationError> {
+    if let Some(declared) = &config.declared_manim_version {
+        loader::validate_manim_version(declared, &profile.name, &profile.manim_version)?;
+    }
+    Ok(())
+}
+
 fn resolve_config(
     args: &CheckArgs,
     project_root: &Path,
@@ -706,6 +722,7 @@ fn collect_python_files(
     let exclude_dirs = build_globset(&dir_patterns)?;
 
     let mut files = Vec::new();
+    let mut visited = BTreeSet::new();
     for path in paths {
         if path.is_file() {
             files.push(path.clone());
@@ -715,6 +732,7 @@ fn collect_python_files(
                 project_root,
                 &exclude_files,
                 &exclude_dirs,
+                &mut visited,
                 &mut files,
             )?;
         }
@@ -729,8 +747,17 @@ fn walk_directory(
     project_root: &Path,
     exclude_files: &GlobSet,
     exclude_dirs: &GlobSet,
+    visited: &mut BTreeSet<PathBuf>,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), ApplicationError> {
+    // A symlink cycle (a directory link pointing at an ancestor) would
+    // otherwise recurse forever: every directory is entered once by its
+    // canonical identity. Deterministic order is preserved — entries stay
+    // sorted and a revisited directory is simply skipped.
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|source| ApplicationError::Io {
             path: dir.to_path_buf(),
@@ -751,7 +778,14 @@ fn walk_directory(
             if name == ".git" || name == "__pycache__" || exclude_dirs.is_match(&relative) {
                 continue;
             }
-            walk_directory(&entry, project_root, exclude_files, exclude_dirs, files)?;
+            walk_directory(
+                &entry,
+                project_root,
+                exclude_files,
+                exclude_dirs,
+                visited,
+                files,
+            )?;
         } else if entry.extension().is_some_and(|extension| extension == "py")
             && !exclude_files.is_match(&relative)
         {
@@ -985,9 +1019,75 @@ fn run_config() -> Result<Execution, ApplicationError> {
         path: PathBuf::from("."),
         source,
     })?;
+    run_config_at(&current_dir)
+}
+
+/// Runs `manim-lint config` for the project containing `start`.
+///
+/// Prints the resolved configuration as one JSON object, extended with an
+/// `enforcement` section that states which settings are actually enforced
+/// and which are informational (DESIGN §8.2 honesty): a setting the run
+/// cannot honor must never be echoed back as if it were consulted.
+pub fn run_config_at(start: &Path) -> Result<Execution, ApplicationError> {
     let args = CheckArgs::default();
-    let config = resolve_config(&args, &discover_project_root(&[current_dir])?)?;
-    let mut output = serde_json::to_string_pretty(&config)
+    let config = resolve_config(&args, &discover_project_root(&[start.to_path_buf()])?)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+
+    let manim_version_note = config.declared_manim_version.as_ref().map_or_else(
+        || {
+            format!(
+                "not declared; the default \"{version}\" is informational and \
+                 not validated (knowledge profile {name} supports Manim \
+                 {range})",
+                version = config.manim_version,
+                name = profile.name,
+                range = profile.manim_version,
+            )
+        },
+        |declared| {
+            format!(
+                "enforced: declared \"{declared}\" is validated against \
+                 knowledge profile {name} (supported Manim range {range})",
+                name = profile.name,
+                range = profile.manim_version,
+            )
+        },
+    );
+    let mut value =
+        serde_json::to_value(&config).map_err(|error| ApplicationError::Cli(error.to_string()))?;
+    value["enforcement"] = serde_json::json!({
+        "manim-version": manim_version_note,
+        "target-python": format!(
+            "gates only: validated for format and parser support (Python \
+             {min_major}.{min_minor} through {max_major}.{max_minor}), but \
+             the bundled parser grammar is fixed (rustpython-parser 0.4, \
+             Python {max_major}.{max_minor} grammar, no feature_version \
+             pinning), so target-python does not change parsing",
+            min_major = loader::MIN_TARGET_PYTHON.0,
+            min_minor = loader::MIN_TARGET_PYTHON.1,
+            max_major = loader::MAX_TARGET_PYTHON.0,
+            max_minor = loader::MAX_TARGET_PYTHON.1,
+        ),
+        "stub-paths": "not implemented yet; a non-empty stub-paths is a \
+                       configuration error",
+        "frame-rate": "enforced: must be a positive finite number in every \
+                       analyzed profile, from any source (CLI, profile, \
+                       manim.cfg)",
+        "resolution": "enforced: pixel width and height must be nonzero in \
+                       every analyzed profile, from any source (CLI, \
+                       profile, manim.cfg)",
+        "knowledge-profile": format!(
+            "enforced: profile {name} is loaded; an unknown \
+             knowledge-profile is a configuration error",
+            name = profile.name,
+        ),
+    });
+    let mut output = serde_json::to_string_pretty(&value)
         .map_err(|error| ApplicationError::Cli(error.to_string()))?;
     output.push('\n');
     Ok(Execution::success(output))

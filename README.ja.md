@@ -135,6 +135,15 @@ CLI > selected profile > pyproject base > manim.cfg > builtin defaults
 
 `respect-manim-cfg` が有効(既定)なら、`manim.cfg` が解像度 / fps / レンダラーの既定値を pyproject 設定の下位として補います。未知のキー、未知のルールセレクター、重複するプロファイル名、未定義プロファイルへの参照は設定エラー(exit 2)です。`--profile all` は定義済みの全プロファイルを解析し、同じ根拠の診断を 1 件へ統合して、影響するプロファイルを診断ごとに列挙します。
 
+設定は正直に検証されます(違反は exit 2):
+
+- 宣言した `manim-version` は、設定した knowledge profile が対応する Manim 範囲内でなければなりません(例: `upstream_0_20` は `>=0.20,<0.21` に対応)。未宣言なら検証しません。
+- `target-python` は `MAJOR.MINOR` 形式で、同梱パーサー(rustpython-parser 0.4)が実装する Python 文法の範囲 3.0〜3.12 に収まる必要があります。文法は固定で(`feature_version` の指定はなし)、`target-python` は受け入れ判定のみに使われ、パース結果は変わりません。
+- ゼロ・負・非有限のフレームレートと、寸法が 0 の解像度は、どの経路(`--fps` / `--resolution`、プロファイル、`manim.cfg`)から来ても拒否されます。
+- `stub-paths` は未実装です。空でないリストは黙って無視されず、設定エラーになります。
+
+`manim-lint config` は解決済み設定に加えて、どの設定が強制され、どれが情報提供のみかを示す `enforcement` セクションを出力します。
+
 ## 抑制(suppression)
 
 ```python

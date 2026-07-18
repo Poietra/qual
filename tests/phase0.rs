@@ -296,6 +296,34 @@ fn rules_command_lists_reserved_ids_without_claiming_them() {
     }
 }
 
+/// A directory symlink pointing at an ancestor must not hang the file
+/// walk: every directory is entered once by canonical identity, so the
+/// scan terminates and reports each real file exactly once. Skipped on
+/// platforms without Unix symlink support (creating the cycle needs
+/// `std::os::unix::fs::symlink`).
+#[cfg(unix)]
+#[test]
+fn symlink_cycle_terminates_and_reports_each_file_once() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path());
+    if std::os::unix::fs::symlink(project.path(), project.path().join("scenes/loop")).is_err() {
+        eprintln!("skipping: symlinks are not supported here");
+        return;
+    }
+    let report = check(&args_for(project.path(), OutputFormat::Concise)).unwrap();
+    let mlc000: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC000")
+        .collect();
+    assert_eq!(
+        mlc000.len(),
+        1,
+        "bad.py must be reported exactly once, not per symlink traversal"
+    );
+    assert_eq!(mlc000[0].path, "scenes/bad.py");
+}
+
 #[test]
 fn smoke_fixture_project_checks_end_to_end() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke");

@@ -11,9 +11,13 @@
 //! parses (or no longer encodes in its original source encoding) is rolled
 //! back entirely — nothing is written for it — and reported.
 //!
-//! The parser accepts current-Python grammar regardless of the configured
-//! `target-python`; a stricter per-version re-parse can be layered in once
-//! the parser exposes feature versions.
+//! The bundled parser grammar is fixed — rustpython-parser 0.4 implements
+//! the Python 3.12 grammar and exposes no `feature_version` pinning — so
+//! the post-fix re-parse accepts that grammar regardless of the configured
+//! `target-python`. `target-python` is validated at configuration time
+//! instead (format and parser bounds; a target newer than the bundled
+//! grammar is an explicit config error per DESIGN §5.2): it gates
+//! acceptance but never changes how this module parses.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -280,6 +284,22 @@ fn encode(file: &SourceFile, text: &str) -> Result<Vec<u8>, String> {
     }
     if encoding_info.label == "utf-8" {
         bytes.extend_from_slice(text.as_bytes());
+        return Ok(bytes);
+    }
+    if encoding_info.label == "latin-1" {
+        // Round-trip of the true Latin-1 decode in `source.rs`: code
+        // points U+0000..=U+00FF map 1:1 to bytes; anything else cannot
+        // be represented and rolls the file back. (The WHATWG lookup
+        // below would encode via windows-1252, which diverges from
+        // CPython's latin-1 in 0x80–0x9F.)
+        for ch in text.chars() {
+            match u8::try_from(u32::from(ch)) {
+                Ok(byte) => bytes.push(byte),
+                Err(_) => {
+                    return Err("fixed text cannot be encoded as latin-1".to_owned());
+                }
+            }
+        }
         return Ok(bytes);
     }
     let Some(encoding) = encoding_rs::Encoding::for_label(encoding_info.label.as_bytes()) else {

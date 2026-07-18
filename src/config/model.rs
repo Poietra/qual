@@ -261,6 +261,14 @@ pub struct ResolvedConfig {
     pub project_root: PathBuf,
     /// Target Manim version string.
     pub manim_version: String,
+    /// `manim-version` exactly as declared in `pyproject.toml`, when set.
+    ///
+    /// Only a declared version is validated against the knowledge
+    /// profile's supported range; the builtin default in
+    /// [`manim_version`](Self::manim_version) is informational. Not
+    /// serialized: the resolved value above is the public one.
+    #[serde(skip)]
+    pub declared_manim_version: Option<String>,
     /// Target Python version string.
     pub target_python: String,
     /// Enabled rule selectors.
@@ -281,7 +289,9 @@ pub struct ResolvedConfig {
     pub per_file_ignores: BTreeMap<String, Vec<String>>,
     /// Import resolution roots.
     pub source_roots: Vec<String>,
-    /// Stub search paths.
+    /// Stub search paths. Always empty today: stub loading is not
+    /// implemented, and a non-empty `stub-paths` is rejected as a
+    /// configuration error instead of being silently ignored.
     pub stub_paths: Vec<String>,
     /// Name of the default profile.
     pub default_profile: String,

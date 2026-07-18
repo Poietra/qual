@@ -401,14 +401,9 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
         None => (bytes, false),
     };
 
-    let declared = if byte_order_mark {
-        None
-    } else {
-        detect_coding_declaration(bytes)
-    };
-    match declared {
+    match detect_coding_declaration(bytes) {
         Some(label) => {
-            let Some(encoding) = resolve_declared_encoding(&label) else {
+            let Some(codec) = resolve_declared_encoding(&label) else {
                 // MLC000's contract is "the configured target Python cannot
                 // decode this file" (DESIGN §7.1). A codec we cannot map is
                 // reported as a linter limitation, not as a decode failure
@@ -417,37 +412,76 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
                     "source encoding {label} is not supported by manim-lint; the file is skipped"
                 ));
             };
-            if encoding == encoding_rs::UTF_8 {
-                return decode_strict_utf8(bytes, byte_order_mark);
+            // CPython refuses a UTF-8 BOM combined with any coding
+            // declaration that does not resolve to UTF-8: compiling such a
+            // file raises `SyntaxError: encoding problem: <codec> with BOM`
+            // (verified with CPython 3.12 `compile`/`tokenize`). Only a
+            // UTF-8 cookie may coexist with the BOM.
+            if byte_order_mark && !matches!(codec, DeclaredCodec::Utf8) {
+                return Err(format!(
+                    "declared encoding {label} conflicts with the UTF-8 byte \
+                     order mark; Python rejects this file (encoding problem: \
+                     {label} with BOM)"
+                ));
             }
-            let (text, actual, had_errors) = encoding.decode(bytes);
-            if had_errors {
-                return Err(format!("cannot decode file with declared encoding {label}"));
+            match codec {
+                DeclaredCodec::Utf8 => decode_strict_utf8(bytes, byte_order_mark),
+                DeclaredCodec::Latin1 => Ok((
+                    decode_latin_1(bytes),
+                    SourceEncoding {
+                        label: "latin-1".to_owned(),
+                        byte_order_mark,
+                    },
+                )),
+                DeclaredCodec::Whatwg(encoding) => {
+                    let (text, actual, had_errors) = encoding.decode(bytes);
+                    if had_errors {
+                        return Err(format!("cannot decode file with declared encoding {label}"));
+                    }
+                    Ok((
+                        text.into_owned(),
+                        SourceEncoding {
+                            label: actual.name().to_ascii_lowercase(),
+                            byte_order_mark,
+                        },
+                    ))
+                }
             }
-            Ok((
-                text.into_owned(),
-                SourceEncoding {
-                    label: actual.name().to_ascii_lowercase(),
-                    byte_order_mark,
-                },
-            ))
         }
         None => decode_strict_utf8(bytes, byte_order_mark),
     }
 }
 
+/// How a resolved PEP 263 coding declaration decodes bytes.
+enum DeclaredCodec {
+    /// Strict UTF-8 (the label resolves to `CPython`'s `utf-8` codec).
+    Utf8,
+    /// True ISO-8859-1: every byte maps 1:1 to U+0000..=U+00FF.
+    Latin1,
+    /// A WHATWG decoder from `encoding_rs`.
+    Whatwg(&'static encoding_rs::Encoding),
+}
+
+/// True ISO-8859-1 (`CPython`'s `latin-1` codec): each byte is the code
+/// point U+0000..=U+00FF; decoding never fails.
+///
+/// `encoding_rs` cannot express this — in WHATWG, the `iso-8859-1` /
+/// `latin1` labels all mean windows-1252, which decodes 0x80–0x9F to
+/// punctuation (0x80 → U+20AC) instead of the C1 controls `CPython`
+/// produces — so the 1:1 mapping is implemented directly.
+fn decode_latin_1(bytes: &[u8]) -> String {
+    bytes.iter().map(|&byte| char::from(byte)).collect()
+}
+
 /// Resolves a PEP 263 encoding label to a decoder, accepting both WHATWG
 /// labels and `CPython` codec names/aliases (`latin-1`, `cp932`, ...) for
-/// codecs `encoding_rs` can represent.
+/// codecs manim-lint can represent.
 ///
 /// The declared label is what the *target Python* resolves through its own
 /// codec alias table, so spellings like `latin-1` (WHATWG only knows
 /// `latin1`) or `cp932` (WHATWG calls it `shift_jis`/`ms932`) are valid
 /// sources that must decode, not MLC000 errors (DESIGN §7.1).
-fn resolve_declared_encoding(label: &str) -> Option<&'static encoding_rs::Encoding> {
-    if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
-        return Some(encoding);
-    }
+fn resolve_declared_encoding(label: &str) -> Option<DeclaredCodec> {
     // CPython `encodings.normalize_encoding`: lowercase, runs of
     // non-alphanumeric characters collapse to a single `_`.
     let mut normalized = String::with_capacity(label.len());
@@ -463,10 +497,51 @@ fn resolve_declared_encoding(label: &str) -> Option<&'static encoding_rs::Encodi
             pending_separator = true;
         }
     }
+    // CPython's latin-1 alias family (`Lib/encodings/aliases.py` entries
+    // for `latin_1`, plus the codec name itself) decodes as true Latin-1.
+    // This must be checked before any WHATWG lookup: WHATWG maps `latin1`,
+    // `iso-8859-1`, `l1`, ... to windows-1252, whose 0x80–0x9F differ
+    // from CPython's decode. `cp1252` spellings intentionally stay
+    // windows-1252 — that is what CPython's `cp1252` codec is.
+    if matches!(
+        normalized.as_str(),
+        "latin"
+            | "latin1"
+            | "latin_1"
+            | "l1"
+            | "8859"
+            | "iso8859"
+            | "iso8859_1"
+            | "iso_8859_1"
+            | "iso_8859_1_1987"
+            | "iso_ir_100"
+            | "cp819"
+            | "ibm819"
+            | "csisolatin1"
+    ) {
+        return Some(DeclaredCodec::Latin1);
+    }
+    resolve_whatwg_encoding(label, &normalized).map(|encoding| {
+        if encoding == encoding_rs::UTF_8 {
+            DeclaredCodec::Utf8
+        } else {
+            DeclaredCodec::Whatwg(encoding)
+        }
+    })
+}
+
+/// WHATWG-side resolution of a non-latin-1 label: the raw label first,
+/// then `CPython`-only alias spellings, then `_` → `-` respelling.
+fn resolve_whatwg_encoding(
+    label: &str,
+    normalized: &str,
+) -> Option<&'static encoding_rs::Encoding> {
+    if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+        return Some(encoding);
+    }
     // CPython codec names and aliases whose spelling no WHATWG label
     // covers, mapped onto the closest encoding_rs decoder.
-    let mapped: Option<&str> = match normalized.as_str() {
-        "latin" | "latin_1" | "l1" | "8859" | "iso8859" | "cp819" => Some("iso-8859-1"),
+    let mapped: Option<&str> = match normalized {
         "cp932" | "ms_kanji" | "mskanji" | "windows_31j" | "shiftjis" => Some("shift_jis"),
         "cp936" | "ms936" | "euc_cn" | "euccn" | "eucgb2312_cn" => Some("gbk"),
         "cp950" | "big5_tw" => Some("big5"),
@@ -788,6 +863,68 @@ mod tests {
             b"# -*- coding: koi8_r -*-\nx = 1\n",
         );
         assert!(sources.files()[0].is_parsed(), "koi8_r must decode");
+    }
+
+    /// `CPython`'s `latin-1` codec is true ISO-8859-1: bytes 0x80–0x9F are
+    /// the C1 controls U+0080–U+009F. The WHATWG `iso-8859-1` label means
+    /// windows-1252 (0x80 → U+20AC '€'), so decoding through `encoding_rs`
+    /// would diverge from what the target Python sees.
+    #[test]
+    fn latin_1_family_decodes_c1_range_like_cpython() {
+        for cookie in ["latin-1", "latin_1", "iso-8859-1", "L1", "cp819"] {
+            let mut bytes = format!("# -*- coding: {cookie} -*-\nx = \"").into_bytes();
+            bytes.extend(0x80..=0x9f_u8);
+            bytes.extend(b"\"\n");
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/latin.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} must decode");
+            assert_eq!(file.encoding().label, "latin-1");
+            let expected: String = ('\u{80}'..='\u{9f}').collect();
+            assert!(
+                file.text().contains(&expected),
+                "{cookie}: 0x80–0x9F must decode to U+0080–U+009F"
+            );
+            assert!(
+                !file.text().contains('\u{20ac}'),
+                "{cookie}: 0x80 must not decode to windows-1252 '€'"
+            );
+        }
+    }
+
+    /// `CPython` rejects a UTF-8 BOM combined with a non-UTF-8 coding
+    /// cookie (`SyntaxError: encoding problem: cp932 with BOM`, verified
+    /// with `CPython` 3.12); the file gets a per-file MLC000, analysis of
+    /// other files continues.
+    #[test]
+    fn bom_with_non_utf8_cookie_is_a_decode_diagnostic() {
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.extend(b"# -*- coding: cp932 -*-\nx = 1\n");
+        let mut sources = manager();
+        sources.load_bytes(Path::new("/project/bom.py"), &bytes);
+        let file = &sources.files()[0];
+        assert!(!file.is_parsed());
+        let diagnostic = file.parse_diagnostic().expect("BOM conflict");
+        assert_eq!(diagnostic.rule_id, "MLC000");
+        assert!(diagnostic.message.contains("cp932"));
+        assert!(diagnostic.message.contains("byte order mark"));
+    }
+
+    /// A UTF-8 cookie (any `CPython` alias of it) may coexist with the BOM,
+    /// exactly as in `CPython`.
+    #[test]
+    fn bom_with_utf8_cookie_is_fine() {
+        for cookie in ["utf-8", "UTF8", "u8"] {
+            let mut bytes = b"\xef\xbb\xbf".to_vec();
+            bytes.extend(format!("# -*- coding: {cookie} -*-\nx = \"あ\"\n").into_bytes());
+            let mut sources = manager();
+            sources.load_bytes(Path::new("/project/bom_ok.py"), &bytes);
+            let file = &sources.files()[0];
+            assert!(file.is_parsed(), "{cookie} with BOM must decode");
+            assert_eq!(file.encoding().label, "utf-8");
+            assert!(file.encoding().byte_order_mark);
+            assert!(file.text().contains('あ'));
+        }
     }
 
     #[test]
