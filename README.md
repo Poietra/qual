@@ -421,6 +421,13 @@ deterministic and byte-stable for the same input.
   rare Python codec the linter cannot represent is skipped with an explicit
   `MLC000` "not supported by manim-lint" notice — never a claim that the
   target Python could not decode the file.
+- **Helper `.animate` durations widen across differing arguments.** A play
+  inside a Scene helper is materialized once per call site, but when the
+  play animates a helper *parameter* via `.animate` and the call sites pass
+  different mobjects, the joined builder facts widen the play duration to
+  unknown — frame counts degrade to per-frame wording instead of numbers
+  (conservative: missing, never fabricated). Same-argument calls and
+  ordinary animation constructors (`FadeIn(m)`) keep exact durations.
 - **Deliberately conservative silences.** Some detections are narrower than
   their catalog prose and stay silent rather than guess: `MLR106` sees
   NaN/inf only in literal form, not through `float("nan")` calls; `MLD301`
