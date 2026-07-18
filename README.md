@@ -228,6 +228,46 @@ Configuration is validated honestly (exit 2 on violation):
 `enforcement` section stating which settings are enforced and which are
 informational.
 
+## Using the optimized fork profile
+
+Projects rendering with the locally patched Manim fork (profile
+`local_0_20_1_4d25c031`) can tell manim-lint so and unlock the
+fork-specific analysis layer:
+
+```toml
+[tool.manim-lint]
+knowledge-profile = "local_0_20_1_4d25c031"
+default-profile = "production"
+
+[[tool.manim-lint.profile]]
+name = "production"
+renderer = "cairo"
+platform = "linux"
+cairo-fork-workers = 4
+cairo-static-layers = true
+```
+
+This enables, on top of everything the upstream profile provides:
+
+- **A "fork fast paths" section in `manim-lint cost`**: per play, whether
+  the fork-per-play Cairo pipeline (`cairo-fork-workers`), the static-layer
+  retention path (`cairo-static-layers`), and packed interpolation apply —
+  with the exact blocker and its source span when they do not (e.g. a Scene
+  updater), including the renderer-wide monotonic disable chain after the
+  first serial play. The section never advises removing a feature; it
+  explains the render-path consequence.
+- **`MLP214`**: flags four or more distinct TeX compile keys constructed
+  serially before a scene's first play and cites the fork's precompile
+  APIs (`MathTex.precompile`, `tex_to_svg_file_async`).
+- **`MLP217`**: flags frame-varying `use_svg_cache=True` keys in hot
+  callbacks that grow the fork's declared process-global SVG cache every
+  frame.
+- **`MLP225`** (opt-in via `--select MLP225`): emits the cost report's
+  fast-path blocker explanations as per-play diagnostics.
+
+Under `upstream_0_20` all of the above is inert: the cost report carries no
+fork section and the three rules never fire, even when selected.
+
 ## Suppressions
 
 ```python
@@ -408,15 +448,19 @@ Or upload SARIF so findings appear in the GitHub code-scanning UI:
 
 ## Rule catalog
 
-92 rule IDs are reserved across the four families; **80 are implemented and
-12 are reserved**:
+92 rule IDs are reserved across the four families; **83 are implemented and
+9 are reserved**:
 
 | Family | Implemented | Reserved |
 | --- | --- | --- |
 | MLC lifecycle / correctness | 28 | 3 |
 | MLR rendering | 24 | 3 |
-| MLP performance | 21 | 6 |
+| MLP performance | 24 | 3 |
 | MLD determinism / portability | 7 | 0 |
+
+One implemented rule is opt-in: `MLP225` has `default_enabled: false` and
+never joins a normal `check` run; only an exact `--select MLP225` under the
+local fork profile evaluates it.
 
 A reserved ID **never fires**: `manim-lint rules` lists it honestly as
 `reserved`, and `check` does not register it. Each reserved rule is blocked
@@ -424,8 +468,8 @@ on a named capability the fact layers do not provide yet — for example
 post-Transform identity facts (`MLC116`), cross-registration updater
 read-after-write ordering facts (`MLR109`), SVG asset content facts
 (`MLR118`), an alias-safe cross-object `z_index` stacking proof (`MLR122`),
-curated process-global SVG cache semantics (`MLP217`), and a local fork
-overlay profile (`MLP214`/`MLP225`).
+pixel-coverage facts (`MLP212`), calibrated workload profiles (`MLP213`),
+and opacity-immutability facts (`MLP223`).
 
 The full index with per-rule status, severity, and confidence is in
 [docs/rules/README.md](docs/rules/README.md); each implemented rule has a
@@ -497,7 +541,7 @@ deterministic and byte-stable for the same input.
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
   ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
   states each rule's exact scope.
-- **Not yet implemented.** The 12 reserved rules (see above); the SQLite
+- **Not yet implemented.** The 9 reserved rules (see above); the SQLite
   result cache (`--no-cache` is an accepted no-op); threshold calibration
   against rendered baselines; a nightly render-comparison CI.
 

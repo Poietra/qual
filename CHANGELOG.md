@@ -13,6 +13,36 @@ interpreter modularization).
 
 ### Added
 
+- Fork-first analysis layer over the curated `fork_capabilities` block of
+  the local knowledge profile `local_0_20_1_4d25c031` (all of it inert
+  under `upstream_0_20`, whose accessors return `None`):
+  - The local overlay now declares the fork's TeX parallel compilation
+    (entry points `MathTex.precompile` / `tex_to_svg_file_async`, with
+    in-flight futures forcing the Cairo fork serial fallback), the Cairo
+    fork-per-play pipeline (eligibility gates, exact-type animation
+    allowlist, curated blockers, and the renderer-wide monotonic disable
+    after the first parent-encoded serial play), static-layer retention,
+    packed interpolation thresholds, and the process-global unbounded SVG
+    cache — every fact cited to the fork source; both ignored drift gates
+    (upstream clean-base and overlay-vs-fork-working-tree) hold.
+  - `manim-lint cost` gains a per-scene "fork fast paths" section under
+    the fork profile: per-play verdicts for the fork-per-play,
+    static-layer, and packed-interpolation gates with the exact blocker
+    and cause span, the monotonic-disable causal chain, and measured A/B
+    evidence citations; the section never advises removing a feature.
+  - `MLP214` (info/high): four or more distinct literal-provable TeX
+    compile keys constructed serially before a scene's first play, with
+    the fork's precompile APIs cited; duplicates count once, dynamic keys
+    never count.
+  - `MLP217` (warning/high): frame-varying `use_svg_cache=True` keys in
+    hot callbacks growing the declared process-global unbounded SVG cache
+    every frame (O(frames x family) memory growth evidence).
+  - `MLP225` (info/high, opt-in): the cost report's fast-path blocker
+    explanations as per-play diagnostics; `default_enabled: false`, only
+    an exact `--select MLP225` evaluates it, and the registry now
+    supports opt-in rules cleanly (prefix selects never enable them).
+  - README (en/ja) "Using the optimized fork profile" section with the
+    pyproject template; rule catalog now 83 implemented / 9 reserved.
 - Helper reach (DESIGN §2.1 "Scene helper", §5.1 step 5): scene runs now
   inline project *module-level* helpers — same-module and imported from
   other project files, with the scene argument flowing as the live scene

@@ -145,6 +145,32 @@ CLI > selected profile > pyproject base > manim.cfg > builtin defaults
 
 `manim-lint config` は解決済み設定に加えて、どの設定が強制され、どれが情報提供のみかを示す `enforcement` セクションを出力します。
 
+## 最適化フォークプロファイルの利用
+
+ローカルにパッチを当てた Manim フォーク(プロファイル `local_0_20_1_4d25c031`)でレンダリングするプロジェクトは、それを manim-lint に伝えることでフォーク固有の解析レイヤーを有効化できます:
+
+```toml
+[tool.manim-lint]
+knowledge-profile = "local_0_20_1_4d25c031"
+default-profile = "production"
+
+[[tool.manim-lint.profile]]
+name = "production"
+renderer = "cairo"
+platform = "linux"
+cairo-fork-workers = 4
+cairo-static-layers = true
+```
+
+upstream プロファイルが提供するすべてに加えて、次が有効になります:
+
+- **`manim-lint cost` の「fork fast paths」セクション**: play ごとに、fork-per-play Cairo パイプライン(`cairo-fork-workers`)、静的レイヤー保持パス(`cairo-static-layers`)、packed interpolation が適用されるかどうかを表示します。適用されない場合は正確なブロッカーとそのソース位置(例: Scene updater)を示し、最初の serial play 以降のレンダラー全体に及ぶ単調な無効化の因果連鎖も説明します。このセクションは機能の削除を助言することは決してなく、レンダーパス上の帰結を説明するだけです。
+- **`MLP214`**: シーン最初の play より前に 4 個以上の相異なる TeX コンパイルキーが直列に構築される箇所を指摘し、フォークの事前コンパイル API(`MathTex.precompile`、`tex_to_svg_file_async`)を提示します。
+- **`MLP217`**: hot なコールバック内でフレームごとに変わる `use_svg_cache=True` キーが、フォークが宣言するプロセスグローバル SVG キャッシュを毎フレーム成長させる箇所を指摘します。
+- **`MLP225`**(`--select MLP225` によるオプトイン): cost レポートの fast-path ブロッカー説明を play ごとの診断として出力します。
+
+`upstream_0_20` の下では上記はすべて不活性です: cost レポートに fork セクションは現れず、3 つのルールは選択されても決して発火しません。
+
 ## 抑制(suppression)
 
 ```python
@@ -250,16 +276,18 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 
 ## ルールカタログ
 
-4 ファミリーで 92 個のルール ID を予約しており、**80 個が実装済み、12 個が reserved** です。
+4 ファミリーで 92 個のルール ID を予約しており、**83 個が実装済み、9 個が reserved** です。
 
 | ファミリー | 実装済み | reserved |
 | --- | --- | --- |
 | MLC ライフサイクル / 正しさ | 28 | 3 |
-| MLR レンダリング | 23 | 4 |
-| MLP パフォーマンス | 21 | 6 |
+| MLR レンダリング | 24 | 3 |
+| MLP パフォーマンス | 24 | 3 |
 | MLD 決定性 / 可搬性 | 7 | 0 |
 
-reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、プロセスグローバルな SVG キャッシュ意味論の検証(`MLP217`)、ローカルフォークのオーバーレイプロファイル(`MLP214`/`MLP225`)。
+実装済みルールのうち 1 つはオプトインです: `MLP225` は `default_enabled: false` で、通常の `check` 実行には決して参加しません。ローカルフォークプロファイルの下で正確な `--select MLP225` を指定したときだけ評価されます。
+
+reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、ピクセルカバレッジ事実(`MLP212`)、較正済みワークロードプロファイル(`MLP213`)、不透明度不変性の事実(`MLP223`)。
 
 ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`manim-lint explain <ID>` でも読めます。
 
@@ -293,7 +321,7 @@ output ................... concise | full | json | sarif | github, fixes, cost r
 - **アセット検査は lint 実行マシンを調べます。** `MLR104` はリテラルなアセットパスを、lint を実行しているマシン上で Manim 自身のランタイム探索により解決します。プロジェクトツリー外の絶対パスについては、それは lint ホストに関する証拠であり、必ずしもレンダーホストのものではありません(例: CI で lint し、別マシンでレンダーするリポジトリ)。そのような診断は根拠として `environment_dependent: true` を持ちます。case-only の不一致は大文字小文字を区別する対象プラットフォーム(`linux`)に対してのみ報告されます。影響するプロファイルがすべて windows / macos を対象とする場合、宣言されたレンダーは書かれたとおりにファイルを解決できるため、linter は沈黙します。
 - **ソースエンコーディング。** PEP 263 宣言は WHATWG ラベルと CPython コーデック別名テーブル(`latin-1`、`cp932`、`koi8_r`、...)で解決します。linter が表現できない稀な Python コーデックは、明示的な `MLC000` の「not supported by manim-lint」通知とともにスキップされます — 対象の Python がそのファイルをデコードできない、という主張には決してなりません。
 - **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
-- **未実装。** 13 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
+- **未実装。** 9 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
 ## 開発
 
