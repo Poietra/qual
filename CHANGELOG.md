@@ -21,7 +21,25 @@ External-review fixes (two waves).
 - Loop-aware play repetition facts: a `play`/`wait` inside a loop whose
   trip count is a literal `range(...)` multiplies its frame contribution
   by the trip-count interval; an unknown trip count opens the upper bound
-  instead of counting the play once.
+  instead of counting the play once. Repetition bounds compose through
+  helper inlining (call-site loops × helper-internal loops).
+- Plays and waits inside `self.<helper>()` (and `super().<helper>()`)
+  methods now materialize as real lifecycle play facts: resolvable helper
+  calls are inlined during scene interpretation (bounded depth, recursion
+  falls back to the effect summary), so MLC104/MLC108/MLC117/MLR102/
+  MLP226 and the `cost` command see helper-reached plays with their sites
+  in the helper body, a recorded `call_path` of the inlining call sites,
+  call-site branch/loop certainty, and exact per-animation argument
+  facts. Lifecycle state queries are method-scoped, so liveness resolves
+  the correct pre-play state at helper play sites.
+- `target-python` now gates syntax: after parsing, constructs newer than
+  the configured target emit `MLC000` (error) — walrus `:=` and
+  positional-only `/` (3.8), `match` (3.10), `except*` (3.11), `type`
+  alias statements and PEP 695 type-parameter lists (3.12) — while the
+  gated file keeps its AST and is still fully analyzed. `--fix` rolls a
+  file back when its edits would introduce gated syntax. Parenthesized
+  context managers and f-string `=` are not representable in the bundled
+  AST and are documented as ungated.
 
 - Per-updater execution liveness (`src/cost/liveness.rs`): every
   hot-context performance fact is now gated on plays/waits where the
@@ -60,7 +78,13 @@ External-review fixes (two waves).
 - PEP 263 handling matches CPython: a UTF-8 BOM with a conflicting
   non-UTF-8 coding cookie is reported as an `MLC000` decode diagnostic;
   latin-1-family cookies decode as true Latin-1 (not windows-1252) and
-  `--fix` round-trips the matching encode.
+  `--fix` round-trips the matching encode. Cookie placement follows
+  CPython's exact rule (line 2 only after a blank/comment line 1,
+  including `blank_re`/`cookie_re` backtracking); `iso-8859-9` and
+  `iso-8859-11` decode with the 0x80–0x9F range as C1 controls (the only
+  divergence between the WHATWG codecs and CPython, verified
+  byte-for-byte) with a symmetric `--fix` re-encode; CPython-only alias
+  spellings (`latin5`, `thai`, `iso_ir_148`, ...) now resolve.
 - MLP206 message and docs corrected: such a play renders a single frame
   sampled near the start state (not the final state).
 

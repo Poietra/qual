@@ -78,8 +78,11 @@ impl Rule for BarePlayedAnimate {
                 if builder.target_epoch_at_play != Some(builder.target_epoch_at_creation) {
                     continue;
                 }
-                // The play this builder was compiled into (helper-body
-                // plays have no PlayFact: stay silent there).
+                // The play this builder was compiled into. Inlined
+                // helper-body plays are real PlayFacts too, so a bare
+                // `.animate` played inside a `self.<helper>()` body is
+                // matched here like a direct play; only the summary
+                // fallback frontier (recursion / depth) stays silent.
                 let Some(play) = scene.plays.iter().find(|play| {
                     play.animations
                         .iter()

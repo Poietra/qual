@@ -1198,6 +1198,75 @@ class Demo(Scene):
             self.play(FadeIn(square), run_time=2)
 ";
 
+/// Helper inlining composes with loop repetition bounds: a play inside a
+/// `self.<helper>()` body called from a literal `range(3)` loop
+/// materializes as a real lifecycle fact (call path recorded) whose
+/// repetition interval is the caller's loop bound, so its per-play frame
+/// grid multiplies — up to 3 × ceil(2 s × 60 fps) frames above the
+/// straight-line play, never a single execution.
+const HELPER_LOOP_PLAY_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.play(FadeIn(square), run_time=1)
+        for _ in range(3):
+            self.flash(square)
+";
+
+#[test]
+fn helper_play_in_literal_loop_multiplies_its_frame_grid() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", HELPER_LOOP_PLAY_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 2, "direct play + inlined helper play");
+    let helper_play = scene
+        .plays
+        .iter()
+        .find(|play| !play.call_path.is_empty())
+        .expect("the helper play is a real fact");
+    assert_eq!(helper_play.call_path.len(), 1);
+    assert_eq!(
+        helper_play.repetitions,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: Some(3.0),
+        },
+        "the call site's literal trip count threads through inlining"
+    );
+    let direct_play = scene
+        .plays
+        .iter()
+        .find(|play| play.call_path.is_empty())
+        .expect("the direct play is still a fact");
+    assert_eq!(direct_play.repetitions, Num::int(1));
+
+    // Liveness: the straight-line play proves, the loop-reached helper
+    // play stays a maybe, and its frames multiply by the loop bound:
+    // 60 proven frames plus up to 3 × 120 frames above.
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1, "the straight-line play proves");
+    assert_eq!(execution.maybe.len(), 1, "the helper loop play is a maybe");
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(60.0),
+            hi: Some(420.0),
+        })
+    );
+}
+
 #[test]
 fn unknown_loop_trip_count_opens_the_upper_bound() {
     let (sources, facts, profile) = analyzed(&[("scene.py", UNKNOWN_LOOP_PLAY_SCENE)]);
