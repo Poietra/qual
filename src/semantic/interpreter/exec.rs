@@ -41,6 +41,11 @@ const MAX_PASSES: usize = 6;
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct BuilderValue {
     pub(super) site: AllocationSite,
+    /// The helper call sites on the inline stack when the builder was
+    /// created, outermost first: the execution-context part of the
+    /// builder's fact key. A builder created in one frame and played in
+    /// another still updates its own creation execution's fact.
+    pub(super) call_path: Vec<AllocationSite>,
     pub(super) target: Option<ObjectId>,
     pub(super) methods: Vec<String>,
     pub(super) channels: BTreeSet<WriteChannel>,
@@ -298,6 +303,12 @@ pub(super) struct ReturnObservation {
     pub(super) bare: bool,
 }
 
+/// Key of one `.animate` builder execution: the builder's source site
+/// plus the helper call path it executed under (empty for builders in a
+/// lifecycle method body). One builder site reached through two helper
+/// call sites is two executions with two facts — like [`PlayFact`]s.
+pub(super) type BuilderKey = (AllocationSite, Vec<AllocationSite>);
+
 #[derive(Debug, Default)]
 pub(super) struct TraceSink {
     pub(super) ops: Vec<SinkOp>,
@@ -305,6 +316,12 @@ pub(super) struct TraceSink {
     pub(super) plays: Vec<PlayFact>,
     pub(super) updaters: Vec<UpdaterRegistration>,
     pub(super) updater_removals: Vec<UpdaterRemoval>,
+    /// Per-execution builder facts (the working state): every join stays
+    /// within one execution context. [`TraceSink::sync_builders`] derives
+    /// the public per-site view in [`TraceSink::builders`].
+    pub(super) builder_executions: BTreeMap<BuilderKey, AnimateBuilderFact>,
+    /// The public per-site view ([`SceneLifecycle::builders`]), rebuilt
+    /// from [`TraceSink::builder_executions`] after every builder update.
     pub(super) builders: BTreeMap<AllocationSite, AnimateBuilderFact>,
     pub(super) target_requirements: Vec<TargetRequirementFact>,
     pub(super) scene_removals: Vec<SceneRemovalFact>,
@@ -313,6 +330,80 @@ pub(super) struct TraceSink {
     /// A reachable CFG path falls off the end of the body without a
     /// `return` (paths ending in `raise` do not count).
     pub(super) fall_off_end: bool,
+}
+
+impl TraceSink {
+    /// Rebuilds the per-site builder view from the per-execution facts.
+    ///
+    /// A site with one execution keeps that execution's fact verbatim.
+    /// Across several execution contexts the merged fact keeps only what
+    /// is sound without mixing executions (DESIGN §15 invariant 2):
+    ///
+    /// - a disagreeing `target` drops to `None` — no cross-execution
+    ///   identity claim;
+    /// - disagreeing epoch pairs drop `target_epoch_at_play` — a creation
+    ///   epoch from one execution is never compared against a play epoch
+    ///   from another;
+    /// - `played` takes the strongest per-execution verdict (some
+    ///   execution definitely played the builder);
+    /// - `overwritten_by_later_builder` keeps `Yes` only from an
+    ///   execution that also definitely played (the MLC117 combination
+    ///   must hold within a single execution), degrading to `Maybe`
+    ///   otherwise;
+    /// - chained channels union and their completeness joins.
+    pub(super) fn sync_builders(&mut self) {
+        /// `Yes` > `Maybe` > `No` (a may-fact strengthens, never resets).
+        const fn strongest(a: Truth, b: Truth) -> Truth {
+            match (a, b) {
+                (Truth::Yes, _) | (_, Truth::Yes) => Truth::Yes,
+                (Truth::Maybe, _) | (_, Truth::Maybe) => Truth::Maybe,
+                (Truth::No, Truth::No) => Truth::No,
+            }
+        }
+        self.builders.clear();
+        for ((site, _path), fact) in &self.builder_executions {
+            match self.builders.get_mut(site) {
+                None => {
+                    self.builders.insert(*site, fact.clone());
+                }
+                Some(merged) => {
+                    if merged.target != fact.target {
+                        merged.target = None;
+                    }
+                    // The chain is syntactic and identical per execution;
+                    // keep the longest observed prefix deterministically.
+                    if fact.methods.len() > merged.methods.len() {
+                        merged.methods.clone_from(&fact.methods);
+                    }
+                    merged.channels.extend(fact.channels.iter().copied());
+                    merged.channels_known = merged.channels_known.join(fact.channels_known);
+                    if (merged.target_epoch_at_creation, merged.target_epoch_at_play)
+                        != (fact.target_epoch_at_creation, fact.target_epoch_at_play)
+                    {
+                        merged.target_epoch_at_play = None;
+                    }
+                    // Gate the overwrite verdicts of both sides on their
+                    // own played verdict before the fields merge: the
+                    // "played builder was overwritten" combination must
+                    // come from one execution, never from a played
+                    // execution paired with an overwritten one.
+                    let gate = |played: Truth, overwritten: Truth| {
+                        if played == Truth::Yes || overwritten != Truth::Yes {
+                            overwritten
+                        } else {
+                            Truth::Maybe
+                        }
+                    };
+                    let merged_overwritten =
+                        gate(merged.played, merged.overwritten_by_later_builder);
+                    let fact_overwritten = gate(fact.played, fact.overwritten_by_later_builder);
+                    merged.overwritten_by_later_builder =
+                        strongest(merged_overwritten, fact_overwritten);
+                    merged.played = strongest(merged.played, fact.played);
+                }
+            }
+        }
+    }
 }
 
 /// Per-block execution context while walking a CFG.

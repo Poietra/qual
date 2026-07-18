@@ -421,13 +421,16 @@ deterministic and byte-stable for the same input.
   rare Python codec the linter cannot represent is skipped with an explicit
   `MLC000` "not supported by manim-lint" notice — never a claim that the
   target Python could not decode the file.
-- **Helper `.animate` durations widen across differing arguments.** A play
-  inside a Scene helper is materialized once per call site, but when the
-  play animates a helper *parameter* via `.animate` and the call sites pass
-  different mobjects, the joined builder facts widen the play duration to
-  unknown — frame counts degrade to per-frame wording instead of numbers
-  (conservative: missing, never fabricated). Same-argument calls and
-  ordinary animation constructors (`FadeIn(m)`) keep exact durations.
+- **Durations come from literals only.** A play whose duration rests on
+  Manim's *defaults* (`self.play(m.animate.shift(RIGHT))` with no
+  `run_time` anywhere, `self.wait()`) is reported as unknown — frame counts
+  use per-frame wording instead of numbers (conservative: missing, never
+  fabricated). A literal play-level `run_time` decides the whole-play
+  duration exactly — including plays inside Scene helpers, per call site,
+  even when the call sites pass different (or untracked) mobjects to a
+  `.animate` builder on the parameter — and a *non-literal* `run_time`
+  (or a `**kwargs` splat) honestly widens constructor literals it
+  overrides.
 - **Deliberately conservative silences.** Some detections are narrower than
   their catalog prose and stay silent rather than guess: `MLR106` sees
   NaN/inf only in literal form, not through `float("nan")` calls; `MLD301`

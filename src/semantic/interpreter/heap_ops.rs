@@ -313,6 +313,7 @@ impl<'a> Machine<'a, '_> {
         state: &mut ExecState,
     ) -> AbstractValue {
         let site = self.site(range);
+        let call_path = self.inline_call_path();
         // Builder creation runs `generate_target()` immediately
         // (DESIGN §3.2).
         self.generate_target(target, site, self.certainty(), state);
@@ -322,14 +323,17 @@ impl<'a> Machine<'a, '_> {
             .map_or(0, |object| object.mutation_epoch);
         if self.emit {
             // A previous un-played builder on the same target is now
-            // overwritten (its `mobject.target` was replaced).
+            // overwritten (its `mobject.target` was replaced). The check
+            // runs over the per-execution facts, so each execution's own
+            // target decides — one helper's builder on `a` never marks
+            // (or misses) another execution's builder on `b`.
             let overwrite = if self.certainty() == Presence::Present {
                 Truth::Yes
             } else {
                 Truth::Maybe
             };
-            for fact in self.sink.builders.values_mut() {
-                if fact.site != site
+            for ((fact_site, _path), fact) in &mut self.sink.builder_executions {
+                if *fact_site != site
                     && fact.target.as_ref() == Some(target)
                     && fact.played != Truth::Yes
                 {
@@ -342,8 +346,8 @@ impl<'a> Machine<'a, '_> {
                 }
             }
             self.sink
-                .builders
-                .entry(site)
+                .builder_executions
+                .entry((site, call_path.clone()))
                 .or_insert_with(|| AnimateBuilderFact {
                     site,
                     target: Some(target.clone()),
@@ -355,9 +359,11 @@ impl<'a> Machine<'a, '_> {
                     played: Truth::No,
                     overwritten_by_later_builder: Truth::No,
                 });
+            self.sink.sync_builders();
         }
         AbstractValue::Builder(BuilderValue {
             site,
+            call_path,
             target: Some(target.clone()),
             methods: Vec::new(),
             channels: BTreeSet::new(),
@@ -425,11 +431,13 @@ impl<'a> Machine<'a, '_> {
             }
         }
         if self.emit {
-            if let Some(fact) = self.sink.builders.get_mut(&builder.site) {
+            let key = (builder.site, builder.call_path.clone());
+            if let Some(fact) = self.sink.builder_executions.get_mut(&key) {
                 fact.methods.clone_from(&builder.methods);
                 fact.channels.clone_from(&builder.channels);
                 fact.channels_known = builder.channels_known;
             }
+            self.sink.sync_builders();
         }
         AbstractValue::Builder(builder)
     }

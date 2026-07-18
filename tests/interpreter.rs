@@ -1238,3 +1238,140 @@ fn z_index_unknown_on_unproven_writes() {
     // `family=False` still writes the receiver exactly.
     assert_eq!(z_of(unknown, &sources, "Dot()"), Num::int(4));
 }
+
+// ---------------------------------------------------------------------------
+// Helper execution identity: `.animate` on a helper parameter (per-call-site
+// durations, play-kwarg run_time decomposition, builder-fact merging).
+// ---------------------------------------------------------------------------
+
+/// The play-level `run_time` literal decides the whole-play duration for
+/// every execution of a helper play, even when the call sites pass
+/// *different* mobjects to a `.animate` builder on the parameter
+/// (scene.py `compile_animations` `setattr`s the kwarg onto every
+/// animation, so `get_run_time` is the kwarg itself).
+#[test]
+fn animate_helper_keeps_exact_duration_across_differing_call_site_targets() {
+    let (sources, _facts, lifecycle) = analyze(&["animate_helper.py"]);
+    let two = scene(&lifecycle, "animate_helper.TwoTargets");
+    assert_eq!(two.plays.len(), 2, "one play fact per call site");
+    let a = alloc_id(two, &sources, "Square()");
+    let b = alloc_id(two, &sources, "Circle()");
+    for play in &two.plays {
+        assert_eq!(play.duration, Num::int(2), "the play kwarg survives");
+        assert_eq!(play.repetitions, Num::int(1));
+        assert_eq!(play.certainty, Presence::Present);
+    }
+    // Each execution resolves its own builder target.
+    let first_state = two.plays[0].animations[0].state.as_ref().expect("state");
+    let second_state = two.plays[1].animations[0].state.as_ref().expect("state");
+    assert!(first_state.targets.contains(&a));
+    assert!(second_state.targets.contains(&b));
+    assert_eq!(first_state.run_time, Num::int(2));
+    assert_eq!(second_state.run_time, Num::int(2));
+    assert_ne!(two.plays[0].call_path, two.plays[1].call_path);
+
+    // The per-site builder view never mixes the executions: with two
+    // different live targets it makes no cross-execution identity claim,
+    // and the disagreeing epoch pairs ((0, 0) for the fresh `a`, (1, 1)
+    // for the pre-mutated `b`) drop the play epoch instead of pairing
+    // `a`'s creation epoch with `b`'s play epoch. "Some execution
+    // definitely played" survives.
+    let builder = two.builders.values().next().expect("builder fact");
+    assert_eq!(builder.target, None, "no cross-execution identity claim");
+    assert_eq!(builder.target_epoch_at_play, None, "no mixed epoch pair");
+    assert_eq!(builder.played, Truth::Yes);
+}
+
+/// Same-argument calls keep the full per-site builder identity.
+#[test]
+fn animate_helper_same_argument_calls_keep_builder_identity() {
+    let (sources, _facts, lifecycle) = analyze(&["animate_helper.py"]);
+    let same = scene(&lifecycle, "animate_helper.SameTarget");
+    assert_eq!(same.plays.len(), 2);
+    let a = alloc_id(same, &sources, "Square()");
+    for play in &same.plays {
+        assert_eq!(play.duration, Num::int(2));
+        let state = play.animations[0].state.as_ref().expect("state");
+        assert!(state.targets.contains(&a));
+    }
+    let builder = same.builders.values().next().expect("builder fact");
+    assert_eq!(builder.target, Some(a));
+    assert_eq!(builder.played, Truth::Yes);
+}
+
+/// A helper call site inside a literal `range(3)` loop composes into the
+/// play fact's repetition interval (`[0, 3]`), while the direct call
+/// site stays an exact single execution — frame totals multiply per
+/// execution downstream (DESIGN §4.1).
+#[test]
+fn call_site_loop_trip_counts_compose_into_helper_play_repetitions() {
+    let (_sources, _facts, lifecycle) = analyze(&["animate_helper.py"]);
+    let looped = scene(&lifecycle, "animate_helper.LoopedCall");
+    assert_eq!(looped.plays.len(), 2, "one fact per call site");
+    let loop_play = looped
+        .plays
+        .iter()
+        .find(|play| play.certainty == Presence::Maybe)
+        .expect("the looped call site is branch-dependent");
+    assert_eq!(
+        loop_play.repetitions,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: Some(3.0),
+        },
+        "the caller's literal trip count threads through inlining"
+    );
+    assert_eq!(loop_play.duration, Num::int(2));
+    let direct_play = looped
+        .plays
+        .iter()
+        .find(|play| play.certainty == Presence::Present)
+        .expect("the direct call site is certain");
+    assert_eq!(direct_play.repetitions, Num::int(1));
+    assert_eq!(direct_play.duration, Num::int(2));
+}
+
+/// Even a genuinely unknown helper argument (an unresolvable factory
+/// call) keeps the literal play-level `run_time`: the kwarg overrides
+/// every animation regardless of target identity, so the duration is
+/// exact while the animation itself honestly stays untracked.
+#[test]
+fn play_kwarg_run_time_survives_an_unknown_animate_target() {
+    let (_sources, _facts, lifecycle) = analyze(&["animate_helper.py"]);
+    let unknown = scene(&lifecycle, "animate_helper.UnknownArg");
+    assert_eq!(unknown.plays.len(), 1);
+    let play = &unknown.plays[0];
+    assert_eq!(play.duration, Num::int(2));
+    assert_eq!(play.certainty, Presence::Present);
+    // The argument value stays honestly untracked (convertible: Maybe).
+    assert_eq!(play.animations[0].convertible, Truth::Maybe);
+    assert!(play.animations[0].state.is_none());
+}
+
+/// The reverse direction of the same decomposition (DESIGN §15
+/// invariant 2): a *non-literal* play-level `run_time` — or a `**kwargs`
+/// splat that may carry one — overrides every animation's run time with
+/// an unknowable value, so constructor literals must not survive as an
+/// exact duration.
+#[test]
+fn non_literal_play_run_time_widens_constructor_literals() {
+    let (_sources, _facts, lifecycle) = analyze(&["animate_helper.py"]);
+
+    let override_scene = scene(&lifecycle, "animate_helper.NonLiteralOverride");
+    assert_eq!(override_scene.plays.len(), 1);
+    let play = &override_scene.plays[0];
+    assert_eq!(
+        play.duration,
+        Num::Unknown,
+        "run_time=t overrides FadeIn's 2"
+    );
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert_eq!(state.run_time, Num::Unknown);
+
+    let splat_scene = scene(&lifecycle, "animate_helper.SplatOverride");
+    assert_eq!(splat_scene.plays.len(), 1);
+    let play = &splat_scene.plays[0];
+    assert_eq!(play.duration, Num::Unknown, "**kw may carry run_time");
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert_eq!(state.run_time, Num::Unknown);
+}

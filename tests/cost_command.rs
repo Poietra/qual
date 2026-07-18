@@ -269,3 +269,98 @@ fn cost_unknown_scene_name_is_a_cli_error() {
         "unexpected error: {error}"
     );
 }
+
+/// The `.animate`-on-a-helper-parameter repro: one helper play animating
+/// the *parameter* via a builder, called with two different mobjects.
+/// The play-level literal `run_time` decides every execution's duration
+/// (scene.py `compile_animations` `setattr`s the kwarg onto each
+/// animation), so both executions keep 2 s / ~120 frames — the duration
+/// never widens to unknown because the call sites pass different
+/// targets.
+const ANIMATE_HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Twice(Scene):
+    def go(self, m):
+        self.play(m.animate.shift(RIGHT), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        a = Square()
+        b = Circle()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(a, b, label)
+        self.go(a)
+        self.go(b)
+";
+
+#[test]
+fn cost_report_keeps_animate_helper_durations_exact_per_execution() {
+    let dir = project(&[("twice.py", ANIMATE_HELPER_SCENE)]);
+    let output = cost_output(dir.path(), None).unwrap();
+
+    let expected = "\
+profiles: default (cairo, 1920x1080, 60 fps)
+
+scene twice.Twice (twice.py)
+  plays:
+    twice.py:6:9 play duration 2 s -> frames ~120
+    twice.py:6:9 play duration 2 s -> frames ~120
+  hot contexts:
+    twice.py:12:31 entry always_redraw; path construct -> always_redraw:12; factors frames; proven execution plays: twice.py:6:9, twice.py:6:9
+  per-frame constructions:
+    twice.py:12:39 MathTex construction x ~240 invocations across 2 proven play(s)
+  resource-key growth:
+    twice.py:12:39 MathTex distinct cache keys: ~240 across 2 proven play(s) (f-string key varies per frame)
+";
+    assert_eq!(output, expected);
+}
+
+/// A helper call site inside a literal `range(3)` loop plus a direct
+/// call site: each execution renders its own 2 s frame grid, so the
+/// looped site multiplies by its `[0, 3]` trip interval while the direct
+/// site proves exactly ~120 frames — a composed `~120 to ~480`, never a
+/// collapsed single execution.
+const LOOPED_ANIMATE_HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Looped(Scene):
+    def go(self, m):
+        self.play(m.animate.shift(RIGHT), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        a = Square()
+        b = Circle()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(a, b, label)
+        for _ in range(3):
+            self.go(a)
+        self.go(b)
+";
+
+#[test]
+fn cost_report_composes_looped_helper_call_site_frames() {
+    let dir = project(&[("looped.py", LOOPED_ANIMATE_HELPER_SCENE)]);
+    let output = cost_output(dir.path(), None).unwrap();
+
+    // One play row per execution, each with the exact per-execution grid.
+    let play_rows = output
+        .lines()
+        .filter(|line| line.contains("looped.py:6:9 play duration 2 s -> frames ~120"))
+        .count();
+    assert_eq!(play_rows, 2, "one play row per call site: {output}");
+
+    // The direct call site proves ~120 frames; the looped site is
+    // branch-dependent and adds up to 3 x 120 above.
+    assert!(
+        output.contains("MathTex construction x ~120 to ~480 invocations across 1 proven play(s)"),
+        "loop trips must multiply the looped execution's frames: {output}"
+    );
+    assert!(
+        output.contains("proven execution plays: looped.py:6:9"),
+        "the direct execution must prove the callback: {output}"
+    );
+}

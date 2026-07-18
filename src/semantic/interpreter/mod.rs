@@ -308,11 +308,25 @@ pub struct UpdaterRemoval {
 }
 
 /// One `.animate` builder (MLC113 / MLC117 / MLR102).
+///
+/// Internally the interpreter keeps one fact per *execution context*
+/// (builder site × helper call path, mirroring [`PlayFact::call_path`]),
+/// so joins happen only within one execution. The per-site fact exposed
+/// in [`SceneLifecycle::builders`] is the sound merge across executions:
+/// a builder site reached through helper call sites with *different*
+/// live targets reports `target: None` (no cross-execution identity
+/// claim), disagreeing epoch pairs drop
+/// [`AnimateBuilderFact::target_epoch_at_play`] (a creation epoch from
+/// one execution is never compared against a play epoch from another),
+/// and `Yes` verdicts survive only when a single execution carries them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimateBuilderFact {
     /// Source range of the `.animate` attribute expression.
     pub site: AllocationSite,
-    /// The live mobject the builder was created on.
+    /// The live mobject the builder was created on; `None` when the
+    /// builder site executed under several helper call sites with
+    /// different targets (per-execution targets still reach rules
+    /// through each play's [`PlayedAnimation::state`]).
     pub target: Option<ObjectId>,
     /// Methods chained on the builder, in order. Empty means a bare
     /// `mob.animate` (MLR102 candidate).
@@ -512,7 +526,10 @@ pub struct SceneLifecycle {
     pub updaters: Vec<UpdaterRegistration>,
     /// `remove_updater` calls in program order.
     pub updater_removals: Vec<UpdaterRemoval>,
-    /// `.animate` builder facts keyed by builder site.
+    /// `.animate` builder facts keyed by builder site: the sound merge
+    /// over every execution context of the site (see
+    /// [`AnimateBuilderFact`] — internal joins stay within one
+    /// execution).
     pub builders: BTreeMap<AllocationSite, AnimateBuilderFact>,
     /// `MoveToTarget` / `Restore` requirement facts.
     pub target_requirements: Vec<TargetRequirementFact>,

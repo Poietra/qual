@@ -138,12 +138,17 @@ fn mlc104_non_positive_duration_golden() {
     // helper.py is the review's empirically confirmed repro: the zero
     // run_time play happens inside a `self.show(...)` helper body and
     // must fire at the helper play span (helper plays materialize as
-    // real lifecycle facts).
+    // real lifecycle facts). TwoSiteDemo reaches one zero-duration
+    // `.animate` play through two call sites passing *different*
+    // mobjects: exactly one diagnostic, anchored at the `run_time=0`
+    // literal — never one per execution, never silenced by the differing
+    // targets.
     assert_golden(
         "MLC104",
         &[
             "alias.py:6:19 MLC104 error certain",
             "helper.py:6:40 MLC104 error certain",
+            "helper.py:14:54 MLC104 error certain",
             "invalid.py:7:44 MLC104 error certain",
             "invalid.py:8:44 MLC104 error certain",
             "invalid.py:9:19 MLC104 error certain",

@@ -150,6 +150,22 @@ interpreter modularization).
 
 ### Fixed
 
+- A literal play-level `run_time` kwarg now decides the whole-play
+  duration exactly regardless of animation identity (scene.py
+  `compile_animations` `setattr`s the kwarg onto every animation): a
+  `.animate` builder on an untracked helper argument — a loop-carried
+  parameter, an unresolvable factory result — no longer widens the play
+  duration to unknown, so cost frame estimates keep their numbers per
+  execution. The reverse direction is fixed too: a *non-literal*
+  `run_time` (or a `**kwargs` splat that may carry one) overrides
+  constructor literals with an unknowable value, so a play can no longer
+  report an exact duration its kwarg overrides at run time.
+- `.animate` builder facts are keyed by execution context (builder site ×
+  helper call path, like per-call-site play facts), so joins happen only
+  within one execution; the per-site view merges executions soundly — a
+  builder site reached with different live targets drops its identity
+  and epoch claims instead of pairing one execution's creation epoch
+  with another's play epoch.
 - A latent false-positive class in name-rebind detection: the four
   hand-rolled binder collectors are unified into one canonical
   poisoning definition, so MLD307 no longer claims the builtin when a

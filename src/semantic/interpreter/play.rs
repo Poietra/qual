@@ -269,7 +269,13 @@ impl<'a> Machine<'a, '_> {
                     );
                     state.animations.insert(id.clone(), animation.clone());
                     if self.emit {
-                        if let Some(fact) = self.sink.builders.get_mut(&builder.site) {
+                        // The builder value carries its creation execution
+                        // context, so this play updates exactly the fact of
+                        // its own execution — never a same-site fact from a
+                        // different call path (the join stays within one
+                        // execution context).
+                        let key = (builder.site, builder.call_path.clone());
+                        if let Some(fact) = self.sink.builder_executions.get_mut(&key) {
                             fact.played = if certainty == Presence::Present {
                                 Truth::Yes
                             } else {
@@ -281,6 +287,7 @@ impl<'a> Machine<'a, '_> {
                                 .and_then(|target| state.heap.object(target))
                                 .map(|object| object.mutation_epoch);
                         }
+                        self.sink.sync_builders();
                     }
                     compiled.push(PlayedAnimation {
                         site: arg_site,
@@ -337,11 +344,18 @@ impl<'a> Machine<'a, '_> {
         }
 
         // 2. apply play kwargs to every animation (setattr semantics,
-        //    scene.py compile_animations).
-        if let Some(run_time) = fact
-            .and_then(|fact| fact.keyword("run_time"))
-            .and_then(literal_num)
-        {
+        //    scene.py compile_animations). A play-level `run_time` is
+        //    `setattr` onto *every* compiled animation: a literal proves
+        //    each run time exactly, a non-literal value overrides each
+        //    with a value the analysis cannot know, and a `**kwargs`
+        //    splat may do either — constructor literals prove nothing
+        //    then (DESIGN §15 invariant 2, either direction).
+        let play_run_time = match fact.and_then(|fact| fact.keyword("run_time")) {
+            Some(argument) => Some(literal_num(argument).unwrap_or(Num::Unknown)),
+            None if fact.is_some_and(|fact| fact.has_star_star_kwargs) => Some(Num::Unknown),
+            None => None,
+        };
+        if let Some(run_time) = &play_run_time {
             for played in &mut compiled {
                 if let Some(animation_state) = &mut played.state {
                     animation_state.run_time = run_time.clone();
@@ -376,19 +390,33 @@ impl<'a> Machine<'a, '_> {
             }
         }
 
-        // 3. duration = max(run_time).
-        let mut duration: Option<Num> = None;
-        for played in &compiled {
-            let run_time = played
-                .state
-                .as_ref()
-                .map_or(Num::Unknown, |st| st.run_time.clone());
-            duration = Some(match duration {
-                None => run_time,
-                Some(current) => current.max_with(&run_time),
-            });
-        }
-        let duration = duration.unwrap_or(Num::Unknown);
+        // 3. duration = max(run_time) (scene.py `get_run_time`). With a
+        //    play-level `run_time` kwarg every animation's run time *is*
+        //    that value after step 2 — untracked ones included — so the
+        //    kwarg alone decides the whole-play duration: a literal
+        //    survives any unknown animation identity (an `.animate`
+        //    builder on an untracked helper argument, a `*args` splat),
+        //    and a non-literal kwarg makes the duration Unknown even
+        //    where constructor literals exist. Without the kwarg the
+        //    duration is the max over the compiled run times, Unknown as
+        //    soon as one animation is untracked.
+        let duration = match &play_run_time {
+            Some(run_time) if !call.args.is_empty() => run_time.clone(),
+            _ => {
+                let mut duration: Option<Num> = None;
+                for played in &compiled {
+                    let run_time = played
+                        .state
+                        .as_ref()
+                        .map_or(Num::Unknown, |st| st.run_time.clone());
+                    duration = Some(match duration {
+                        None => run_time,
+                        Some(current) => current.max_with(&run_time),
+                    });
+                }
+                duration.unwrap_or(Num::Unknown)
+            }
+        };
 
         // 4. auto-add non-introducer targets that are not in the family.
         for played in &compiled {
@@ -660,8 +688,9 @@ impl<'a> Machine<'a, '_> {
     }
 
     /// The helper call sites currently on the inline stack, outermost
-    /// first ([`PlayFact::call_path`]).
-    fn inline_call_path(&self) -> Vec<AllocationSite> {
+    /// first ([`PlayFact::call_path`]). Also the execution-context part
+    /// of the builder-fact keys ([`super::exec::TraceSink`]).
+    pub(super) fn inline_call_path(&self) -> Vec<AllocationSite> {
         self.inline_stack.iter().map(|(_, site)| *site).collect()
     }
 
