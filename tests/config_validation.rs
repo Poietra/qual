@@ -173,9 +173,30 @@ fn target_python_newer_than_parser_grammar_is_a_config_error() {
     }
 }
 
+/// Targets below the syntax-gating floor (3.6) are refused with a message
+/// naming the floor: the gate cannot guarantee older parsers, so accepting
+/// the target would be a silently unenforced promise.
+#[test]
+fn target_python_below_the_gating_floor_is_a_config_error() {
+    for bad in ["3.0", "3.5"] {
+        let project = write_project(&format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n"));
+        match check(&args_for(project.path())) {
+            Err(ApplicationError::Config(error)) => {
+                let message = error.to_string();
+                assert!(
+                    message.contains("cannot guarantee syntax gating")
+                        && message.contains("minimum enforceable target-python is 3.6"),
+                    "floor error must name the floor: {message}"
+                );
+            }
+            other => panic!("target-python {bad} must be a config error, got: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn target_python_in_supported_range_is_accepted() {
-    for good in ["3.8", "3.11", "3.12"] {
+    for good in ["3.6", "3.8", "3.11", "3.12"] {
         let project = write_project(&format!("[tool.manim-lint]\ntarget-python = \"{good}\"\n"));
         assert!(
             check(&args_for(project.path())).is_ok(),

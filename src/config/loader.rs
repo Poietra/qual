@@ -92,12 +92,16 @@ pub enum ConfigError {
 /// explicit configuration error (DESIGN §5.2), never a silent downgrade.
 pub const MAX_TARGET_PYTHON: (u32, u32) = (3, 12);
 
-/// Lowest `target-python` the bundled parser meaningfully supports: it is
-/// a Python 3 parser (Python 2 constructs such as `print x` or
-/// `except E, e:` are grammar errors), and its fixed grammar cannot be
-/// narrowed per version, so every Python 3 target up to
-/// [`MAX_TARGET_PYTHON`] is accepted as "parse with the fixed grammar".
-pub const MIN_TARGET_PYTHON: (u32, u32) = (3, 0);
+/// Lowest `target-python` whose syntax gating is complete: the post-parse
+/// gate ([`crate::frontend::features`]) detects every parse-level
+/// construct introduced after Python 3.6 that the bundled 3.12 grammar
+/// accepts, so a 3.6+ target that passes the gate silently is guaranteed
+/// parseable by that target. Below 3.6 the guarantee would break —
+/// Python 3.6 added constructs (f-strings, signature trailing commas)
+/// that `CPython`'s own `ast.parse(feature_version=...)` oracle does not
+/// gate — so an older target is an explicit configuration error, never a
+/// silently unenforced promise.
+pub const MIN_TARGET_PYTHON: (u32, u32) = (3, 6);
 
 /// Validates the `target-python` format (`X.Y`) and parser bounds.
 ///
@@ -116,9 +120,8 @@ fn validate_target_python(value: &str) -> Result<(), ConfigError> {
     };
     if version < MIN_TARGET_PYTHON {
         return Err(ConfigError::InvalidValue(format!(
-            "target-python {value} is older than Python \
-             {major}.{minor}, the oldest version the bundled parser \
-             meaningfully supports",
+            "cannot guarantee syntax gating for Python {value}; minimum \
+             enforceable target-python is {major}.{minor}",
             major = MIN_TARGET_PYTHON.0,
             minor = MIN_TARGET_PYTHON.1,
         )));
@@ -1035,14 +1038,16 @@ pixel-width = 0
 
     #[test]
     fn target_python_format_and_bounds_are_validated() {
-        for good in ["3.0", "3.8", "3.11", "3.12"] {
+        for good in ["3.6", "3.8", "3.11", "3.12"] {
             let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{good}\"\n");
             assert!(
                 resolve(&input_with(&pyproject)).is_ok(),
                 "{good} must be accepted"
             );
         }
-        for bad in ["2.7", "3.13", "4.0", "3", "3.11.2", "py3", "3.x", ""] {
+        for bad in [
+            "2.7", "3.0", "3.5", "3.13", "4.0", "3", "3.11.2", "py3", "3.x", "",
+        ] {
             let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n");
             assert!(
                 matches!(
@@ -1052,6 +1057,17 @@ pixel-width = 0
                 "{bad:?} must be a config error"
             );
         }
+    }
+
+    #[test]
+    fn target_python_below_the_gating_floor_names_the_floor() {
+        let pyproject = "[tool.manim-lint]\ntarget-python = \"3.5\"\n";
+        let error = resolve(&input_with(pyproject)).expect_err("must refuse");
+        assert_eq!(
+            error.to_string(),
+            "cannot guarantee syntax gating for Python 3.5; minimum \
+             enforceable target-python is 3.6"
+        );
     }
 
     #[test]

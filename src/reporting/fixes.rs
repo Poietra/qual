@@ -168,7 +168,7 @@ pub fn apply_with_target(
             continue;
         }
         let checked = reparse(&new_text, path)
-            .and_then(|module| check_target_syntax(file, &module, target_python))
+            .and_then(|module| check_target_syntax(file, &new_text, &module, target_python))
             .and_then(|()| encode(file, &new_text));
         match checked {
             Ok(bytes) => writes.push((file, path.clone(), bytes)),
@@ -305,6 +305,7 @@ fn reparse(text: &str, path: &str) -> Result<ast::ModModule, String> {
 /// never block a fix that edits something else.
 fn check_target_syntax(
     file: &SourceFile,
+    fixed_text: &str,
     module: &ast::ModModule,
     target_python: Option<&str>,
 ) -> Result<(), String> {
@@ -315,13 +316,14 @@ fn check_target_syntax(
         debug_assert!(false, "target-python is validated at config time");
         return Ok(());
     };
-    let fixed = feature_counts(&features::violations(module, target));
+    let fixed_tokens = features::lex_tokens(fixed_text);
+    let fixed = feature_counts(&features::violations(&fixed_tokens, module, target));
     if fixed.is_empty() {
         return Ok(());
     }
     let original = file
         .ast()
-        .map(|module| feature_counts(&features::violations(module, target)))
+        .map(|module| feature_counts(&features::violations(file.tokens(), module, target)))
         .unwrap_or_default();
     for (feature, count) in &fixed {
         if *count > original.get(feature).copied().unwrap_or(0) {
@@ -523,6 +525,42 @@ mod tests {
                         && rolled_back.reason.contains("target-python is 3.9"),
                     "reason must name the construct and versions: {}",
                     rolled_back.reason
+                );
+                assert_eq!(on_disk, original, "rolled back file must be untouched");
+            }
+        }
+    }
+
+    /// The rollback gate covers token-detected constructs too: a fix that
+    /// introduces a self-documenting f-string `=` (invisible in the AST,
+    /// found in the token text) rolls back under a pre-3.8 target.
+    #[test]
+    fn fix_introducing_fstring_debug_rolls_back_under_old_target() {
+        let original = "value = name\n";
+        let replacement = "value = f\"{name=}\"";
+        for (target, expect_applied) in [(Some("3.7"), false), (Some("3.8"), true)] {
+            let project = tempfile::tempdir().unwrap();
+            let file_path = project.path().join("scene.py");
+            std::fs::write(&file_path, original).unwrap();
+            let mut sources = SourceManager::new(project.path());
+            sources.load_file(&file_path);
+            let diagnostic =
+                replace_first_line_fix("scene.py", original.trim_end().len(), replacement);
+            let report = apply_with_target(&sources, &[diagnostic], false, target).unwrap();
+            let on_disk = std::fs::read_to_string(&file_path).unwrap();
+            if expect_applied {
+                assert_eq!(report.applied, 1, "target {target:?}");
+                assert!(on_disk.contains("{name=}"), "target {target:?}");
+            } else {
+                assert_eq!(report.applied, 0, "target {target:?}");
+                assert_eq!(report.rolled_back.len(), 1);
+                assert!(
+                    report.rolled_back[0].reason.contains("requires Python 3.8")
+                        && report.rolled_back[0]
+                            .reason
+                            .contains("target-python is 3.7"),
+                    "reason must name the construct and versions: {}",
+                    report.rolled_back[0].reason
                 );
                 assert_eq!(on_disk, original, "rolled back file must be untouched");
             }

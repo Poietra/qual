@@ -57,14 +57,26 @@ interpreter modularization).
   call-site branch/loop certainty, and exact per-animation argument
   facts. Lifecycle state queries are method-scoped, so liveness resolves
   the correct pre-play state at helper play sites.
-- `target-python` now gates syntax: after parsing, constructs newer than
-  the configured target emit `MLC000` (error) — walrus `:=` and
-  positional-only `/` (3.8), `match` (3.10), `except*` (3.11), `type`
-  alias statements and PEP 695 type-parameter lists (3.12) — while the
-  gated file keeps its AST and is still fully analyzed. `--fix` rolls a
-  file back when its edits would introduce gated syntax. Parenthesized
-  context managers and f-string `=` are not representable in the bundled
-  AST and are documented as ungated.
+- `target-python` now gates syntax completely, with an honest floor:
+  after parsing, a gate over the AST, the token stream, and f-string
+  token text emits `MLC000` (error) for every parse-level construct
+  newer than the configured target — `async`/`await` syntax outside
+  `async def` (3.7); walrus `:=`, positional-only `/`, and f-string
+  self-documenting `=` (3.8); relaxed decorators and parenthesized
+  context managers with `as` (3.9); `match` (3.10); `except*` and
+  PEP 646 `*` unpacking in subscripts/annotations (3.11); `type` alias
+  statements, PEP 695 type-parameter lists, and PEP 701 f-string
+  expressions with backslashes/newlines/comments (3.12) — while the
+  gated file keeps its AST and is still fully analyzed. A file the gate
+  passes silently is guaranteed parseable by the target's own parser;
+  each minimum version is oracle-checked against CPython
+  `ast.parse(feature_version=...)` where that oracle gates the
+  construct. `--fix` rolls a file back when its edits would introduce
+  gated syntax, token-detected constructs included. The accepted
+  `target-python` range shrank from 3.0–3.12 to 3.6–3.12: below 3.6 the
+  guarantee cannot be kept (Python 3.6's own additions include
+  oracle-unverifiable constructs), so older targets are now explicit
+  exit-2 configuration errors instead of silently unenforced promises.
 
 - Per-updater execution liveness (`src/cost/liveness.rs`): every
   hot-context performance fact is now gated on plays/waits where the
@@ -91,6 +103,16 @@ interpreter modularization).
   names (`CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`)
   moved to the new `local_0_20_1_4d25c031` overlay, and resolve to
   Unknown under `knowledge-profile = "upstream_0_20"`.
+- Helper inlining during scene interpretation is bounded by call-cycle
+  detection (a helper already on the active inlining path falls back to
+  its effect summary) instead of a fixed depth limit, so deep
+  non-recursive helper chains inline fully.
+- Cost execution facts are keyed by the helper `call_path` of the play
+  they prove, so the same helper reached through different call sites no
+  longer merges its per-frame execution evidence across paths.
+- Frontend fact computation is gated on the selected rule capabilities:
+  a run that selects no rule needing statement, binding, or lifecycle
+  facts skips computing them.
 - The lifecycle interpreter (`src/semantic/interpreter.rs`, 7,602 lines)
   is split into nine cohesive modules under
   `src/semantic/interpreter/`; the public API is frozen via `pub use`

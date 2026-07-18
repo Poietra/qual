@@ -198,15 +198,23 @@ Configuration is validated honestly (exit 2 on violation):
 - A declared `manim-version` must fall inside the Manim range supported by
   the configured knowledge profile (e.g. `upstream_0_20` supports
   `>=0.20,<0.21`); when absent, nothing is validated.
-- `target-python` must be `MAJOR.MINOR` between 3.0 and 3.12 — the Python
-  grammar the bundled parser (rustpython-parser 0.4) implements. The
-  grammar is fixed (no `feature_version` pinning), so parsing itself never
-  changes; instead a post-parse gate reports any construct newer than the
-  target as `MLC000` (`match` 3.10, `except*` 3.11, `type` aliases and
-  PEP 695 type parameters 3.12, `:=` and positional-only `/` 3.8). The
-  gated file is still fully analyzed, and a `--fix` that would introduce
-  such syntax is rolled back. See `manim-lint explain MLC000` for what is
-  and is not detectable.
+- `target-python` must be `MAJOR.MINOR` between 3.6 and 3.12. The upper
+  bound is the Python grammar the bundled parser (rustpython-parser 0.4)
+  implements; the lower bound is the floor below which syntax gating can
+  no longer be guaranteed (older targets are refused with exit 2 instead
+  of being silently unenforced). The grammar is fixed (no
+  `feature_version` pinning), so parsing itself never changes; instead a
+  post-parse gate over the AST, the token stream, and f-string text
+  reports every construct newer than the target as `MLC000`:
+  `async`/`await` syntax outside `async def` (3.7), `:=`, positional-only
+  `/`, and f-string self-documenting `=` (3.8), relaxed decorators and
+  parenthesized context managers with `as` (3.9), `match` (3.10),
+  `except*` and PEP 646 `*` unpacking in subscripts (3.11), `type`
+  aliases, PEP 695 type parameters, and PEP 701 f-string expressions
+  (3.12). A file the gate passes silently is guaranteed parseable by the
+  target's own parser. The gated file is still fully analyzed, and a
+  `--fix` that would introduce such syntax is rolled back. See
+  `manim-lint explain MLC000` for the full coverage table.
 - A frame rate that is zero, negative, or non-finite, and a resolution
   with a zero dimension, are rejected wherever they come from (`--fps` /
   `--resolution`, a profile, or `manim.cfg`).

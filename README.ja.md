@@ -138,7 +138,7 @@ CLI > selected profile > pyproject base > manim.cfg > builtin defaults
 設定は正直に検証されます(違反は exit 2):
 
 - 宣言した `manim-version` は、設定した knowledge profile が対応する Manim 範囲内でなければなりません(例: `upstream_0_20` は `>=0.20,<0.21` に対応)。未宣言なら検証しません。
-- `target-python` は `MAJOR.MINOR` 形式で、同梱パーサー(rustpython-parser 0.4)が実装する Python 文法の範囲 3.0〜3.12 に収まる必要があります。文法は固定で(`feature_version` の指定はなし)パース結果は変わりませんが、パース後のゲートが target より新しい構文を `MLC000` として報告します(`match` 3.10、`except*` 3.11、`type` エイリアスと PEP 695 型パラメーター 3.12、`:=` と位置専用引数 `/` 3.8)。ゲートされたファイルも解析は継続し、対象構文を持ち込む `--fix` はロールバックされます。検出可能・不可能な構文は `manim-lint explain MLC000` を参照してください。
+- `target-python` は `MAJOR.MINOR` 形式で 3.6〜3.12 の範囲に収まる必要があります。上限は同梱パーサー(rustpython-parser 0.4)が実装する Python 文法、下限は構文ゲートの完全性を保証できるフロアです(それより古い target は黙って放置されず exit 2 で拒否されます)。文法は固定で(`feature_version` の指定はなし)パース結果は変わりませんが、パース後のゲートが AST・トークン列・f-string テキストを走査し、target より新しい構文をすべて `MLC000` として報告します(`async def` 外の `async`/`await` 構文 3.7、`:=`・位置専用引数 `/`・f-string の自己文書化 `=` 3.8、拡張デコレーターと `as` 付き括弧付きコンテキストマネージャー 3.9、`match` 3.10、`except*` と PEP 646 の添字 `*` アンパック 3.11、`type` エイリアス・PEP 695 型パラメーター・PEP 701 f-string 式 3.12)。ゲートを無警告で通過したファイルは target 自身のパーサーで必ずパース可能です。ゲートされたファイルも解析は継続し、対象構文を持ち込む `--fix` はロールバックされます。カバレッジ表は `manim-lint explain MLC000` を参照してください。
 - ゼロ・負・非有限のフレームレートと、寸法が 0 の解像度は、どの経路(`--fps` / `--resolution`、プロファイル、`manim.cfg`)から来ても拒否されます。
 - `stub-paths` は未実装です。空でないリストは黙って無視されず、設定エラーになります。
 
