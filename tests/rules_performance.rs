@@ -547,17 +547,18 @@ fn performance_rule_metadata_matches_the_design_catalog() {
     }
     // Unimplemented catalog ids stay reserved and are never reported as
     // checked (DESIGN §12). MLP218 / MLP221 / MLP227 moved to the
-    // timing / display-order tranche (`rules_performance2.rs`).
-    for reserved in ["MLP217", "MLP225"] {
-        assert!(
-            registry::metadata_for(reserved).is_none(),
-            "{reserved} must stay unimplemented"
-        );
-        assert!(
-            registry::is_reserved_rule_id(reserved),
-            "{reserved} keeps its reserved id"
-        );
-    }
+    // timing / display-order tranche (`rules_performance2.rs`);
+    // MLP214 / MLP217 to the fork-overlay tranche
+    // (`rules_performance_fork.rs`).
+    let reserved = "MLP225";
+    assert!(
+        registry::metadata_for(reserved).is_none(),
+        "{reserved} must stay unimplemented"
+    );
+    assert!(
+        registry::is_reserved_rule_id(reserved),
+        "{reserved} keeps its reserved id"
+    );
 }
 
 #[test]

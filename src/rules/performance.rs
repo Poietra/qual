@@ -8,13 +8,14 @@
 //! (`z_index` display order, updater-body dataflow, ownership intervals,
 //! `always_update_mobjects` tracking): `MLP209`, `MLP210`, `MLP215`,
 //! `MLP218`, `MLP219`, `MLP221`, `MLP222`, `MLP227`.
+//! Fork-overlay tranche over the curated `fork_capabilities` block of the
+//! local knowledge profile (inert under `upstream_0_20`, whose accessors
+//! return `None`): `MLP214`, `MLP217`.
 //!
 //! Deliberately unimplemented catalog ids (a reserved rule never
 //! fake-fires, DESIGN §12):
 //!
-//! - `MLP217` needs a knowledge-profile declaration of process-global SVG
-//!   cache semantics that `upstream_0_20` does not carry;
-//! - `MLP214` / `MLP225` are local-fork-overlay rules.
+//! - `MLP225` is the cost-report-only local-fork-overlay rule.
 
 mod allocation;
 mod display_order;
@@ -26,6 +27,8 @@ mod redraw_geometry;
 mod sampling;
 mod scene_mutation;
 pub(crate) mod support;
+mod svg_cache;
+mod tex_precompile;
 mod timing;
 mod traced_path;
 mod transform;
@@ -62,5 +65,9 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(hot_receiver::HotPointFromProportion),
         Box::new(hot_construction::FrameVaryingResourceKey),
         Box::new(wait_updates::ForcedAlwaysUpdateWait),
+        // Fork-overlay tranche (inert unless the selected knowledge
+        // profile declares the matching `fork_capabilities` block):
+        Box::new(tex_precompile::SerialTexCompileKeys),
+        Box::new(svg_cache::FrameVaryingSvgCacheGrowth),
     ]
 }

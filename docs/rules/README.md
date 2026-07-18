@@ -1,7 +1,7 @@
 # Rule catalog
 
-manim-lint reserves 92 rule IDs in four families. 80 are **implemented**;
-12 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
+manim-lint reserves 92 rule IDs in four families. 82 are **implemented**;
+10 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
 rules` lists it as `reserved`, `manim-lint check` never registers it, and it
 never fires. Each reserved rule waits on a named analysis capability that
 the fact layers do not provide yet; where that capability is known it is
@@ -86,7 +86,7 @@ Columns:
 | [MLR126](MLR126.md) | implemented | error | high | Literal opacity outside [0, 1] or negative stroke width | |
 | [MLR127](MLR127.md) | implemented | warning | high | Literal by-tex key cannot occur in the MathTex literal | |
 
-## MLP — performance (21 implemented, 6 reserved)
+## MLP — performance (23 implemented, 4 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
@@ -103,10 +103,10 @@ Columns:
 | [MLP211](MLP211.md) | implemented | info | medium | Large per-frame allocation inside a per-frame callback | |
 | MLP212 | reserved | info | medium | Long animation of a full-screen translucent object or layer | pixel-coverage facts |
 | MLP213 | reserved | info | medium | Calibrated workload / renderer mismatch (e.g. a large Cairo 3D Surface) | calibrated workload profiles |
-| MLP214 | reserved | info | high | Serial construction of distinct MathTex the local fork could precompile in parallel | local fork overlay profile |
+| [MLP214](MLP214.md) | implemented | info | high | Serial distinct TeX compile keys the local fork could precompile in parallel | |
 | [MLP215](MLP215.md) | implemented | warning | high | Provably no-op updater widens dynamic waits or the play moving scope | |
 | [MLP216](MLP216.md) | implemented | info | medium | always_redraw rebuilds identical curated topology every frame | |
-| MLP217 | reserved | warning | high | Variable-key use_svg_cache=True in a hot callback grows the global cache every frame | curated process-global SVG cache semantics |
+| [MLP217](MLP217.md) | implemented | warning | high | Frame-varying use_svg_cache=True key in a hot callback grows the process-global cache every frame | |
 | [MLP218](MLP218.md) | implemented | info | high | Provably frame-invariant updater is the only reason a wait renders dynamically | |
 | [MLP219](MLP219.md) | implemented | info | medium | Updater's estimated lifetime spans many subsequent plays | |
 | [MLP220](MLP220.md) | implemented | warning | high | TracedPath without dissipating_time accumulates over a long span | |
