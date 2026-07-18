@@ -549,8 +549,9 @@ fn performance_rule_metadata_matches_the_design_catalog() {
     // checked (DESIGN §12). MLP218 / MLP221 / MLP227 moved to the
     // timing / display-order tranche (`rules_performance2.rs`);
     // MLP214 / MLP217 to the fork-overlay tranche
-    // (`rules_performance_fork.rs`).
-    let reserved = "MLP225";
+    // (`rules_performance_fork.rs`); MLP225 to the local-fork-overlay
+    // cost-report tranche (`fork_paths.rs`).
+    let reserved = "MLP212";
     assert!(
         registry::metadata_for(reserved).is_none(),
         "{reserved} must stay unimplemented"

@@ -1,12 +1,17 @@
 # Rule catalog
 
-manim-lint reserves 92 rule IDs in four families. 82 are **implemented**;
-10 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
+manim-lint reserves 92 rule IDs in four families. 83 are **implemented**;
+9 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
 rules` lists it as `reserved`, `manim-lint check` never registers it, and it
 never fires. Each reserved rule waits on a named analysis capability that
 the fact layers do not provide yet; where that capability is known it is
 listed in the *Blocked on* column. The authoritative catalog definition is
 [`DESIGN.md`](../../DESIGN.md) section 7.
+
+One implemented rule is opt-in: `MLP225` has `default_enabled: false` and
+the capabilities `cost-report` + `local-fork-overlay` — its home is the
+`cost` command's fork fast-path section under a local-fork knowledge
+profile, and only an exact `--select MLP225` evaluates it in `check`.
 
 Columns:
 
@@ -86,7 +91,7 @@ Columns:
 | [MLR126](MLR126.md) | implemented | error | high | Literal opacity outside [0, 1] or negative stroke width | |
 | [MLR127](MLR127.md) | implemented | warning | high | Literal by-tex key cannot occur in the MathTex literal | |
 
-## MLP — performance (23 implemented, 4 reserved)
+## MLP — performance (24 implemented, 3 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
@@ -114,7 +119,7 @@ Columns:
 | [MLP222](MLP222.md) | implemented | warning | high | ImageMobject re-rasterized every frame inside Cairo's moving suffix | |
 | MLP223 | reserved | info | high | Fully transparent stroke keeps a positive width that is processed every frame | opacity-immutability facts |
 | [MLP224](MLP224.md) | implemented | info | high | point_from_proportion on a confirmed-long path inside a per-frame callback | |
-| MLP225 | reserved | info | high | Cost-report-only explanation of features that block local-fork fast paths | local fork overlay profile |
+| [MLP225](MLP225.md) | implemented (opt-in) | info | high | Cost-report-only explanation of features that block local-fork fast paths | |
 | [MLP226](MLP226.md) | implemented | warning | high | Frame-varying Text/TeX cache key inside a per-frame callback | |
 | [MLP227](MLP227.md) | implemented | warning | high | always_update_mobjects=True dynamicizes a provably static wait | |
 

@@ -420,10 +420,14 @@ impl FactNeeds {
 
     /// The layers implied by a capability union: `"lifecycle"` needs the
     /// interpreter, `"cost-facts"` needs the cost model *and* the
-    /// interpreter it consumes. `"source"` / `"qualified-calls"` need
-    /// nothing beyond the always-built frontend facts.
+    /// interpreter it consumes, and `"cost-report"` (the opt-in `MLP225`
+    /// capability whose home is the `cost` command) needs the same stack
+    /// when a `--select MLP225` check run opts in. `"source"` /
+    /// `"qualified-calls"` need nothing beyond the always-built frontend
+    /// facts; `"local-fork-overlay"` is a property of the loaded knowledge
+    /// profile, not a fact layer.
     fn for_capabilities(capabilities: &BTreeSet<&'static str>) -> Self {
-        let cost = capabilities.contains("cost-facts");
+        let cost = capabilities.contains("cost-facts") || capabilities.contains("cost-report");
         Self {
             lifecycle: cost || capabilities.contains("lifecycle"),
             cost,
@@ -498,7 +502,7 @@ pub fn run_cost(path: &Path, scene_filter: Option<&str>) -> Result<Execution, Ap
     // The cost report reads lifecycle plays and cost contexts directly:
     // always compute every layer here.
     let facts = compute_facts(&sources, &config, &profile, FactNeeds::ALL);
-    let output = render_cost_report(&sources, &config, &facts, scene_filter)?;
+    let output = render_cost_report(&sources, &config, &profile, &facts, scene_filter)?;
     Ok(Execution::success(output))
 }
 
@@ -506,6 +510,7 @@ pub fn run_cost(path: &Path, scene_filter: Option<&str>) -> Result<Execution, Ap
 fn render_cost_report(
     sources: &SourceManager,
     config: &ResolvedConfig,
+    knowledge: &KnowledgeProfile,
     facts: &ProjectFacts,
     scene_filter: Option<&str>,
 ) -> Result<String, ApplicationError> {
@@ -560,10 +565,119 @@ fn render_cost_report(
         let _ = writeln!(output, "no scenes discovered");
         return Ok(output);
     }
+    // Fork fast-path verdicts (DESIGN §7.3 MLP225): evaluated only when
+    // the loaded knowledge profile declares fork capabilities — the whole
+    // section is absent under upstream profiles.
+    let fork_paths = cost::fork::evaluate(
+        &facts.lifecycle,
+        &facts.calls,
+        Some(knowledge),
+        &config.active_profiles,
+    );
     for scene in scenes {
         render_scene_cost(&mut output, sources, config, facts, scene);
+        if let Some(scene_paths) = fork_paths
+            .scenes
+            .iter()
+            .find(|paths| paths.scene == scene.qualified_name)
+        {
+            render_fork_paths(&mut output, sources, knowledge, scene_paths);
+        }
     }
     Ok(output)
+}
+
+/// Renders one scene's fork fast-path section (DESIGN §7.3 `MLP225`): per
+/// play, either no detected blocker or the causal chain that closes the
+/// fast path — with the measured calibration evidence where the DESIGN
+/// quotes it, and never advice to remove a feature.
+fn render_fork_paths(
+    output: &mut String,
+    sources: &SourceManager,
+    knowledge: &KnowledgeProfile,
+    scene_paths: &cost::fork::SceneForkPaths,
+) {
+    use cost::fork::{GateEvaluation, GateKind};
+
+    let locate = |site: crate::semantic::values::AllocationSite| {
+        cost_location(sources, site.file, site.start)
+    };
+    for profile_paths in &scene_paths.profiles {
+        let _ = writeln!(
+            output,
+            "  fork fast paths (profile {profile}, knowledge {knowledge}):",
+            profile = profile_paths.profile,
+            knowledge = knowledge.name,
+        );
+        let gates: [(GateKind, &GateEvaluation, String); 3] = [
+            (
+                GateKind::ForkPerPlay,
+                &profile_paths.fork,
+                format!("cairo_fork_workers {}", profile_paths.fork_workers),
+            ),
+            (
+                GateKind::StaticLayers,
+                &profile_paths.static_layers,
+                format!(
+                    "cairo_static_layers {}",
+                    if profile_paths.static_layers_requested {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                ),
+            ),
+            (
+                GateKind::BulkInterpolation,
+                &profile_paths.bulk,
+                String::new(),
+            ),
+        ];
+        let mut any_loss = false;
+        for (gate, evaluation, config_note) in &gates {
+            let label = gate.label();
+            let suffix = if config_note.is_empty() {
+                String::new()
+            } else {
+                format!(" ({config_note})")
+            };
+            match evaluation {
+                GateEvaluation::NotDeclared => {}
+                GateEvaluation::Unrequested { reason } => {
+                    let _ = writeln!(
+                        output,
+                        "    {label}: not requested ({reason}); nothing to report"
+                    );
+                }
+                GateEvaluation::Plays(outcomes) => {
+                    let _ = writeln!(output, "    {label}{suffix}:");
+                    for outcome in outcomes {
+                        let _ = writeln!(
+                            output,
+                            "      {location} play #{ordinal}: {description}",
+                            location = locate(outcome.site),
+                            ordinal = outcome.ordinal,
+                            description = cost::fork::describe_outcome(*gate, outcome, &locate),
+                        );
+                    }
+                    if evaluation.has_loss() {
+                        any_loss = true;
+                        if let Some(evidence) = gate.measured_evidence() {
+                            let _ = writeln!(output, "      evidence: {evidence}");
+                        }
+                    }
+                }
+            }
+        }
+        if any_loss {
+            let _ = writeln!(
+                output,
+                "    note: the features named above can be correct expression; this \
+                 section explains the render-path consequence and never advises \
+                 removing them"
+            );
+        }
+    }
 }
 
 /// Renders one scene section of the cost report.
@@ -1120,7 +1234,7 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 82] = [
+    const DOCS: [(&str, &str); 83] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -1201,6 +1315,7 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLP221", include_str!("../docs/rules/MLP221.md")),
         ("MLP222", include_str!("../docs/rules/MLP222.md")),
         ("MLP224", include_str!("../docs/rules/MLP224.md")),
+        ("MLP225", include_str!("../docs/rules/MLP225.md")),
         ("MLP226", include_str!("../docs/rules/MLP226.md")),
         ("MLP227", include_str!("../docs/rules/MLP227.md")),
     ];
@@ -1361,6 +1476,21 @@ mod tests {
         // them always runs the interpreter too.
         assert_eq!(needs(&["cost-facts"]), FactNeeds::ALL);
         assert_eq!(needs(&["qualified-calls", "cost-facts"]), FactNeeds::ALL);
+        // The MLP225 opt-in capabilities: `cost-report` needs the full
+        // stack (an explicit `--select MLP225` must actually evaluate);
+        // `local-fork-overlay` alone is a knowledge-profile property,
+        // not a fact layer.
+        assert_eq!(
+            needs(&["cost-report", "local-fork-overlay"]),
+            FactNeeds::ALL
+        );
+        assert_eq!(
+            needs(&["local-fork-overlay"]),
+            FactNeeds {
+                lifecycle: false,
+                cost: false
+            }
+        );
     }
 
     fn span(line: usize, column: usize) -> SourceSpan {

@@ -240,6 +240,23 @@ fn cost_report_counts_each_helper_call_site_as_its_own_play() {
     );
 }
 
+/// The fork fast-path section (DESIGN §7.3 MLP225) is local-fork-overlay
+/// only: under the default `upstream_0_20` profile the cost report must
+/// not mention fork paths at all — no gates, no `cairo_fork_workers`
+/// semantics, no fork vocabulary (the deeper fork-profile golden tests
+/// live in `tests/fork_paths.rs`).
+#[test]
+fn cost_report_has_no_fork_section_under_the_upstream_profile() {
+    for fixture in [LITERAL_SCENE, LIVE_SCENE, UNKNOWN_SCENE] {
+        let dir = project(&[("scene.py", fixture)]);
+        let output = cost_output(dir.path(), None).unwrap();
+        assert!(
+            !output.contains("fork fast paths") && !output.contains("fork-per-play"),
+            "fork-path interpretation must stay inert under upstream_0_20: {output}"
+        );
+    }
+}
+
 #[test]
 fn cost_scene_filter_selects_one_scene() {
     let dir = project(&[("demo.py", LITERAL_SCENE), ("loose.py", UNKNOWN_SCENE)]);

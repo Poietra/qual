@@ -64,6 +64,12 @@ fn selector_enabled(rule_id: &str, select: &[String], ignore: &[String]) -> bool
 /// `select` / `ignore` configuration: every selected-and-not-ignored
 /// rule, plus — transitively — every rule that `supersedes` one of them.
 ///
+/// Opt-in rules (`default_enabled: false`, currently `MLP225`) join the
+/// set only when a selector names their exact rule ID: a family prefix
+/// like `MLP` never enables them, so a normal `check` run never fires
+/// them (DESIGN §7.3 — their home is the `cost` command; `--select
+/// MLP225` is the explicit opt-in).
+///
 /// Supersession is part of diagnostic *production* (DESIGN §7.3: the
 /// specific diagnostic permanently replaces the generic one), so a
 /// superseding rule must still run when only the generic rule is
@@ -77,7 +83,11 @@ pub fn enabled_rules(select: &[String], ignore: &[String]) -> Vec<Box<dyn Rule>>
     let mut wanted: std::collections::BTreeSet<&'static str> = all
         .iter()
         .map(|rule| rule.metadata())
-        .filter(|metadata| selector_enabled(metadata.id, select, ignore))
+        .filter(|metadata| {
+            selector_enabled(metadata.id, select, ignore)
+                && (metadata.default_enabled
+                    || select.iter().any(|selector| selector == metadata.id))
+        })
         .map(|metadata| metadata.id)
         .collect();
     // Fixpoint: pull in supersessors of already-wanted rules (supersedes
@@ -230,16 +240,39 @@ mod tests {
     }
 
     /// The builtin default select (all four prefixes) enables every
-    /// registered rule, so a default run computes every fact layer.
+    /// default-enabled registered rule, so a default run computes every
+    /// fact layer. Opt-in rules (`default_enabled: false`) stay out.
     #[test]
     fn default_prefixes_enable_every_rule_and_every_capability() {
         let select = owned(&RULE_PREFIXES);
         let rules = enabled_rules(&select, &[]);
-        assert_eq!(rules.len(), all_rules().len());
+        let default_enabled = all_rules()
+            .iter()
+            .filter(|rule| rule.metadata().default_enabled)
+            .count();
+        assert_eq!(rules.len(), default_enabled);
+        assert!(
+            !ids(&rules).contains(&"MLP225"),
+            "the opt-in MLP225 must not run under a prefix select"
+        );
         let capabilities = capability_union(&rules);
         for capability in ["qualified-calls", "lifecycle", "cost-facts"] {
             assert!(capabilities.contains(capability), "missing {capability}");
         }
+    }
+
+    /// An opt-in rule needs its exact ID in `select` (DESIGN §7.3:
+    /// `MLP225` never fires in a normal check; `--select MLP225` is the
+    /// explicit opt-in and pulls in the full cost fact stack via its
+    /// `cost-report` capability).
+    #[test]
+    fn opt_in_rules_need_their_exact_id_in_select() {
+        assert!(!ids(&enabled_rules(&owned(&["MLP"]), &[])).contains(&"MLP225"));
+        let rules = enabled_rules(&owned(&["MLP225"]), &[]);
+        assert_eq!(ids(&rules), ["MLP225"]);
+        assert!(capability_union(&rules).contains("cost-report"));
+        // An ignore still wins over the explicit opt-in.
+        assert!(enabled_rules(&owned(&["MLP225"]), &owned(&["MLP225"])).is_empty());
     }
 
     /// A select matching no registered rule (`MLC000` is produced by the

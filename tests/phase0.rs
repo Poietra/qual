@@ -323,7 +323,8 @@ fn rules_command_lists_reserved_ids_without_claiming_them() {
     assert!(execution.stdout.contains("MLC101  phase 1  implemented"));
     assert!(execution.stdout.contains("MLC107  phase 2  implemented"));
     assert!(execution.stdout.contains("MLC114  phase 2  reserved"));
-    assert!(execution.stdout.contains("MLP225  phase 3  reserved"));
+    assert!(execution.stdout.contains("MLP223  phase 3  reserved"));
+    assert!(execution.stdout.contains("MLP225  phase 3  implemented"));
     assert!(execution.stdout.contains("MLD307  phase 4  implemented"));
     assert!(execution.stdout.contains("MLR118  phase 4  reserved"));
     // Every catalog family appears.
