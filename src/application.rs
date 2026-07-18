@@ -304,12 +304,13 @@ fn compute_facts(
     let facts = frontend::index::analyze(sources, &config.source_roots, &surface);
     let lifecycle =
         semantic::interpreter::analyze(sources, &facts.index, &facts.calls, Some(profile));
-    let cost = cost::CostFacts::compute(
+    let cost = cost::CostFacts::compute_with_lifecycle(
         sources,
         &facts.index,
         &facts.calls,
         Some(profile),
         &config.active_profiles,
+        &lifecycle,
     );
     ProjectFacts {
         index: facts.index,

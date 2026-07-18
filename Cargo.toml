@@ -6,6 +6,7 @@ rust-version = "1.85"
 description = "Static lifecycle and performance analysis for Manim scenes"
 license = "MIT"
 repository = "https://github.com/example/manim-lint"
+default-run = "manim-lint"
 
 [[bin]]
 name = "manim-lint"

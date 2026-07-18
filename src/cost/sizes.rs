@@ -401,6 +401,14 @@ fn resolve_scene(
                             poison(&mut family_poison, target, index);
                         }
                     }
+                    // Path-construction methods (`set_points`,
+                    // `add_line_to`, `clear_points`, ...) change how much
+                    // geometry there is by definition — no curated guard
+                    // can preserve counts — but they never touch the
+                    // submobject family, so family facts survive.
+                    MutationKind::PathTopology => {
+                        poison(&mut geometry_poison, target, index);
+                    }
                     MutationKind::Style
                     | MutationKind::Opacity
                     | MutationKind::CameraState

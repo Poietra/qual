@@ -20,9 +20,10 @@ embedded into the binary at compile time and loaded via
 ## Source digest
 
 `source_digest` of `v0_20.json` is a SHA-256 over the Python sources of the
-sibling Manim checkout's package directory (working tree as of 2026-07-17,
-0.20.1 lineage, base commit `4d25c031` plus uncommitted fork changes),
-computed as:
+sibling Manim checkout's package directory (working tree as of 2026-07-18,
+0.20.1 lineage, base commit `4d25c031` plus uncommitted fork changes,
+verified drift-free by `sync_manim_knowledge --diff`: 0 missing symbols,
+0 contradictions, 0 warnings), computed as:
 
 ```sh
 cd /home/hosi/manim

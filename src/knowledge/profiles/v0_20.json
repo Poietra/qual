@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "upstream_0_20",
   "manim_version": ">=0.20,<0.21",
-  "source_digest": "sha256:f63cacd18c10daa9cca534a0b348c169bb7a0ade65d41ad4f6671afb4d38a99e",
+  "source_digest": "sha256:bb39270c22cca868b0d9097e92b8f5a34d92c70a904dc2c191d05f5aa83a98fb",
   "base_profile": null,
   "symbols": {
     "manim.animation.animation.Animation": {
