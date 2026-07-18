@@ -1,7 +1,9 @@
 //! Golden tests for the Phase 1 rendering rules (`MLR101`, `MLR103`,
-//! `MLR104`, `MLR105`, `MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`)
-//! and the Phase 2 state-dependent rules (`MLR102`, `MLR113`, `MLR114`,
-//! `MLR125`, `MLR127`).
+//! `MLR104`, `MLR105`, `MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`),
+//! the Phase 2 state-dependent rules (`MLR102`, `MLR113`, `MLR114`,
+//! `MLR116`, `MLR125`, `MLR127`), and the renderer-compatibility wave
+//! (`MLR107`, `MLR108`, `MLR110`, `MLR111`, `MLR112`, `MLR119`,
+//! `MLR120`, `MLR121`).
 //!
 //! Each rule has a fixture directory under `tests/fixtures/rules/<ID>/`
 //! (DESIGN §11.1): `invalid.py` (true positives plus one inline-suppressed
@@ -109,18 +111,27 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 /// Copies the fixture into a temp project, writes `pyproject.toml`, and
-/// runs the whole check pipeline.
-fn run_fixture(rule: &str, pyproject: &str) -> (tempfile::TempDir, Vec<Diagnostic>) {
+/// runs the whole check pipeline (optionally with `--profile`).
+fn run_fixture_with_profile(
+    rule: &str,
+    pyproject: &str,
+    profile: Option<&str>,
+) -> (tempfile::TempDir, Vec<Diagnostic>) {
     let project = tempfile::tempdir().unwrap();
     copy_dir(&fixture_root(rule), project.path());
     std::fs::write(project.path().join("pyproject.toml"), pyproject).unwrap();
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
+        profile: profile.map(str::to_owned),
         format: OutputFormat::Concise,
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline must succeed");
     (project, report.diagnostics)
+}
+
+fn run_fixture(rule: &str, pyproject: &str) -> (tempfile::TempDir, Vec<Diagnostic>) {
+    run_fixture_with_profile(rule, pyproject, None)
 }
 
 const DEFAULT_PYPROJECT: &str = "[tool.manim-lint]\n";
@@ -837,4 +848,362 @@ fn mlr127_flags_by_tex_keys_absent_from_the_literal() {
     );
     let parts = first.evidence.get("tex_arguments").expect("tex parts");
     assert!(parts.to_string().contains("a^2"));
+}
+
+// ---------------------------------------------------------------------------
+// Renderer-compatibility wave (MLR107/108/110/111/112/116/119/120/121).
+//
+// The renderer-gated rules run against a dual-profile config; `--profile
+// all` targets both renderers, the single-profile runs prove the
+// DESIGN §15.8 gate (no diagnostic without a matching-renderer profile).
+// ---------------------------------------------------------------------------
+
+/// A cairo + opengl profile pair with only `rules` selected.
+fn dual_renderer_pyproject(rules: &[&str]) -> String {
+    let select = rules
+        .iter()
+        .map(|rule| format!("\"{rule}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "[tool.manim-lint]\n\
+         select = [{select}]\n\
+         default-profile = \"cairo\"\n\
+         \n\
+         [[tool.manim-lint.profile]]\n\
+         name = \"cairo\"\n\
+         renderer = \"cairo\"\n\
+         \n\
+         [[tool.manim-lint.profile]]\n\
+         name = \"opengl\"\n\
+         renderer = \"opengl\"\n"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// MLR107
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr107_flags_curated_renderer_incompat_uses_under_the_flagged_renderer() {
+    let pyproject = dual_renderer_pyproject(&["MLR107"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR107", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            // The direct instantiation (call case)...
+            warning("MLR107", "MovingCameraScene()", 1, 0),
+            // ... and the direct base position of a class whose camera
+            // contract stays Unknown (so the specific MLR119 is silent).
+            warning("MLR107", "MovingCameraScene, ExportRig", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // Renderer-specific diagnostics carry only the flagged renderer's
+    // profiles (DESIGN §15.8).
+    let call = find(&diagnostics, "invalid.py", "MLR107", 0);
+    assert_eq!(call.applicable_profiles, vec!["opengl".to_owned()]);
+
+    // A run without any profile on the flagged renderer is silent.
+    let (_project, cairo_only) = run_fixture_with_profile("MLR107", &pyproject, Some("cairo"));
+    assert!(
+        cairo_only.is_empty(),
+        "cairo-only run must be silent: {cairo_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR108
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr108_flags_mutation_after_a_divergent_unfix_under_an_opengl_target() {
+    let pyproject = dual_renderer_pyproject(&["MLR108"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR108", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[warning("MLR108", "label.set_color(RED)", 1, 0)],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let stale = find(&diagnostics, "invalid.py", "MLR108", 0);
+    assert_eq!(stale.applicable_profiles, vec!["opengl".to_owned()]);
+    assert_eq!(
+        stale.evidence.get("removal").map(ToString::to_string),
+        Some("\"remove_fixed_in_frame_mobjects\"".to_owned())
+    );
+
+    // Cairo-only runs render exactly what the code assumes: silence.
+    let (_project, cairo_only) = run_fixture_with_profile("MLR108", &pyproject, Some("cairo"));
+    assert!(
+        cairo_only.is_empty(),
+        "cairo-only run must be silent: {cairo_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR110
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr110_flags_only_structural_tex_errors_in_the_literal_subset() {
+    let (project, diagnostics) =
+        run_fixture("MLR110", "[tool.manim-lint]\nselect = [\"MLR110\"]\n");
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            error("MLR110", "r\"a}b{c\"", 1, 0),
+            error("MLR110", "r\"\\begin{cases} x \\end{matrix}\"", 1, 0),
+            error("MLR110", "r\"\\begin{tabular} y\"", 1, 0),
+            // The multi-part joint scan anchors the offending part.
+            error("MLR110", "r\"} closes\"", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let crossed = find(&diagnostics, "invalid.py", "MLR110", 1);
+    assert_eq!(
+        crossed.evidence.get("error").map(ToString::to_string),
+        Some("\"crossed-environments\"".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR111
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr111_flags_scene_updaters_that_mutate_mobjects_under_cairo() {
+    let pyproject = dual_renderer_pyproject(&["MLR111"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR111", &pyproject, Some("cairo"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[warning(
+            "MLR111",
+            "self.add_updater(lambda dt: dot.shift(RIGHT * dt))",
+            1,
+            0,
+        )],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let updater = find(&diagnostics, "invalid.py", "MLR111", 0);
+    assert_eq!(updater.applicable_profiles, vec!["cairo".to_owned()]);
+
+    // The moving-scope partition is a Cairo mechanism: an OpenGL-only run
+    // is silent.
+    let (_project, opengl_only) = run_fixture_with_profile("MLR111", &pyproject, Some("opengl"));
+    assert!(
+        opengl_only.is_empty(),
+        "opengl-only run must be silent: {opengl_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR112
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr112_flags_literal_per_curve_layout_assumptions_per_renderer() {
+    let pyproject = dual_renderer_pyproject(&["MLR112"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR112", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR112", "self.points.reshape((-1, 4, 3))", 1, 0),
+            warning("MLR112", "self.points[0::4]", 1, 0),
+            warning("MLR112", "self.points.reshape(-1, 3, 3)", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // A 4-point (Cairo-layout) assumption breaks under OpenGL profiles
+    // and vice versa (DESIGN §15.8).
+    let cubic = find(&diagnostics, "invalid.py", "MLR112", 0);
+    assert_eq!(cubic.applicable_profiles, vec!["opengl".to_owned()]);
+    let quadratic = find(&diagnostics, "invalid.py", "MLR112", 2);
+    assert_eq!(quadratic.applicable_profiles, vec!["cairo".to_owned()]);
+
+    // A cairo-only run keeps only the OpenGL-layout assumption.
+    let (project, cairo_only) = run_fixture_with_profile("MLR112", &pyproject, Some("cairo"));
+    assert_file_diagnostics(
+        project.path(),
+        &cairo_only,
+        "invalid.py",
+        &[warning("MLR112", "self.points.reshape(-1, 3, 3)", 1, 0)],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR116
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr116_flags_path_edits_on_a_provably_empty_path_only() {
+    let (project, diagnostics) =
+        run_fixture("MLR116", "[tool.manim-lint]\nselect = [\"MLR116\"]\n");
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            error("MLR116", "path.add_line_to([1, 0, 0])", 1, 0),
+            error("MLR116", "loop.close_path()", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // A branch-dependent start_new_path joins the count to Maybe: silence.
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    // The evidence carries the proven point-count bounds.
+    let empty = find(&diagnostics, "invalid.py", "MLR116", 0);
+    assert_eq!(
+        empty.evidence.get("point_count").map(ToString::to_string),
+        Some("{\"lower\":0.0,\"upper\":0.0}".to_owned())
+    );
+    assert!(empty.message.contains("start_new_path"));
+}
+
+// ---------------------------------------------------------------------------
+// MLR119
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr119_flags_moving_camera_scenes_under_an_opengl_target() {
+    let pyproject = dual_renderer_pyproject(&["MLR119"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR119", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[error("MLR119", "MovingCameraScene):", 1, 0)],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // An Unknown camera contract (unresolvable mixin base) never fires.
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let incompatible = find(&diagnostics, "invalid.py", "MLR119", 0);
+    assert_eq!(incompatible.applicable_profiles, vec!["opengl".to_owned()]);
+    assert!(incompatible.message.contains("Cairo-only profile"));
+
+    let (_project, cairo_only) = run_fixture_with_profile("MLR119", &pyproject, Some("cairo"));
+    assert!(
+        cairo_only.is_empty(),
+        "cairo-only run must be silent: {cairo_only:?}"
+    );
+}
+
+/// On the shared base-class span the specific `MLR119` supersedes the
+/// generic `MLR107` (both selected); `MLR107` keeps its own territory
+/// (the direct instantiation and Unknown-camera bases).
+#[test]
+fn mlr119_supersedes_mlr107_on_the_shared_base_span() {
+    let pyproject = dual_renderer_pyproject(&["MLR107", "MLR119"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR119", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[error("MLR119", "MovingCameraScene):", 1, 0)],
+    );
+    // branch.py's Unknown-camera base is exactly MLR107 territory.
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "branch.py",
+        &[warning("MLR107", "MovingCameraScene, ExportRig", 1, 0)],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR120
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr120_flags_focal_distance_setters_under_an_opengl_target() {
+    let pyproject = dual_renderer_pyproject(&["MLR120"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR120", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR120", "focal_distance=5", 1, 15),
+            warning("MLR120", "focal_distance=8", 1, 15),
+        ],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let orientation = find(&diagnostics, "invalid.py", "MLR120", 0);
+    assert_eq!(orientation.applicable_profiles, vec!["opengl".to_owned()]);
+    assert!(orientation.message.contains("AttributeError"));
+    let moved = find(&diagnostics, "invalid.py", "MLR120", 1);
+    assert!(moved.message.contains("ignored"));
+
+    let (_project, cairo_only) = run_fixture_with_profile("MLR120", &pyproject, Some("cairo"));
+    assert!(
+        cairo_only.is_empty(),
+        "cairo-only run must be silent: {cairo_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR121
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr121_flags_z_moves_for_stacking_in_2d_cairo_scenes() {
+    let pyproject = dual_renderer_pyproject(&["MLR121"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR121", &pyproject, Some("cairo"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR121", "circle.shift(OUT)", 1, 0),
+            warning("MLR121", "square.set_z(1)", 1, 0),
+        ],
+    );
+    // ThreeDScene z-shifts, non-OUT shifts, set_z_index, and arithmetic
+    // on OUT all stay silent.
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    // A file re-binding OUT distrusts the constant: silence.
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let shifted = find(&diagnostics, "invalid.py", "MLR121", 0);
+    assert_eq!(shifted.applicable_profiles, vec!["cairo".to_owned()]);
+    assert!(shifted.message.contains("set_z_index"));
+
+    // The z coordinate is meaningful under OpenGL: silence there.
+    let (_project, opengl_only) = run_fixture_with_profile("MLR121", &pyproject, Some("opengl"));
+    assert!(
+        opengl_only.is_empty(),
+        "opengl-only run must be silent: {opengl_only:?}"
+    );
 }

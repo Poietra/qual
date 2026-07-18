@@ -8,18 +8,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rustpython_parser::text_size::{TextRange, TextSize};
+use rustpython_parser::text_size::TextRange;
 use serde_json::json;
 
 use crate::diagnostic::{
     Confidence, Diagnostic, Fix, FixApplicability, RuleMetadata, Severity, TextEdit,
 };
-use crate::frontend::index::{QualifiedCall, QualifiedCallFacts};
+use crate::frontend::index::QualifiedCallFacts;
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::events::Event;
 use crate::semantic::interpreter::{PlayFact, SceneLifecycle};
 use crate::semantic::values::{AllocationSite, KindSet, ObjectId, Presence, Truth};
 use crate::source::SourceFile;
+
+use super::{call_at, site_range};
 
 /// The canonical id of the base (non-drawable) `Mobject` class.
 const MOBJECT: &str = "manim.mobject.mobject.Mobject";
@@ -31,21 +33,6 @@ const SELF_NOOP_TRANSFORMS: &[&str] = &[
     "manim.animation.transform.ReplacementTransform",
     "manim.animation.transform.Transform",
 ];
-
-/// The parser byte range of a lifecycle allocation site.
-fn site_range(site: AllocationSite) -> TextRange {
-    TextRange::new(TextSize::from(site.start), TextSize::from(site.end))
-}
-
-/// The qualified-call fact whose whole call expression sits exactly at
-/// `site`, if the frontend collected one.
-fn call_at(facts: &QualifiedCallFacts, site: AllocationSite) -> Option<&QualifiedCall> {
-    facts.calls.iter().find(|call| {
-        call.file == site.file
-            && u32::from(call.call_range.start()) == site.start
-            && u32::from(call.call_range.end()) == site.end
-    })
-}
 
 // ---------------------------------------------------------------------------
 // MLR102: a bare `mob.animate` (no chained method) is played, and the

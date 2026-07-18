@@ -11,19 +11,33 @@
 //! over lifecycle facts (`rendering/state.rs`), plus the literal-driven
 //! `MLR114` (`rendering/points.rs`) and `MLR127` (`rendering/tex_keys.rs`).
 //!
-//! `MLR116` (`add_line_to` / `close_path` on a provably empty path) stays
-//! reserved: the interpreter does not track `point_count` for fresh
-//! `VMobjects` (it is always `Unknown`), so path emptiness is unprovable
-//! and the rule must not fake-fire (DESIGN §12 end).
+//! The renderer-compatibility wave adds `MLR116` over the interpreter's
+//! own-path state (`rendering/path_state.rs`), the renderer-profile-gated
+//! rules `MLR107` / `MLR119` / `MLR120` (`rendering/renderer.rs`),
+//! `MLR108` (`rendering/fixed_visibility.rs`), `MLR111`
+//! (`rendering/scene_updaters.rs`), `MLR112`
+//! (`rendering/points_layout.rs`), `MLR121` (`rendering/stacking.rs`),
+//! and the conservative literal-TeX balance rule `MLR110`
+//! (`rendering/tex_balance.rs`). Renderer-specific diagnostics restrict
+//! `applicable_profiles` to the affected renderer's profiles and stay
+//! silent when no active profile targets it (DESIGN §15 invariant 8).
 //!
-//! TODO(phase-4): renderer-dependent rules (`MLR107`-`MLR112`,
-//! `MLR118`-`MLR123`).
+//! Still reserved: `MLR109` (updater ordering lag), `MLR118` (SVG asset
+//! content facts), `MLR122` (per-object literal `z_index` facts), and
+//! `MLR123` (no curated mesh / `Object3D` class in the knowledge profile).
 
 mod assets;
+mod fixed_visibility;
 mod markup;
+mod path_state;
 mod points;
+mod points_layout;
+mod renderer;
+mod scene_updaters;
+mod stacking;
 mod state;
 mod tex;
+mod tex_balance;
 mod tex_keys;
 
 /// Shared with `rules::portability::paths` (MLD303/MLD305): recognizing
@@ -64,10 +78,19 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(UnresolvedAssetPath),
         Box::new(InvalidMarkupLiteral),
         Box::new(NonFiniteGeometryLiteral),
+        Box::new(renderer::UnsupportedRendererApi),
+        Box::new(fixed_visibility::StaleFixedVisibility),
+        Box::new(tex_balance::UnbalancedTexLiteral),
+        Box::new(scene_updaters::SceneUpdaterMutatesMobject),
+        Box::new(points_layout::FixedPointLayoutAssumption),
         Box::new(state::SelfTransform),
         Box::new(points::NonPoint3Literal),
         Box::new(NonPositiveFontSize),
+        Box::new(path_state::EmptyPathEdit),
         Box::new(BareRegisterFont),
+        Box::new(renderer::MovingCameraUnderOpengl),
+        Box::new(renderer::FocalDistanceUnderOpengl),
+        Box::new(stacking::ZShiftForStacking),
         Box::new(MarkupInPlainText),
         Box::new(state::BareMobjectLeaf),
         Box::new(OpacityStrokeRange),
@@ -101,6 +124,40 @@ const TEX_CONSTRUCTORS: &[&str] = &[MATH_TEX, SINGLE_MATH_TEX, TEX];
 // ---------------------------------------------------------------------------
 // Shared fact helpers.
 // ---------------------------------------------------------------------------
+
+/// The parser byte range of a lifecycle allocation site.
+pub(crate) fn site_range(site: crate::semantic::values::AllocationSite) -> TextRange {
+    TextRange::new(site.start.into(), site.end.into())
+}
+
+/// The qualified-call fact whose whole call expression sits exactly at
+/// `site`, if the frontend collected one.
+pub(crate) fn call_at(
+    facts: &crate::frontend::index::QualifiedCallFacts,
+    site: crate::semantic::values::AllocationSite,
+) -> Option<&QualifiedCall> {
+    facts.calls.iter().find(|call| {
+        call.file == site.file
+            && u32::from(call.call_range.start()) == site.start
+            && u32::from(call.call_range.end()) == site.end
+    })
+}
+
+/// Names of the active profiles targeting `renderer`, in run order.
+///
+/// Renderer-specific rules restrict `applicable_profiles` to this set and
+/// stay silent when it is empty (DESIGN §15 invariant 8).
+pub(crate) fn renderer_profile_names(
+    context: &RuleContext<'_>,
+    renderer: crate::config::model::Renderer,
+) -> Vec<String> {
+    context
+        .active_profiles()
+        .iter()
+        .filter(|profile| profile.renderer == renderer)
+        .map(|profile| profile.name.clone())
+        .collect()
+}
 
 /// The single knowledge entry every candidate of the set resolves to.
 ///
