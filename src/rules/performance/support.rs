@@ -10,17 +10,17 @@
 use std::collections::BTreeMap;
 
 use rustpython_parser::text_size::TextRange;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::config::model::RenderProfile;
+use crate::cost::CallExecution;
 use crate::cost::contexts::resolve_candidate;
-use crate::cost::estimator::frames_across_profiles;
+use crate::cost::liveness::{ExecutionCertainty, ExecutionPlay};
 use crate::diagnostic::{Diagnostic, RuleMetadata};
 use crate::frontend::index::{ProjectIndex, QualifiedCall, ReceiverKind};
 use crate::knowledge::{KnowledgeProfile, SymbolEntry};
 use crate::rules::base::RuleContext;
-use crate::semantic::interpreter::{LifecycleFacts, PlayKind, SceneLifecycle};
-use crate::semantic::values::{Num, Presence, Truth};
+use crate::semantic::interpreter::PlayKind;
+use crate::semantic::values::Num;
 use crate::source::SourceFile;
 
 /// Canonical id of `Scene.play`.
@@ -126,9 +126,9 @@ pub(crate) fn merge_evidence(evidence: &mut BTreeMap<String, Value>, value: Valu
 
 /// The scene lifecycle whose class encloses `call`, if any.
 pub(crate) fn enclosing_scene<'l>(
-    lifecycle: &'l LifecycleFacts,
+    lifecycle: &'l crate::semantic::interpreter::LifecycleFacts,
     call: &QualifiedCall,
-) -> Option<&'l SceneLifecycle> {
+) -> Option<&'l crate::semantic::interpreter::SceneLifecycle> {
     let class_name = call.context.class_name.as_ref()?;
     lifecycle
         .scenes
@@ -136,53 +136,45 @@ pub(crate) fn enclosing_scene<'l>(
         .find(|scene| &scene.qualified_name == class_name)
 }
 
-/// Total rendered-frame estimate of the plays of `scene` at or after the
-/// byte where `call` starts, joined across the analyzed profiles.
-///
-/// Only plays that actually run per-frame callbacks are counted (`play`
-/// calls and provably dynamic waits). Returns `Some` only when **every**
-/// counted play has a fully bounded literal duration; a single unknown
-/// duration yields `None` so no fabricated frame count can appear
-/// (DESIGN §15 invariant 9). Maybe-path plays widen only the upper bound.
-pub(crate) fn scene_frames_after(
-    scene: &SceneLifecycle,
-    call: &QualifiedCall,
-    profiles: &[RenderProfile],
-) -> Option<Num> {
-    let call_start = u32::from(call.call_range.start());
-    let mut lower = 0.0_f64;
-    let mut upper = 0.0_f64;
-    let mut counted = false;
-    for play in &scene.plays {
-        if play.site.file != call.file || play.site.start < call_start {
-            continue;
-        }
-        if play.kind == PlayKind::Wait && play.dynamic_wait != Truth::Yes {
-            // A static wait never invokes per-frame callbacks.
-            continue;
-        }
-        let (Some(play_lower), Some(play_upper)) =
-            (play.duration.lower_bound(), play.duration.upper_bound())
-        else {
-            return None;
-        };
-        counted = true;
-        if play.certainty == Presence::Present {
-            lower += play_lower;
-        }
-        upper += play_upper;
-    }
-    if !counted || profiles.is_empty() {
-        return None;
-    }
-    let span = Num::Interval {
-        lo: Some(lower),
-        hi: Some(upper),
+/// `path:line:column` of one execution play's call site, for evidence and
+/// report rows.
+pub(crate) fn play_location(context: &RuleContext<'_>, play: &ExecutionPlay) -> String {
+    let file = context.sources().file(play.site.file);
+    let position = file.position_of_byte(play.site.start as usize);
+    format!(
+        "{path}:{line}:{column}",
+        path = file.relative_path(),
+        line = position.line,
+        column = position.column,
+    )
+}
+
+/// Machine-readable list of the execution plays a per-frame claim counts
+/// (DESIGN §15: the claim must be auditable — each entry names the play's
+/// span, kind, and whether execution there is proven or only possible).
+pub(crate) fn execution_plays_json(
+    context: &RuleContext<'_>,
+    execution: &CallExecution<'_>,
+) -> Value {
+    let entry = |play: &ExecutionPlay| {
+        json!({
+            "location": play_location(context, play),
+            "kind": match play.kind {
+                PlayKind::Play => "play",
+                PlayKind::Wait => "wait",
+            },
+            "certainty": match play.certainty {
+                ExecutionCertainty::Proven => "proven",
+                ExecutionCertainty::Maybe => "maybe",
+            },
+        })
     };
-    match frames_across_profiles(&span, profiles) {
-        frames @ (Num::Exact(_) | Num::Interval { .. }) => Some(frames),
-        Num::Symbol(_) | Num::Unknown => None,
-    }
+    let mut plays: Vec<Value> = execution.proven.iter().map(|play| entry(play)).collect();
+    plays.extend(execution.maybe.iter().map(|play| entry(play)));
+    json!({
+        "plays": plays,
+        "unresolved_entries": execution.unresolved,
+    })
 }
 
 /// Renders a frame-count estimate for prose: `~120` / `~120 to ~480` when

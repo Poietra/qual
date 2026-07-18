@@ -15,6 +15,13 @@
 //! (no repeated-query analysis is required once the family is confirmed
 //! large); `MLP224` claims the `point_from_proportion` entries under the
 //! large-points gate and supersedes `MLP203` on them.
+//!
+//! All three are additionally **liveness-gated** (DESIGN §3.2/§3.3, §15):
+//! the per-frame claim requires a play that provably executes the updater
+//! (`CostFacts::call_execution`) — a host suspended by every play that
+//! could run its callback, or one that only sees static waits, provably
+//! never pays the per-frame cost, and each catalog minimum (`high`)
+//! forbids firing on only-maybe evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,7 +35,7 @@ use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::values::Num;
 
 use super::redraw_geometry::stable_redraw_call_indices;
-use super::support::{build_diagnostic, merge_evidence};
+use super::support::{build_diagnostic, execution_plays_json, merge_evidence};
 
 /// The family-walk method routed to `MLP224` (DESIGN §7.3:
 /// "`point_from_proportion` は `MLP224` を優先する").
@@ -55,14 +62,20 @@ fn emit_gated<'f>(
 
 /// Common evidence of a receiver-sized fact: the confirmed gate(s), the
 /// receiver's real size bounds (unknown fields omitted, never fabricated),
-/// the method, and the hot-context provenance.
+/// the method, the hot-context provenance, and the proven execution plays
+/// the per-frame claim counts.
 fn receiver_evidence(
+    context: &crate::rules::base::RuleContext<'_>,
     cost: &CostFacts,
     fact: &HotTargetSizeFact,
     gates: &[(&Threshold, &Num)],
 ) -> BTreeMap<String, Value> {
     let mut evidence = BTreeMap::new();
     merge_evidence(&mut evidence, cost.evidence_for(fact.call_index));
+    evidence.insert(
+        "execution".to_owned(),
+        execution_plays_json(context, &cost.call_execution(fact.call_index)),
+    );
     evidence.insert("method".to_owned(), Value::String(fact.method.clone()));
     evidence.insert("scene".to_owned(), Value::String(fact.scene.clone()));
     for (key, value) in [
@@ -148,13 +161,15 @@ impl Rule for HotFamilyCopy {
             cost.copy_align_targets_in_hot_contexts(),
             &skip,
             |fact| {
-                LARGE_FAMILY_GATE.confirmed_by(&fact.sizes.family)
-                    || LARGE_POINTS_GATE.confirmed_by(&fact.sizes.points)
+                (LARGE_FAMILY_GATE.confirmed_by(&fact.sizes.family)
+                    || LARGE_POINTS_GATE.confirmed_by(&fact.sizes.points))
+                    && cost.call_execution(fact.call_index).has_proven()
             },
             |fact| {
                 let call = &context.qualified_calls().calls[fact.call_index];
                 let file = context.sources().file(call.file);
                 let evidence = receiver_evidence(
+                    context,
                     cost,
                     fact,
                     &[
@@ -239,12 +254,19 @@ impl Rule for HotFamilyWalk {
             cost.family_walk_queries_in_hot_contexts()
                 .filter(|fact| fact.method != POINT_FROM_PROPORTION),
             &BTreeSet::new(),
-            |fact| LARGE_FAMILY_GATE.confirmed_by(&fact.sizes.family),
+            |fact| {
+                LARGE_FAMILY_GATE.confirmed_by(&fact.sizes.family)
+                    && cost.call_execution(fact.call_index).has_proven()
+            },
             |fact| {
                 let call = &context.qualified_calls().calls[fact.call_index];
                 let file = context.sources().file(call.file);
-                let evidence =
-                    receiver_evidence(cost, fact, &[(&LARGE_FAMILY_GATE, &fact.sizes.family)]);
+                let evidence = receiver_evidence(
+                    context,
+                    cost,
+                    fact,
+                    &[(&LARGE_FAMILY_GATE, &fact.sizes.family)],
+                );
                 diagnostics.push(build_diagnostic(
                     &MLP203,
                     context,
@@ -319,12 +341,19 @@ impl Rule for HotPointFromProportion {
             cost.family_walk_queries_in_hot_contexts()
                 .filter(|fact| fact.method == POINT_FROM_PROPORTION),
             &BTreeSet::new(),
-            |fact| LARGE_POINTS_GATE.confirmed_by(&fact.sizes.points),
+            |fact| {
+                LARGE_POINTS_GATE.confirmed_by(&fact.sizes.points)
+                    && cost.call_execution(fact.call_index).has_proven()
+            },
             |fact| {
                 let call = &context.qualified_calls().calls[fact.call_index];
                 let file = context.sources().file(call.file);
-                let evidence =
-                    receiver_evidence(cost, fact, &[(&LARGE_POINTS_GATE, &fact.sizes.points)]);
+                let evidence = receiver_evidence(
+                    context,
+                    cost,
+                    fact,
+                    &[(&LARGE_POINTS_GATE, &fact.sizes.points)],
+                );
                 diagnostics.push(build_diagnostic(
                     &MLP224,
                     context,

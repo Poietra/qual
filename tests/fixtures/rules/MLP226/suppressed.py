@@ -6,4 +6,4 @@ class Demo(Scene):
         tracker = ValueTracker(0)
         label = always_redraw(lambda: MathTex(f"x={tracker.get_value()}"))  # manim-lint: ignore[MLP226]
         self.add(label)
-        self.play(FadeIn(label), run_time=8)
+        self.play(tracker.animate.set_value(1), run_time=8)

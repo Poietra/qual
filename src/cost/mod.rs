@@ -10,7 +10,13 @@
 //! surface the `MLP2xx` rules consume:
 //!
 //! - [`CostFacts::is_call_in_hot_context`] / [`CostFacts::hot_contexts_for`]
-//!   — whether a call fact provably runs per frame, with provenance;
+//!   — whether a call fact is reachable from a per-frame entry point, with
+//!   provenance;
+//! - [`CostFacts::call_execution`] / [`CostFacts::proven_frames_for_call`]
+//!   — the [`liveness`] layer: the plays where the enclosing callback
+//!   **provably executes** per frame (registration active, host in the
+//!   scene family, not suspended by the play's animations, dynamic wait),
+//!   and the frame estimate summed over those plays only;
 //! - [`CostFacts::frames_for_play`] — the symbolic / interval frame count of
 //!   a recognized `play` / `wait` call;
 //! - [`CostFacts::evidence_for`] — the DESIGN §6.3 evidence JSON of a call;
@@ -47,11 +53,12 @@
 pub mod contexts;
 pub mod estimator;
 pub mod geometry;
+pub mod liveness;
 pub mod model;
 pub mod sizes;
 pub mod thresholds;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -65,6 +72,7 @@ use crate::source::{FileId, SourceManager};
 
 use contexts::{HotContext, HotContextFacts, HotEntryKind, hot_contexts, resolve_candidate};
 use estimator::{Evidence, frames_across_profiles, play_run_time, symbolic_frames, wait_duration};
+use liveness::{EntryKey, EntryLiveness, ExecutionCertainty, ExecutionPlay};
 use model::{CostDimension, CostFact, InvocationContext, Multiplicity, OperationKind};
 use sizes::{ObjectSizes, SizeFacts};
 
@@ -206,6 +214,36 @@ pub struct ResourceKeyFact {
     pub keys: Num,
 }
 
+/// Aggregated execution liveness of one call fact (DESIGN §3.2/§3.3):
+/// the union over every hot context the call runs under.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallExecution<'facts> {
+    /// Plays where the enclosing callback provably executes per frame.
+    pub proven: Vec<&'facts ExecutionPlay>,
+    /// Plays where it may execute (not provable either way).
+    pub maybe: Vec<&'facts ExecutionPlay>,
+    /// At least one entry root could not be tied to the lifecycle facts:
+    /// execution is possible beyond the listed plays, and "provably
+    /// never" cannot be claimed.
+    pub unresolved: bool,
+}
+
+impl CallExecution<'_> {
+    /// Whether at least one play provably executes the callback.
+    #[must_use]
+    pub fn has_proven(&self) -> bool {
+        !self.proven.is_empty()
+    }
+
+    /// Whether execution is at least possible (maybe plays or an
+    /// unresolved entry). `false` together with [`Self::has_proven`]
+    /// `false` means the callback provably never runs per frame.
+    #[must_use]
+    pub fn possibly_executes(&self) -> bool {
+        self.unresolved || !self.maybe.is_empty()
+    }
+}
+
 /// Aggregated symbolic cost facts of the analyzed project.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CostFacts {
@@ -235,6 +273,10 @@ pub struct CostFacts {
     /// Statically proven per-invocation allocation bytes of recognized
     /// ndarray constructions, keyed by call-fact index.
     pub allocation_bytes: BTreeMap<usize, Num>,
+    /// Per-entry execution liveness resolved against the lifecycle facts
+    /// (DESIGN §3.2 updater suspension, §3.3 wait dynamics): which plays
+    /// provably (or possibly) run each hot callback per frame.
+    pub liveness: BTreeMap<EntryKey, EntryLiveness>,
     /// Source site of every call fact, aligned by call index (query
     /// anchor for the size facts).
     call_sites: Vec<AllocationSite>,
@@ -289,6 +331,7 @@ impl CostFacts {
             ..Self::default()
         };
         facts.collect_allocation_bytes(calls);
+        facts.liveness = liveness::resolve_liveness(&facts.hot, lifecycle);
         let Some(knowledge) = knowledge else {
             return facts;
         };
@@ -304,6 +347,116 @@ impl CostFacts {
     #[must_use]
     pub fn is_call_in_hot_context(&self, call_index: usize) -> Option<&HotContext> {
         self.hot.contexts_for_call(call_index).first()
+    }
+
+    /// The resolved liveness of one hot context's entry root, if any.
+    #[must_use]
+    pub fn context_liveness(&self, context: &HotContext) -> Option<&EntryLiveness> {
+        self.liveness.get(&liveness::entry_key(context)?)
+    }
+
+    /// Aggregated execution liveness of a call fact over every hot
+    /// context it runs under (DESIGN §3.2/§3.3): the plays where the
+    /// enclosing callback provably or possibly executes per frame.
+    #[must_use]
+    pub fn call_execution(&self, call_index: usize) -> CallExecution<'_> {
+        let mut keys: BTreeSet<EntryKey> = BTreeSet::new();
+        let mut unresolved = false;
+        for context in self.hot.contexts_for_call(call_index) {
+            match liveness::entry_key(context) {
+                Some(key) => {
+                    keys.insert(key);
+                }
+                None => unresolved = true,
+            }
+        }
+        let mut proven: Vec<&ExecutionPlay> = Vec::new();
+        let mut maybe: Vec<&ExecutionPlay> = Vec::new();
+        let mut seen: BTreeSet<(&str, AllocationSite)> = BTreeSet::new();
+        for key in &keys {
+            let Some(entry) = self.liveness.get(key) else {
+                unresolved = true;
+                continue;
+            };
+            if !entry.resolved {
+                unresolved = true;
+                continue;
+            }
+            for play in &entry.plays {
+                if !seen.insert((play.scene.as_str(), play.site)) {
+                    continue;
+                }
+                match play.certainty {
+                    ExecutionCertainty::Proven => proven.push(play),
+                    ExecutionCertainty::Maybe => maybe.push(play),
+                }
+            }
+        }
+        CallExecution {
+            proven,
+            maybe,
+            unresolved,
+        }
+    }
+
+    /// Frame-count estimate of a hot call's per-frame executions, summed
+    /// **only** over the plays where the callback provably executes;
+    /// maybe plays (and unresolved entries) widen the upper bound only.
+    /// `None` when no play provably executes the callback or no real
+    /// bound survives — never a fabricated number (DESIGN §15
+    /// invariant 9).
+    #[must_use]
+    pub fn proven_frames_for_call(&self, call_index: usize) -> Option<Num> {
+        let execution = self.call_execution(call_index);
+        if execution.proven.is_empty() || self.profiles.is_empty() {
+            return None;
+        }
+        // Per-scene duration sums (a rendered project runs each scene's
+        // plays in sequence), joined into one hull across scenes.
+        let mut per_scene: BTreeMap<&str, (f64, Option<f64>)> = BTreeMap::new();
+        for play in &execution.proven {
+            let entry = per_scene
+                .entry(play.scene.as_str())
+                .or_insert((0.0, Some(0.0)));
+            if play.full_duration_proven {
+                entry.0 += play.duration.lower_bound().unwrap_or(0.0);
+            }
+            entry.1 = match (entry.1, play.duration.upper_bound()) {
+                (Some(current), Some(upper)) => Some(current + upper),
+                _ => None,
+            };
+        }
+        for play in &execution.maybe {
+            let entry = per_scene
+                .entry(play.scene.as_str())
+                .or_insert((0.0, Some(0.0)));
+            entry.1 = match (entry.1, play.duration.upper_bound()) {
+                (Some(current), Some(upper)) => Some(current + upper),
+                _ => None,
+            };
+        }
+        let mut joined: Option<Num> = None;
+        for (lower, upper) in per_scene.values() {
+            let duration = Num::Interval {
+                lo: Some(*lower),
+                hi: if execution.unresolved { None } else { *upper },
+            };
+            let frames = frames_across_profiles(&duration, &self.profiles);
+            joined = Some(match joined {
+                None => frames,
+                Some(current) => current.join(&frames),
+            });
+        }
+        match joined {
+            Some(frames @ (Num::Exact(_) | Num::Interval { .. })) => {
+                // A quantity with neither a positive lower bound nor an
+                // upper bound proves nothing; report no number at all.
+                let informative = frames.lower_bound().is_some_and(|lower| lower > 0.0)
+                    || frames.upper_bound().is_some();
+                informative.then_some(frames)
+            }
+            _ => None,
+        }
     }
 
     /// Every hot context of a call fact (empty when cold / unknown).

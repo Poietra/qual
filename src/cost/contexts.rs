@@ -1,9 +1,11 @@
 //! Hot-context identification and propagation (DESIGN §4.2).
 //!
 //! Works over [`QualifiedCallFacts`] and the [`ProjectIndex`] alone — the
-//! lifecycle interpreter is not required. When the interpreter lands, its
-//! event trace can be layered on as an additional (optional) input to refine
-//! multiplicities per play; the facts produced here stay valid without it.
+//! lifecycle interpreter is not required. A hot context proves only
+//! **reachability** from a per-frame entry point; whether the callback
+//! actually executes during a given play (registration active, host in
+//! the scene family, not suspended, dynamic wait) is the
+//! [`super::liveness`] layer, resolved against the lifecycle facts.
 //!
 //! Recognized per-frame entry points (DESIGN §4.2):
 //!
@@ -37,7 +39,7 @@ use crate::frontend::index::{
 use crate::frontend::names::Binding;
 use crate::knowledge::{KnowledgeProfile, SymbolEntry, SymbolKind};
 use crate::semantic::events::{InvocationContext, Multiplicity};
-use crate::semantic::values::Num;
+use crate::semantic::values::{AllocationSite, Num};
 use crate::source::{FileId, SourceManager};
 
 /// Maximum provenance-chain depth kept while propagating hotness through
@@ -121,6 +123,12 @@ pub struct HotContext {
     pub multiplicity: Multiplicity,
     /// Function enclosing the entry point (e.g. `construct`), if any.
     pub origin: Option<String>,
+    /// Source site of the registering expression: the whole
+    /// `add_updater` / `always_redraw` / `UpdateFromFunc` / `wait` call
+    /// for call-site entries, the overriding `def` for interpolate
+    /// overrides. Liveness resolution matches this against the lifecycle
+    /// facts (registration sites, play sites, played-animation sites).
+    pub entry_call: AllocationSite,
     /// Provenance chain, entry step first.
     pub chain: Vec<ProvenanceStep>,
 }
@@ -263,6 +271,10 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the entry-point seeding and worklist propagation form one algorithm"
+    )]
     fn build(mut self) -> HotContextFacts {
         // The fact inputs are `&'a` fields; hoisting them to locals keeps
         // their borrows independent of the `&mut self` recording calls.
@@ -295,6 +307,7 @@ impl Builder<'_> {
                     context: InvocationContext::FrameCallback,
                     multiplicity: per_frame_multiplicity(),
                     origin: call.context.function.clone(),
+                    entry_call: AllocationSite::new(call.file, call.call_range),
                     chain: vec![step],
                 };
                 if let Region::Function(id) = &region {
@@ -330,6 +343,7 @@ impl Builder<'_> {
                     context: InvocationContext::FrameCallback,
                     multiplicity: per_frame_multiplicity(),
                     origin: None,
+                    entry_call: AllocationSite::new(class_file, range),
                     chain: vec![step],
                 };
                 self.record_function(&function_id, &context);

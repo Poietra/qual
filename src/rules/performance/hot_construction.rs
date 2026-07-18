@@ -5,6 +5,16 @@
 //! on the same primary span (DESIGN §7.3 specificity ordering), so the
 //! frame-varying call indices are excluded from `MLP201` here — the same
 //! span never carries both diagnostics.
+//!
+//! Both rules are **liveness-gated** (DESIGN §3.2/§3.3, §15): a hot
+//! context only proves reachability from a per-frame entry point, so a
+//! diagnostic fires only when at least one play *provably executes* the
+//! callback per frame (`CostFacts::call_execution`). A callback that is
+//! suspended during every play that could run it (e.g. the host is the
+//! target of the play's own `FadeIn`) and sees only static waits provably
+//! never runs per frame — silence, not a downgraded warning. Only-maybe
+//! evidence also stays silent: both catalog minima are `high`, and no
+//! high-confidence claim may rest on a Maybe fact.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +27,8 @@ use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::values::Num;
 
 use super::support::{
-    build_diagnostic, conclusive_target, display_frames, enclosing_scene, merge_evidence,
-    scene_frames_after, short_name,
+    build_diagnostic, conclusive_target, display_frames, execution_plays_json, merge_evidence,
+    short_name,
 };
 
 /// Canonical ids of the provably expensive constructors `MLP201` covers
@@ -109,6 +119,13 @@ impl Rule for HotExpensiveConstruction {
             let Some(hot) = cost.is_call_in_hot_context(construction.call_index) else {
                 continue;
             };
+            // Liveness gate: at least one play must provably execute the
+            // callback per frame (suspension / static waits / removals
+            // otherwise make the per-frame claim false).
+            let execution = cost.call_execution(construction.call_index);
+            if !execution.has_proven() {
+                continue;
+            }
             let file = context.sources().file(call.file);
             let class = short_name(&canonical);
             let mut evidence = BTreeMap::new();
@@ -118,6 +135,10 @@ impl Rule for HotExpensiveConstruction {
                 "entry".to_owned(),
                 Value::String(hot.entry.label().to_owned()),
             );
+            evidence.insert(
+                "execution".to_owned(),
+                execution_plays_json(context, &execution),
+            );
             diagnostics.push(build_diagnostic(
                 &MLP201,
                 context,
@@ -126,8 +147,10 @@ impl Rule for HotExpensiveConstruction {
                 format!(
                     "`{class}` is constructed inside a per-frame callback \
                      ({entry}): the full construction cost runs once per \
-                     rendered frame of every play this callback is live in.",
+                     rendered frame of {count} play(s) where the callback \
+                     provably executes.",
                     entry = hot.entry.label(),
+                    count = execution.proven.len(),
                 ),
                 format!(
                     "Constructing `{class}` includes shaping / parsing / family \
@@ -198,20 +221,29 @@ impl Rule for FrameVaryingResourceKey {
             let Some(hot) = cost.is_call_in_hot_context(fact.call_index) else {
                 continue;
             };
+            // Liveness gate: the per-frame key claim needs a play that
+            // provably executes the callback per frame.
+            let execution = cost.call_execution(fact.call_index);
+            if !execution.has_proven() {
+                continue;
+            }
             let file = context.sources().file(call.file);
             let class = short_name(&canonical);
 
-            // Bind the distinct-key count to real frame bounds only when
-            // every subsequent play of the enclosing scene has a literal
-            // duration; otherwise the estimate stays "per-frame".
-            let bounded_frames = enclosing_scene(context.lifecycle_facts(), call)
-                .and_then(|scene| scene_frames_after(scene, call, profiles));
+            // Bind the distinct-key count to real frame bounds summed over
+            // the proven execution plays only (maybe plays widen the upper
+            // bound); otherwise the estimate stays "per-frame".
+            let bounded_frames = cost.proven_frames_for_call(fact.call_index);
             let keys = bounded_frames.clone().unwrap_or_else(symbolic_frames);
 
             let evidence_json = Evidence::for_hot_context(hot, keys.clone(), profiles).to_json();
             let mut evidence = BTreeMap::new();
             merge_evidence(&mut evidence, evidence_json);
             evidence.insert("symbol".to_owned(), Value::String(canonical.clone()));
+            evidence.insert(
+                "execution".to_owned(),
+                execution_plays_json(context, &execution),
+            );
             evidence.insert(
                 "distinct_resource_keys".to_owned(),
                 match &keys {
@@ -224,8 +256,9 @@ impl Rule for FrameVaryingResourceKey {
 
             let quantified = match &keys {
                 Num::Exact(_) | Num::Interval { .. } => format!(
-                    " Across the literal play durations of the enclosing scene \
-                     this may create {frames} distinct keys.",
+                    " Across the {count} play(s) where this callback provably \
+                     executes it may create {frames} distinct keys.",
+                    count = execution.proven.len(),
                     frames = display_frames(&keys),
                 ),
                 Num::Symbol(_) | Num::Unknown => String::new(),

@@ -180,6 +180,10 @@ pub struct PlayFact {
     /// (MLP227): `No` is the Manim default, literal assignments set it
     /// exactly, non-literal writes degrade it to `Maybe`.
     pub always_update_mobjects: Truth,
+    /// A `*args` splat appeared among the play arguments: the compiled
+    /// animation list is incomplete, so untracked animations may target
+    /// (and suspend) any mobject.
+    pub star_args: bool,
     /// Path certainty of the call itself.
     pub certainty: Presence,
 }
@@ -265,6 +269,11 @@ pub struct UpdaterRemoval {
     /// `Yes` (matched and removed), `No` (definitely no registered
     /// updater has this identity — e.g. a fresh lambda), `Maybe`.
     pub matched: Truth,
+    /// Path certainty of the removal call itself: `Present` when the
+    /// removal runs on every path, `Maybe` on branch- / loop-dependent
+    /// paths (the registered-updater set then still may-contains the
+    /// callback after a matched removal).
+    pub certainty: Presence,
 }
 
 /// One `.animate` builder (MLC113 / MLC117 / MLR102).
@@ -3138,11 +3147,13 @@ impl<'a> Machine<'a, '_> {
             }
         };
         if self.emit {
+            let certainty = self.certainty();
             self.sink.updater_removals.push(UpdaterRemoval {
                 site,
                 host: host.map_or(UpdaterHost::Scene, |id| UpdaterHost::Mobject(id.clone())),
                 callback: callback.clone(),
                 matched,
+                certainty,
             });
         }
         self.record(
@@ -3642,13 +3653,17 @@ impl<'a> Machine<'a, '_> {
             }
         }
         if let Some(argument) = fact.and_then(|fact| fact.keyword("suspend_mobject_updating")) {
-            if let Some(flag) = literal_bool(argument) {
-                animation.suspend = if flag {
-                    SuspendBehavior::SuspendsLiveTargets
-                } else {
-                    SuspendBehavior::LeavesUpdatersRunning
-                };
-            }
+            // The DESIGN §3.2 escape hatch: only a literal proves the
+            // behavior; a non-literal value makes suspension Unknown —
+            // never "definitely suspends" (DESIGN §15 invariant 2).
+            animation.suspend = match literal_bool(argument) {
+                Some(true) => SuspendBehavior::SuspendsLiveTargets,
+                Some(false) => SuspendBehavior::LeavesUpdatersRunning,
+                None => SuspendBehavior::Unknown,
+            };
+        } else if fact.is_some_and(|fact| fact.has_star_star_kwargs) {
+            // A `**kwargs` splat may carry `suspend_mobject_updating`.
+            animation.suspend = SuspendBehavior::Unknown;
         }
 
         // MoveToTarget / Restore requirements against the current state
@@ -4586,7 +4601,8 @@ impl<'a> Machine<'a, '_> {
             self.eval_expr(&keyword.value, state);
         }
 
-        // 2. apply play kwargs to every animation (setattr semantics).
+        // 2. apply play kwargs to every animation (setattr semantics,
+        //    scene.py compile_animations).
         if let Some(run_time) = fact
             .and_then(|fact| fact.keyword("run_time"))
             .and_then(literal_num)
@@ -4599,6 +4615,28 @@ impl<'a> Machine<'a, '_> {
                     if let Some(animation_state) = state.animations.get_mut(id) {
                         animation_state.run_time = run_time.clone();
                     }
+                }
+            }
+        }
+        // A play-level `suspend_mobject_updating` overrides every
+        // animation's constructor value; a literal proves the behavior, a
+        // non-literal (or a `**kwargs` splat that may carry the key)
+        // degrades it to Unknown — never "definitely suspends".
+        let play_suspend = match fact.and_then(|fact| fact.keyword("suspend_mobject_updating")) {
+            Some(argument) => Some(match literal_bool(argument) {
+                Some(true) => SuspendBehavior::SuspendsLiveTargets,
+                Some(false) => SuspendBehavior::LeavesUpdatersRunning,
+                None => SuspendBehavior::Unknown,
+            }),
+            None if fact.is_some_and(|fact| fact.has_star_star_kwargs) => {
+                Some(SuspendBehavior::Unknown)
+            }
+            None => None,
+        };
+        if let Some(suspend) = play_suspend {
+            for played in &mut compiled {
+                if let Some(animation_state) = &mut played.state {
+                    animation_state.suspend = suspend;
                 }
             }
         }
@@ -4874,6 +4912,10 @@ impl<'a> Machine<'a, '_> {
                 has_stop_condition: false,
                 frozen_frame: None,
                 always_update_mobjects: always_update,
+                star_args: call
+                    .args
+                    .iter()
+                    .any(|arg| matches!(arg, ast::Expr::Starred(_))),
                 certainty,
             });
         }
@@ -4969,6 +5011,7 @@ impl<'a> Machine<'a, '_> {
                 has_stop_condition,
                 frozen_frame,
                 always_update_mobjects: always_update,
+                star_args: false,
                 certainty: self.certainty(),
             });
         }

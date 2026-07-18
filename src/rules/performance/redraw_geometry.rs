@@ -129,6 +129,14 @@ fn stable_redraws(context: &RuleContext<'_>) -> Vec<StableRedraw> {
         if !hot_via_always_redraw {
             continue;
         }
+        // Liveness (DESIGN §3.2/§3.3): a factory whose updater provably
+        // never executes per frame (suspended during every play, only
+        // static waits) rebuilds nothing — silence. Proven or possible
+        // execution keeps the advisory (info/medium) diagnostic.
+        let execution = cost.call_execution(*constructor_index);
+        if !execution.has_proven() && !execution.possibly_executes() {
+            continue;
+        }
         redraws.push(StableRedraw {
             redraw_index,
             constructor_index: *constructor_index,
@@ -187,6 +195,13 @@ impl Rule for StableGeometryRedraw {
             let class = short_name(&redraw.canonical);
             let mut evidence = BTreeMap::new();
             merge_evidence(&mut evidence, cost.evidence_for(redraw.constructor_index));
+            evidence.insert(
+                "execution".to_owned(),
+                super::support::execution_plays_json(
+                    context,
+                    &cost.call_execution(redraw.constructor_index),
+                ),
+            );
             evidence.insert(
                 "constructed".to_owned(),
                 Value::String(redraw.canonical.clone()),

@@ -1,4 +1,11 @@
 //! `MLP204`: scene-graph growth inside an updater (DESIGN §7.3).
+//!
+//! Liveness-gated (DESIGN §3.2/§3.3, §15): the `O(F)` growth claim
+//! requires a play that provably executes the callback per frame
+//! (`CostFacts::call_execution`) — an updater suspended during every
+//! play, or one that only ever sees static waits, provably never grows
+//! the scene, and the catalog minimum (`high`) forbids firing on
+//! only-maybe evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,7 +15,9 @@ use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::knowledge::SceneMembershipEffect;
 use crate::rules::base::{Rule, RuleContext};
 
-use super::support::{build_diagnostic, conclusive_target, merge_evidence, short_name};
+use super::support::{
+    build_diagnostic, conclusive_target, execution_plays_json, merge_evidence, short_name,
+};
 
 /// Metadata for [`HotSceneGraphGrowth`].
 pub const MLP204: RuleMetadata = RuleMetadata {
@@ -72,11 +81,21 @@ impl Rule for HotSceneGraphGrowth {
             let Some(hot) = cost.is_call_in_hot_context(mutation.call_index) else {
                 continue;
             };
+            // Liveness gate: the growth claim needs a play that provably
+            // executes the callback per frame.
+            let execution = cost.call_execution(mutation.call_index);
+            if !execution.has_proven() {
+                continue;
+            }
             let file = context.sources().file(call.file);
             let method = short_name(&canonical);
             let mut evidence = BTreeMap::new();
             merge_evidence(&mut evidence, cost.evidence_for(mutation.call_index));
             evidence.insert("symbol".to_owned(), Value::String(canonical.clone()));
+            evidence.insert(
+                "execution".to_owned(),
+                execution_plays_json(context, &execution),
+            );
             evidence.insert(
                 "adds_fresh_allocation".to_owned(),
                 Value::Bool(mutation.adds_fresh_allocation),

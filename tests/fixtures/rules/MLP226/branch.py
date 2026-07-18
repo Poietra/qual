@@ -6,4 +6,4 @@ class Demo(Scene):
         tracker = ValueTracker(0)
         label = always_redraw(lambda: MathTex("x = " + str(tracker.get_value())))
         self.add(label)
-        self.play(FadeIn(label), run_time=8)
+        self.play(tracker.animate.set_value(1), run_time=8)

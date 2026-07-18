@@ -92,27 +92,34 @@ fn assert_golden(rule: &str, expected: &[&str]) {
 
 #[test]
 fn mlp201_hot_expensive_construction_golden() {
-    // `valid.py` (cold constructions, DecimalNumber + set_value, cold
-    // helper) and `branch.py` (a callback variable whose identity cannot
-    // be resolved statically) stay silent.
+    // `invalid.py` animates an unrelated `anchor`, so both callbacks
+    // provably execute during the play (liveness gate). `valid.py` (cold
+    // constructions, DecimalNumber + set_value, cold helper, and the
+    // `Suspended` scene whose updater is suspended by its own `FadeIn`
+    // and sees only a static wait — provably never per frame) and
+    // `branch.py` (a callback variable whose identity cannot be resolved
+    // statically) stay silent.
     assert_golden(
         "MLP201",
         &[
-            "invalid.py:7:47 MLP201 warning high",
-            "invalid.py:8:39 MLP201 warning high",
+            "invalid.py:8:47 MLP201 warning high",
+            "invalid.py:9:39 MLP201 warning high",
         ],
     );
 }
 
 #[test]
 fn mlp204_hot_scene_graph_growth_golden() {
-    // `valid.py` (re-adding an existing object: reorder-only) and
-    // `branch.py` (a helper call whose freshness is unproven) stay silent.
+    // `invalid.py` animates an unrelated `anchor`: the scene updater is
+    // never suspended and the mobject updater's host is un-targeted, so
+    // both callbacks provably execute (liveness gate). `valid.py`
+    // (re-adding an existing object: reorder-only) and `branch.py` (a
+    // helper call whose freshness is unproven) stay silent.
     assert_golden(
         "MLP204",
         &[
-            "invalid.py:7:37 MLP204 warning high",
-            "invalid.py:8:38 MLP204 warning high",
+            "invalid.py:8:37 MLP204 warning high",
+            "invalid.py:9:38 MLP204 warning high",
         ],
     );
 }
@@ -148,10 +155,13 @@ fn mlp220_unbounded_traced_path_golden() {
 
 #[test]
 fn mlp226_frame_varying_resource_key_golden() {
-    // The frame-varying f-string key carries only MLP226 (it supersedes
-    // MLP201 on that span); the static-key sibling construction carries
-    // MLP201; `branch.py` (string concatenation is not a proven
-    // frame-varying key) falls back to MLP201.
+    // The tracker-driven play (`tracker.animate.set_value`) leaves both
+    // `always_redraw` hosts un-targeted, so their callbacks provably
+    // execute (liveness gate). The frame-varying f-string key carries
+    // only MLP226 (it supersedes MLP201 on that span); the static-key
+    // sibling construction carries MLP201; `branch.py` (string
+    // concatenation is not a proven frame-varying key) falls back to
+    // MLP201.
     assert_golden(
         "MLP226",
         &[
@@ -159,6 +169,48 @@ fn mlp226_frame_varying_resource_key_golden() {
             "invalid.py:7:39 MLP226 warning high",
             "invalid.py:8:40 MLP201 warning high",
         ],
+    );
+}
+
+/// The review's canonical false positive (DESIGN §3.2/§3.3): `FadeIn(label)`
+/// suspends the animated mobject's updaters for the whole play
+/// (`animation.py` `begin` → `suspend_updating`), and the un-`dt`'d
+/// `always_redraw` factory leaves the default `wait(3)` a static frame
+/// (`scene.py` `should_update_mobjects`) — the callback runs about once,
+/// never once per frame. MLP226/MLP201 must stay silent instead of
+/// fabricating a "~120 distinct keys" claim; the scene's *real* defect —
+/// the tracker-driven updater is frozen while the wait renders — is the
+/// correctness diagnostic on the static wait.
+#[test]
+fn mlp226_suspended_always_redraw_is_never_a_performance_claim() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("scene.py"),
+        "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(label)
+        self.play(FadeIn(label), run_time=2)
+        self.wait(3)
+",
+    )
+    .unwrap();
+    let rows = observed(project.path());
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("MLP226") || row.contains("MLP201")),
+        "a provably-suspended always_redraw must not carry a per-frame \
+         performance claim: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("MLC112")),
+        "the frozen tracker-driven updater is the scene's real defect: {rows:?}"
     );
 }
 
@@ -172,7 +224,8 @@ fn mlp226_quantifies_keys_only_from_literal_durations() {
         .find(|diagnostic| diagnostic.rule_id == "MLP226")
         .expect("MLP226 fires on invalid.py");
     // 8 s at the default 60 fps profile: about 480 distinct keys, derived
-    // from the literal play duration only.
+    // from the literal duration of the one play that provably executes
+    // the callback (the tracker-driven play; liveness-gated).
     assert!(
         diagnostic.message.contains("~480"),
         "distinct-key estimate must come from the literal 8 s play: {}",
@@ -251,10 +304,12 @@ fn mlp220_evidence_quantifies_span_and_points() {
 
 #[test]
 fn mlp202_hot_family_copy_golden() {
-    // `valid.py` (a per-frame copy of a single Square: family 1, gate
-    // shut; a cold `group.copy()` in construct) and `branch.py` (a group
-    // grown in a loop: the family widens to an open-above interval that
-    // never confirms the gate) stay silent. `invalid.py`'s discarded
+    // `invalid.py`'s play targets the unrelated `backup`, so the group's
+    // updaters provably execute (liveness gate). `valid.py` (a per-frame
+    // `become(copy)` of a single Square: family 1, gate shut; a cold
+    // `group.copy()` in construct) and `branch.py` (a group grown in a
+    // loop: the family widens to an open-above interval that never
+    // confirms the gate) stay silent. `invalid.py`'s discarded
     // `m.copy()` updater body is additionally a provable no-op, so
     // `MLP215` fires on the registration alongside the two `MLP202`
     // per-call rows — distinct defects at distinct spans.
@@ -270,12 +325,13 @@ fn mlp202_hot_family_copy_golden() {
 
 #[test]
 fn mlp203_hot_family_walk_golden() {
-    // `valid.py` (a single `next_to` on a small Dot and a `get_family`
-    // on a lone Square — the DESIGN §7.3 near-misses; the square's
-    // updater body feeds the walk into `move_to` so no other rule sees
-    // a no-op) and `branch.py` (loop-grown family: open-above interval)
-    // stay silent.
-    assert_golden("MLP203", &["invalid.py:7:37 MLP203 info high"]);
+    // `invalid.py` animates an unrelated `anchor` so the group's updater
+    // provably executes (liveness gate); its walk feeds `move_to`, so no
+    // other rule sees a no-op. `valid.py` (a single `next_to` on a small
+    // Dot and a `get_family` on a lone Square — the DESIGN §7.3
+    // near-misses) and `branch.py` (loop-grown family: open-above
+    // interval) stay silent.
+    assert_golden("MLP203", &["invalid.py:8:47 MLP203 info high"]);
 }
 
 #[test]
@@ -301,15 +357,18 @@ fn mlp208_text_family_transform_golden() {
 
 #[test]
 fn mlp211_hot_large_allocation_golden() {
-    // `valid.py` (a cold 800 KB buffer in construct; a per-frame
-    // 24-byte coordinate vector below the gate) and `branch.py` (a
-    // non-literal length: bytes Unknown, never guessed) stay silent.
-    // The second row is a literal tuple shape (`np.zeros((400, 400))`).
+    // `invalid.py` animates an unrelated `anchor` so the updaters
+    // provably execute (liveness gate); each allocation feeds `move_to`
+    // so no other rule sees a no-op. `valid.py` (a cold 800 KB buffer in
+    // construct; a per-frame 24-byte coordinate vector below the gate)
+    // and `branch.py` (a non-literal length: bytes Unknown, never
+    // guessed) stay silent. The second row is a literal tuple shape
+    // (`np.zeros((400, 400))`).
     assert_golden(
         "MLP211",
         &[
-            "invalid.py:8:34 MLP211 info medium",
-            "invalid.py:9:34 MLP211 info medium",
+            "invalid.py:9:44 MLP211 info medium",
+            "invalid.py:10:44 MLP211 info medium",
         ],
     );
 }
@@ -334,9 +393,11 @@ fn mlp224_point_from_proportion_golden() {
     // The 32-circle path proves exactly 1024 points, so `MLP224` claims
     // the `point_from_proportion` query; the generic `MLP203` must stay
     // out even though the family gate would also pass (specificity,
-    // DESIGN §7.3). `valid.py` (a lone Circle: 32 points) and `branch.py`
-    // (loop-grown path: open-above interval) stay silent.
-    assert_golden("MLP224", &["invalid.py:7:36 MLP224 info high"]);
+    // DESIGN §7.3). `invalid.py` animates an unrelated `anchor` so the
+    // updater provably executes (liveness gate). `valid.py` (a lone
+    // Circle: 32 points) and `branch.py` (loop-grown path: open-above
+    // interval) stay silent.
+    assert_golden("MLP224", &["invalid.py:8:46 MLP224 info high"]);
 }
 
 #[test]

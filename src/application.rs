@@ -432,7 +432,7 @@ fn render_scene_cost(
     facts: &ProjectFacts,
     scene: &SceneLifecycle,
 ) {
-    use crate::rules::performance::support::{display_frames, display_seconds, scene_frames_after};
+    use crate::rules::performance::support::{display_frames, display_seconds};
     use crate::semantic::interpreter::PlayKind;
 
     let profiles = &config.active_profiles;
@@ -467,7 +467,10 @@ fn render_scene_cost(
     }
 
     // Hot contexts entered from this scene class: entry kind, provenance
-    // chain, and non-neutral multiplicity factors.
+    // chain, non-neutral multiplicity factors, and the per-callback
+    // liveness note — which plays provably execute the callback per frame
+    // (DESIGN §3.2 suspension, §3.3 wait dynamics). "none" means the
+    // callback provably never runs per frame in the analyzed plays.
     let _ = writeln!(output, "  hot contexts:");
     let mut context_lines: Vec<String> = Vec::new();
     for (call_index, contexts) in &facts.cost.hot.call_contexts {
@@ -480,8 +483,28 @@ fn render_scene_cost(
                 continue;
             };
             let factors = cost::estimator::multiplicity_factor_names(&context.multiplicity);
+            let liveness_note = facts.cost.context_liveness(context).map_or_else(
+                || "unknown".to_owned(),
+                |liveness| {
+                    if !liveness.resolved {
+                        return "unknown".to_owned();
+                    }
+                    let proven: Vec<String> = liveness
+                        .proven()
+                        .map(|play| cost_location(sources, play.site.file, play.site.start))
+                        .collect();
+                    if !proven.is_empty() {
+                        proven.join(", ")
+                    } else if liveness.maybe().next().is_some() {
+                        "none (execution possible but unproven)".to_owned()
+                    } else {
+                        "none".to_owned()
+                    }
+                },
+            );
             let line = format!(
-                "    {location} entry {entry}; path {path}; factors {factors}",
+                "    {location} entry {entry}; path {path}; factors {factors}; \
+                 proven execution plays: {liveness_note}",
                 location = cost_location(
                     sources,
                     entry_step.file,
@@ -507,7 +530,10 @@ fn render_scene_cost(
         let _ = writeln!(output, "{line}");
     }
 
-    // Per-frame constructions reachable from those contexts.
+    // Per-frame constructions reachable from those contexts. Quantities
+    // sum over the proven execution plays only (DESIGN §15 invariant 9);
+    // a callback that provably never runs per frame says so instead of
+    // fabricating an invocation count.
     let _ = writeln!(output, "  per-frame constructions:");
     let mut construction_rows = 0_usize;
     for construction in facts.cost.constructions_in_hot_contexts() {
@@ -516,18 +542,35 @@ fn render_scene_cost(
             continue;
         }
         construction_rows += 1;
-        let invocations = scene_frames_after(scene, call, profiles).map_or_else(
-            || "per-frame".to_owned(),
-            |frames| {
-                format!(
-                    "{} invocations across literal plays",
-                    display_frames(&frames)
-                )
-            },
-        );
+        let execution = facts.cost.call_execution(construction.call_index);
+        let row = if execution.has_proven() {
+            let invocations = facts
+                .cost
+                .proven_frames_for_call(construction.call_index)
+                .map_or_else(
+                    || {
+                        format!(
+                            "x per-frame across {} proven play(s)",
+                            execution.proven.len()
+                        )
+                    },
+                    |frames| {
+                        format!(
+                            "x {} invocations across {} proven play(s)",
+                            display_frames(&frames),
+                            execution.proven.len()
+                        )
+                    },
+                );
+            format!("construction {invocations}")
+        } else if execution.possibly_executes() {
+            "construction x per-frame (execution not proven)".to_owned()
+        } else {
+            "construction: no proven per-frame execution".to_owned()
+        };
         let _ = writeln!(
             output,
-            "    {location} {class} construction x {invocations}",
+            "    {location} {class} {row}",
             location = cost_location(sources, call.file, u32::from(call.call_range.start())),
             class = short_class_name(&construction.symbol),
         );
@@ -537,7 +580,8 @@ fn render_scene_cost(
     }
 
     // Frame-varying resource keys: distinct Text/TeX/SVG cache keys grow
-    // with the frame count (`K_resource ≈ F`).
+    // with the frame count (`K_resource ≈ F`) — but only over the plays
+    // where the callback provably executes.
     let _ = writeln!(output, "  resource-key growth:");
     let mut resource_rows = 0_usize;
     for fact in facts.cost.frame_varying_resource_keys() {
@@ -546,10 +590,31 @@ fn render_scene_cost(
             continue;
         }
         resource_rows += 1;
-        let keys = scene_frames_after(scene, call, profiles).map_or_else(
-            || "one per rendered frame".to_owned(),
-            |frames| format!("{} across literal plays", display_frames(&frames)),
-        );
+        let execution = facts.cost.call_execution(fact.call_index);
+        let keys = if execution.has_proven() {
+            facts
+                .cost
+                .proven_frames_for_call(fact.call_index)
+                .map_or_else(
+                    || {
+                        format!(
+                            "one per rendered frame of {} proven play(s)",
+                            execution.proven.len()
+                        )
+                    },
+                    |frames| {
+                        format!(
+                            "{} across {} proven play(s)",
+                            display_frames(&frames),
+                            execution.proven.len()
+                        )
+                    },
+                )
+        } else if execution.possibly_executes() {
+            "one per rendered frame (execution not proven)".to_owned()
+        } else {
+            "no proven per-frame execution".to_owned()
+        };
         let _ = writeln!(
             output,
             "    {location} {class} distinct cache keys: {keys} (f-string key varies per frame)",

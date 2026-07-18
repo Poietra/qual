@@ -139,6 +139,10 @@ impl Rule for ExcessiveSampleCount {
         &MLP221
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear emission walk with per-arm evidence"
+    )]
     fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
         let Some(knowledge) = context.knowledge() else {
             return Vec::new();
@@ -177,7 +181,12 @@ impl Rule for ExcessiveSampleCount {
                     _ => None,
                 })
                 .unwrap_or(false);
-            let hot = context.cost_facts().is_call_in_hot_context(call_index);
+            // The per-frame note requires proven execution, not mere
+            // reachability from a per-frame entry (DESIGN §3.2/§3.3).
+            let hot = context
+                .cost_facts()
+                .is_call_in_hot_context(call_index)
+                .filter(|_| context.cost_facts().call_execution(call_index).has_proven());
             let file = context.sources().file(call.file);
             let mut evidence = BTreeMap::new();
             evidence.insert("resolved".to_owned(), Value::String(symbol.to_owned()));

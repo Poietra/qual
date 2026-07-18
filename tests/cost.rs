@@ -783,3 +783,243 @@ fn unknown_and_symbolic_sizes_never_confirm_thresholds() {
         })
     );
 }
+
+// ---------------------------------------------------------------------------
+// Execution liveness (DESIGN §3.2 suspension, §3.3 wait dynamics, §15).
+// ---------------------------------------------------------------------------
+
+/// The review's canonical false positive: `FadeIn(label)` suspends the
+/// host's updaters (animation.py `begin` → `suspend_updating`) and the
+/// un-`dt`'d factory leaves `wait(3)` static, so the callback provably
+/// never runs per frame — no play, no maybe, no fabricated quantity.
+const SUSPENDED_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(label)
+        self.play(FadeIn(label), run_time=2)
+        self.wait(3)
+";
+
+#[test]
+fn suspended_updater_has_no_execution_plays_and_no_quantity() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", SUSPENDED_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    // Reachability (hotness) is still a fact — the callback WOULD be hot.
+    assert!(cost.is_call_in_hot_context(math_tex).is_some());
+    // But liveness proves it never executes per frame.
+    let execution = cost.call_execution(math_tex);
+    assert!(!execution.has_proven(), "suspended host: no proven play");
+    assert!(
+        !execution.possibly_executes(),
+        "FadeIn suspension + static wait is provable, not a maybe"
+    );
+    assert_eq!(cost.proven_frames_for_call(math_tex), None);
+}
+
+/// The same callback becomes provably live when the play animates an
+/// unrelated mobject: the host stays un-suspended and in the family, so
+/// exactly the play's ~120 frames are proven; the static wait(3) is
+/// excluded.
+const LIVE_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.play(FadeIn(square), run_time=2)
+        self.wait(3)
+";
+
+#[test]
+fn untargeted_host_proves_execution_during_the_play_only() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", LIVE_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1, "exactly the FadeIn(square) play");
+    assert!(execution.maybe.is_empty(), "the static wait is excluded");
+    assert!(!execution.unresolved);
+    // 2 s at 60 fps: the wait's 180 frames must NOT be added.
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(120.0),
+            hi: Some(120.0),
+        })
+    );
+}
+
+/// `suspend_mobject_updating=False` is the DESIGN §3.2 escape hatch: the
+/// animation targets the host but leaves its updaters running, so the
+/// play still proves execution.
+const ESCAPE_HATCH_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(label)
+        self.play(FadeIn(label, suspend_mobject_updating=False), run_time=2)
+";
+
+#[test]
+fn suspend_mobject_updating_false_keeps_the_targeted_host_live() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", ESCAPE_HATCH_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1);
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(120.0),
+            hi: Some(120.0),
+        })
+    );
+}
+
+/// A `dt`-named parameter makes the updater time-based, so the plain
+/// `wait(3)` renders dynamically (scene.py `should_update_mobjects`) and
+/// proves the callback's execution across its ~180 frames.
+const DT_WAIT_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        sq.add_updater(lambda m, dt: m.become(MathTex(f\"t={dt}\")))
+        self.add(sq)
+        self.wait(3)
+";
+
+#[test]
+fn time_based_updater_proves_execution_during_dynamic_waits() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", DT_WAIT_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1, "the dynamic wait counts");
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(180.0),
+            hi: Some(180.0),
+        })
+    );
+}
+
+/// A branch-dependent registration proves nothing: the play is only a
+/// maybe-execution, so no quantity and no proven play exist (a high-
+/// confidence rule must stay silent on this evidence).
+const BRANCH_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        other = Circle()
+        if unknowable():
+            sq.add_updater(lambda m: m.become(MathTex(\"x\")))
+        self.add(sq, other)
+        self.play(FadeIn(other), run_time=2)
+";
+
+#[test]
+fn branch_dependent_registration_yields_maybe_evidence_only() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", BRANCH_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert!(!execution.has_proven(), "maybe-registration never proves");
+    assert!(
+        execution.possibly_executes(),
+        "the play may run the maybe-registered callback"
+    );
+    assert_eq!(cost.proven_frames_for_call(math_tex), None);
+}
+
+/// An all-paths `remove_updater` before the play deactivates the
+/// registration: the pre-play updater set no longer carries it, so the
+/// play proves nothing.
+const REMOVED_SCENE: &str = "\
+from manim import *
+
+
+def spin(m):
+    m.become(MathTex(\"x\"))
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        other = Circle()
+        sq.add_updater(spin)
+        sq.remove_updater(spin)
+        self.add(sq, other)
+        self.play(FadeIn(other), run_time=2)
+";
+
+#[test]
+fn all_paths_removal_before_the_play_deactivates_the_registration() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", REMOVED_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert!(!execution.has_proven());
+    assert!(!execution.possibly_executes());
+    assert_eq!(cost.proven_frames_for_call(math_tex), None);
+}
+
+/// A non-literal `suspend_mobject_updating` value proves nothing about
+/// suspension: the targeted host's execution becomes a maybe, never a
+/// proven claim in either direction (DESIGN §15 invariant 2).
+const NONLITERAL_SUSPEND_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        flag = unknowable()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(label)
+        self.play(FadeIn(label, suspend_mobject_updating=flag), run_time=2)
+";
+
+#[test]
+fn nonliteral_suspend_kwarg_degrades_to_maybe_execution() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", NONLITERAL_SUSPEND_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert!(
+        !execution.has_proven(),
+        "unknown suspension never proves execution"
+    );
+    assert!(
+        execution.possibly_executes(),
+        "unknown suspension never proves absence either"
+    );
+    assert_eq!(cost.proven_frames_for_call(math_tex), None);
+}

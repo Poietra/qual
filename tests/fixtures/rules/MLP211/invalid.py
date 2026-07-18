@@ -4,8 +4,9 @@ import numpy as np
 
 class Demo(Scene):
     def construct(self):
+        anchor = Circle()
         sq = Square()
-        sq.add_updater(lambda m: np.zeros(100000))
-        sq.add_updater(lambda m: np.zeros((400, 400)))
-        self.add(sq)
-        self.play(FadeIn(sq), run_time=2)
+        sq.add_updater(lambda m: m.move_to(np.zeros(100000)[:3]))
+        sq.add_updater(lambda m: m.move_to(np.zeros((400, 400))[0]))
+        self.add(anchor, sq)
+        self.play(FadeIn(anchor), run_time=2)

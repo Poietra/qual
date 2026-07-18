@@ -19,6 +19,14 @@
 //! Small coordinate vectors are excluded by the byte gate itself, and
 //! unknown shapes / dtypes stay `Unknown` (never guessed) in the cost
 //! layer.
+//!
+//! Liveness (DESIGN §3.2/§3.3, §15): a call whose callback provably never
+//! executes per frame (suspended during every play, only static waits)
+//! stays silent. When execution is proven, the message states the
+//! per-frame claim; when it is only possible (maybe plays or an entry the
+//! lifecycle cannot resolve), the rule still fires at its `medium`
+//! catalog confidence but with qualitative wording — the allocation size
+//! itself is statically proven either way.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,7 +38,7 @@ use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::values::Num;
 
-use super::support::{build_diagnostic, merge_evidence};
+use super::support::{build_diagnostic, execution_plays_json, merge_evidence};
 
 /// Metadata for [`HotLargeAllocation`].
 pub const MLP211: RuleMetadata = RuleMetadata {
@@ -93,10 +101,27 @@ impl Rule for HotLargeAllocation {
             if !bytes_confirmed && !points_confirmed {
                 continue;
             }
+            // Liveness: provably-never-executing callbacks stay silent;
+            // proven execution supports the per-frame claim, only-maybe
+            // execution keeps qualitative wording (medium confidence).
+            let execution = cost.call_execution(call_index);
+            if !execution.has_proven() && !execution.possibly_executes() {
+                continue;
+            }
+            let frequency = if execution.has_proven() {
+                "runs once per rendered frame"
+            } else {
+                "sits in a per-frame callback (though no play provably \
+                 executes it)"
+            };
             let call = &context.qualified_calls().calls[call_index];
             let file = context.sources().file(call.file);
             let mut evidence = BTreeMap::new();
             merge_evidence(&mut evidence, cost.evidence_for(call_index));
+            evidence.insert(
+                "execution".to_owned(),
+                execution_plays_json(context, &execution),
+            );
             let (gate_evidence, message) = if bytes_confirmed {
                 evidence.insert("bytes_per_invocation".to_owned(), num_bounds_json(&bytes));
                 let lower = bytes
@@ -106,7 +131,7 @@ impl Rule for HotLargeAllocation {
                     PER_FRAME_ALLOCATION_GATE.evidence(&bytes),
                     format!(
                         "This call allocates at least {size} per invocation and \
-                         runs once per rendered frame.",
+                         {frequency}.",
                         size = display_bytes(lower),
                     ),
                 )
@@ -119,7 +144,7 @@ impl Rule for HotLargeAllocation {
                     LARGE_POINTS_GATE.evidence(&points),
                     format!(
                         "This call materializes an object with at least \
-                         {lower:.0} points and runs once per rendered frame."
+                         {lower:.0} points and {frequency}."
                     ),
                 )
             };
