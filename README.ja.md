@@ -297,7 +297,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-4 つのゲートすべてが通る必要があります。リポジトリ構成、ルール追加の手順、すべての変更が守るべき不変条件は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。`DESIGN.md` が正典であり、公開契約の変更は DESIGN.md・スキーマテスト・ルールドキュメントを同時に更新する必要があります。
+4 つのゲートすべてが通る必要があります。リリース時にはさらに 3 つの品質ゲート(ラベル付きコーパスゲート・ベンチマークゲート・knowledge ドリフトゲート、DESIGN §11.4)があります。実行方法は [README.md の Release quality gates 節](README.md#release-quality-gates-design-114) を参照してください。リポジトリ構成、ルール追加の手順、すべての変更が守るべき不変条件は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。`DESIGN.md` が正典であり、公開契約の変更は DESIGN.md・スキーマテスト・ルールドキュメントを同時に更新する必要があります。
 
 ## ライセンス
 

@@ -7,10 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-External-review fixes (two waves).
+External-review fixes (two waves) and structural hardening (knowledge
+provenance split, release quality gates, frontend fact promotion,
+interpreter modularization).
 
 ### Added
 
+- Release quality gates (DESIGN §11.4): a labeled corpus gate
+  (`tests/corpus/manifest-v1.json`, 35 cases pinning sha256 and exact
+  expected diagnostics — true positives and false-positive guards across
+  all four rule families, including pinned real-Manim `example_scenes`
+  snapshots and the adversarial review probes) that runs inside
+  `cargo test`; an explicit benchmark gate over a pinned 10k-LOC fixture
+  (cold ≤ 2 s, peak RSS < 300 MiB, asserted only on the reference
+  machine; the warm ≤ 0.5 s budget is recorded but unenforced until the
+  on-disk cache exists); and a scheduled knowledge-drift CI job against
+  the pinned upstream base commit.
+- A shipped `local_0_20_1_4d25c031` knowledge-profile overlay carrying
+  the sibling fork's working-tree additions on top of `upstream_0_20`
+  (currently the three fork-only `manim.constants` names
+  `CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`).
+- `sync_manim_knowledge --manim-ref <commit>` generates candidates from a
+  clean `git archive` of a commit instead of the working tree, so
+  profile provenance can be checked against pristine upstream.
+- Frontend statement and binding facts (`src/frontend/statements.rs`):
+  per-call enclosing-statement spans and roles (bare expression, `with`
+  context, assignment RHS, return value, decorator), and per-file import
+  binding facts with unified rebind poisoning and canonical dotted-path
+  resolution, exposed to rules via
+  `RuleContext::statement_facts()`/`binding_facts()`.
 - Baseline files now carry a `scene_attribution: "attributed"` provenance
   marker (additive; `schema_version` stays 1). In attributed files an
   empty `scene` means literally "outside any Scene" and matches exactly,
@@ -61,6 +86,19 @@ External-review fixes (two waves).
 
 ### Changed
 
+- The `upstream_0_20` knowledge profile now describes only the clean
+  upstream base commit `4d25c031`: the three fork-only `manim.constants`
+  names (`CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`)
+  moved to the new `local_0_20_1_4d25c031` overlay, and resolve to
+  Unknown under `knowledge-profile = "upstream_0_20"`.
+- The lifecycle interpreter (`src/semantic/interpreter.rs`, 7,602 lines)
+  is split into nine cohesive modules under
+  `src/semantic/interpreter/`; the public API is frozen via `pub use`
+  re-exports and lint output is byte-identical.
+- Rule-layer private AST walks are gone (DESIGN §5.6): MLR106/107/112/
+  117/119/121/127 and MLD301/302/304/307 now consume promoted frontend
+  facts instead of re-walking the module tree; the remaining two local
+  traversals are fact-anchored and reuse the canonical frontend walker.
 - MLP201/MLP202/MLP203/MLP204/MLP224/MLP226 fire only with at least one
   proven execution play and quantify over proven plays only;
   MLP211/MLP216 use qualitative wording when execution is unproven; all
@@ -90,6 +128,13 @@ External-review fixes (two waves).
 
 ### Fixed
 
+- A latent false-positive class in name-rebind detection: the four
+  hand-rolled binder collectors are unified into one canonical
+  poisoning definition, so MLD307 no longer claims the builtin when a
+  hot-callback callee name was rebound via a relative import
+  (`from . import open`), and MLR106/MLR121/MLR127 now see
+  lambda-parameter, walrus, comprehension, `except`, and `match` binders
+  they previously missed (fire → silence in those corners).
 - Frame totals across multiple plays now apply `ceil(duration × fps)` per
   play and sum the counts (Manim renders one `np.arange` grid per play),
   instead of ceiling the summed duration once — two 1 ms plays at 60 fps
