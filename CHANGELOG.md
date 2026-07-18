@@ -13,6 +13,26 @@ interpreter modularization).
 
 ### Added
 
+- Helper reach (DESIGN §2.1 "Scene helper", §5.1 step 5): scene runs now
+  inline project *module-level* helpers — same-module and imported from
+  other project files, with the scene argument flowing as the live scene
+  state in any parameter position — exactly like `self.<helper>()`
+  methods, so their plays, waits, returned objects, created animations,
+  and updater registrations materialize as real per-call-site lifecycle
+  facts anchored in the helper's file. Third-party imports are never
+  inlined and keep the DESIGN §5.3 widening semantics.
+- Summary-derived play records (DESIGN §5.7): method summaries now carry
+  the play/wait sites of the summarized body (site, kind, literal-derived
+  duration, argument sites, stop-condition / frozen-frame / `*args`
+  flags), and summary application rehydrates them as conservative
+  `Maybe`-certainty `PlayFact`s with open repetitions — recursion and the
+  inline depth cap no longer lose plays entirely (literal-duration checks
+  such as MLC104 still fire; every caller-state-dependent judgment stays
+  degraded and is listed on `SceneLifecycle::summary_derived_plays`).
+- `LifecycleFacts::inline_fallbacks`: every scene-run call site where
+  helper inlining fell back to the effect summary, with its reason
+  (`Recursion` / `DepthCap` / `Unresolvable`) — the analysis-coverage
+  frontier.
 - Release quality gates (DESIGN §11.4): a labeled corpus gate
   (`tests/corpus/manifest-v1.json`, 35 cases pinning sha256 and exact
   expected diagnostics — true positives and false-positive guards across

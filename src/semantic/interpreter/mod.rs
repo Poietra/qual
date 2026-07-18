@@ -21,15 +21,20 @@
 //! - `.animate` builders (`generate_target` runs at builder creation),
 //! - branch joins to `MAYBE` and bounded loop evaluation with widening
 //!   (DESIGN §5.5),
-//! - cycle-guarded inlining of `self.<helper>()` calls resolved through
-//!   the project MRO (DESIGN §2.1 "Scene helper", §5.1 step 5): a play
-//!   or wait inside a helper body materializes as a real [`PlayFact`]
-//!   per call site, anchored at the play call in the helper file with
-//!   the call chain in [`PlayFact::call_path`]. A call that closes a
-//!   recursion cycle (direct or mutual) — or exceeds the work-bounding
-//!   `INLINE_DEPTH_SAFETY_CAP` backstop — falls back to the §5.7 effect
-//!   summary (membership effects survive; frontier plays stay
-//!   unmaterialized).
+//! - cycle-guarded inlining of project helper calls — `self.<helper>()`
+//!   resolved through the project MRO *and* module-level functions
+//!   (same-module or imported; a scene argument flows as the live scene
+//!   state in any parameter position) — per DESIGN §2.1 "Scene helper",
+//!   §5.1 step 5: a play or wait inside a helper body materializes as a
+//!   real [`PlayFact`] per call site, anchored at the play call in the
+//!   helper file with the call chain in [`PlayFact::call_path`]. A call
+//!   that closes a recursion cycle (direct or mutual) — or exceeds the
+//!   work-bounding `INLINE_DEPTH_SAFETY_CAP` backstop — falls back to
+//!   the §5.7 effect summary (recorded in
+//!   [`LifecycleFacts::inline_fallbacks`]): membership effects survive,
+//!   and frontier plays materialize as conservative summary-derived
+//!   facts ([`SceneLifecycle::summary_derived_plays`]) instead of
+//!   vanishing.
 //!
 //! Everything the interpreter cannot prove is an explicit `Unknown` /
 //! `Maybe` fact — a rule must never receive a wrong certain fact
@@ -133,6 +138,37 @@ pub struct TracedEvent {
     pub certainty: Presence,
     /// The event.
     pub event: Event,
+}
+
+/// Why one helper call was not inlined during a scene run (DESIGN §5.1
+/// step 5): the effect summary was applied instead, so state effects
+/// survived while plays behind the frontier were rehydrated only as
+/// conservative summary-derived facts (see
+/// [`SceneLifecycle::summary_derived_plays`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FallbackReason {
+    /// The call closes a recursion cycle (direct or mutual): the callee
+    /// is already on the inline stack.
+    Recursion,
+    /// The inline stack reached the work-bounding depth safety cap.
+    DepthCap,
+    /// The callee resolved to a project name whose definition is not
+    /// available for inlining.
+    Unresolvable,
+}
+
+/// One scene-run call site where helper inlining fell back to the effect
+/// summary. Exposed for analysis-coverage reporting: each entry marks a
+/// frontier behind which facts are summary-precision (membership effects
+/// applied, plays only as maybe-certainty records), not inline-precision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FallbackFact {
+    /// Source range of the call that fell back.
+    pub site: AllocationSite,
+    /// Qualified name of the callee whose body was not inlined.
+    pub callee: String,
+    /// Why inlining did not apply.
+    pub reason: FallbackReason,
 }
 
 /// Whether a play fact came from `Scene.play` or `Scene.wait` / `pause`.
@@ -522,6 +558,27 @@ pub struct SceneLifecycle {
     pub snapshots: Vec<StateSnapshot>,
     /// Play / wait groups in program order.
     pub plays: Vec<PlayFact>,
+    /// The [`PlayFact::play_group`] ids of plays in [`SceneLifecycle::plays`]
+    /// that were *rehydrated from effect summaries* instead of being traced
+    /// through the DESIGN §3.2 pipeline (recursion / depth-cap inline
+    /// fallbacks and summary-applied non-helper calls, DESIGN §5.7).
+    ///
+    /// For such a fact only the syntactic fields are populated:
+    /// [`PlayFact::site`], [`PlayFact::kind`], [`PlayFact::duration`]
+    /// (literal-derived or `Unknown`), per-argument
+    /// [`PlayedAnimation::site`]s, [`PlayFact::has_stop_condition`],
+    /// [`PlayFact::frozen_frame`], [`PlayFact::star_args`], and
+    /// [`PlayFact::call_path`]. Everything caller-state-dependent is
+    /// degraded and must never be treated as evidence:
+    /// [`PlayFact::certainty`] is always [`Presence::Maybe`],
+    /// [`PlayFact::repetitions`] is the open `[0, ∞)` interval (a
+    /// recursive site may execute any number of times),
+    /// [`PlayFact::dynamic_wait`] and
+    /// [`PlayFact::always_update_mobjects`] are `Maybe`, and every
+    /// [`PlayedAnimation`] carries no identity, no state, `convertible:
+    /// Maybe`, and `channels_known: Maybe`. No `BeginPlay` / `FinishPlay`
+    /// event exists for these groups.
+    pub summary_derived_plays: BTreeSet<PlayGroupId>,
     /// Updater registrations in program order.
     pub updaters: Vec<UpdaterRegistration>,
     /// `remove_updater` calls in program order.
@@ -611,6 +668,10 @@ pub struct LifecycleFacts {
     pub scenes: Vec<SceneLifecycle>,
     /// Return facts for every project callable and lambda (MLC123).
     pub callback_returns: CallbackReturnFacts,
+    /// Every scene-run call site where helper inlining fell back to the
+    /// DESIGN §5.7 effect summary, deduplicated and sorted by
+    /// (site, callee, reason) — the analysis-coverage frontier.
+    pub inline_fallbacks: Vec<FallbackFact>,
 }
 
 impl LifecycleFacts {
@@ -792,9 +853,17 @@ pub fn analyze(
             .insert(*site, lambda_return_fact(&ctx, site.file, lambda));
     }
 
+    // Inline-fallback frontier (coverage reporting): recorded by the
+    // scene runs above, deduplicated across scenes sharing a helper
+    // chain, deterministically ordered.
+    let mut inline_fallbacks = ctx.take_inline_fallbacks();
+    inline_fallbacks.sort();
+    inline_fallbacks.dedup();
+
     LifecycleFacts {
         scenes,
         callback_returns,
+        inline_fallbacks,
     }
 }
 

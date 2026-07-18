@@ -1096,14 +1096,94 @@ fn helper_chain_inlines_with_the_full_call_path() {
 }
 
 #[test]
-fn recursive_helper_falls_back_to_summary_without_frontier_plays() {
-    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+fn recursive_helper_fallback_rehydrates_a_summary_derived_play() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
     let recursive = scene(&lifecycle, "helper_plays.RecursivePlay");
-    // The first inline level materializes its play; the recursive call
-    // falls back to the effect summary (no fabricated further plays,
-    // and the analysis terminates).
-    assert_eq!(recursive.plays.len(), 1);
-    assert_eq!(recursive.plays[0].call_path.len(), 1);
+    // The first inline level materializes its play as a traced fact; the
+    // cycle-closing recursive call falls back to the effect summary,
+    // whose play record rehydrates as a conservative summary-derived
+    // fact — the recursion no longer loses its plays, and the analysis
+    // still terminates.
+    assert_eq!(recursive.plays.len(), 2);
+    let traced = &recursive.plays[0];
+    assert_eq!(traced.certainty, Presence::Present);
+    assert_eq!(traced.call_path.len(), 1);
+    assert!(!recursive.summary_derived_plays.contains(&traced.play_group));
+
+    let derived = &recursive.plays[1];
+    assert!(
+        recursive
+            .summary_derived_plays
+            .contains(&derived.play_group)
+    );
+    // Same play span in the helper file, reached through the recursive
+    // call: construct's call plus the cycle-closing call.
+    assert_eq!(derived.site, traced.site);
+    assert_eq!(derived.call_path.len(), 2);
+    assert_eq!(
+        slice_at(
+            &sources,
+            derived.call_path[1].file,
+            derived.call_path[1].start,
+            derived.call_path[1].end,
+        ),
+        "self.ping(mob)"
+    );
+    // Caller-state-dependent judgments are degraded, never fabricated:
+    // the §3.2 pipeline did not run for the rehydrated fact.
+    assert_eq!(derived.certainty, Presence::Maybe);
+    assert_eq!(
+        derived.repetitions,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: None
+        }
+    );
+    assert_eq!(derived.animations.len(), 1);
+    assert!(derived.animations[0].animation.is_none());
+    assert!(derived.animations[0].state.is_none());
+    assert_eq!(derived.animations[0].convertible, Truth::Maybe);
+    assert_eq!(derived.animations[0].channels_known, Truth::Maybe);
+    // FadeIn without a literal run_time: the duration is honestly
+    // unknown (no fabricated numbers).
+    assert_eq!(derived.duration, Num::Unknown);
+
+    // The fallback frontier is reported for coverage.
+    let fallback = lifecycle
+        .inline_fallbacks
+        .iter()
+        .find(|fact| fact.callee == "helper_plays.RecursivePlay.ping")
+        .expect("recursion fallback recorded");
+    assert_eq!(fallback.reason, interpreter::FallbackReason::Recursion);
+    assert_eq!(
+        slice_at(
+            &sources,
+            fallback.site.file,
+            fallback.site.start,
+            fallback.site.end,
+        ),
+        "self.ping(mob)"
+    );
+}
+
+/// A recursive helper whose play carries a literal duration: the
+/// summary-derived fact keeps the literal (MLC104-style checks still
+/// work) while the wait-freeze verdict honestly degrades to `Maybe`.
+#[test]
+fn recursive_wait_keeps_the_literal_duration_with_maybe_liveness() {
+    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+    let recursive = scene(&lifecycle, "helper_plays.RecursiveWait");
+    assert_eq!(recursive.plays.len(), 2);
+    let derived = recursive
+        .plays
+        .iter()
+        .find(|play| recursive.summary_derived_plays.contains(&play.play_group))
+        .expect("summary-derived wait");
+    assert_eq!(derived.kind, PlayKind::Wait);
+    assert_eq!(derived.duration, Num::int(3));
+    assert_eq!(derived.certainty, Presence::Maybe);
+    assert_eq!(derived.dynamic_wait, Truth::Maybe);
+    assert_eq!(derived.always_update_mobjects, Truth::Maybe);
 }
 
 /// Inlining is governed by cycle detection, not a small fixed depth:
@@ -1137,25 +1217,34 @@ fn deep_acyclic_helper_chains_materialize_the_deepest_play() {
 }
 
 /// Mutual recursion (ping calls pong calls ping) terminates at the cycle
-/// guard: each method inlines once, the cycle-closing call falls back to
-/// the summary. If the safety depth cap were deciding instead, dozens of
-/// plays would materialize down the alternating chain.
+/// guard: each method inlines once as a traced fact, and the
+/// cycle-closing call rehydrates the summary's play records — one
+/// conservative fact per frontier site, none fabricated further down the
+/// alternating chain. If the safety depth cap were deciding instead,
+/// dozens of traced plays would materialize.
 #[test]
 fn mutual_recursion_hits_the_cycle_guard_not_the_depth_cap() {
     let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
     let mutual = scene(&lifecycle, "helper_plays.MutualPlay");
-    assert_eq!(
-        mutual.plays.len(),
-        2,
-        "one play per inlined level, none fabricated past the cycle"
-    );
-    let mut depths: Vec<usize> = mutual
+    let traced: Vec<_> = mutual
         .plays
         .iter()
-        .map(|play| play.call_path.len())
+        .filter(|play| !mutual.summary_derived_plays.contains(&play.play_group))
         .collect();
+    let derived: Vec<_> = mutual
+        .plays
+        .iter()
+        .filter(|play| mutual.summary_derived_plays.contains(&play.play_group))
+        .collect();
+    assert_eq!(traced.len(), 2, "one traced play per inlined level");
+    let mut depths: Vec<usize> = traced.iter().map(|play| play.call_path.len()).collect();
     depths.sort_unstable();
     assert_eq!(depths, vec![1, 2]);
+    // The frontier records cover both sites of the ping/pong cycle,
+    // reached through the cycle-closing call (depth 3), all maybe-facts.
+    assert_eq!(derived.len(), 2, "one record per frontier play site");
+    assert!(derived.iter().all(|play| play.certainty == Presence::Maybe));
+    assert!(derived.iter().all(|play| play.call_path.len() == 3));
 }
 
 /// One helper reached through another from five call sites: exactly one
@@ -1180,12 +1269,42 @@ fn wide_chain_produces_exactly_one_play_fact_per_call_site() {
 }
 
 #[test]
-fn module_level_helper_stays_on_the_summary_path() {
-    let (_sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
+fn module_level_helper_play_materializes_like_a_method_helper() {
+    let (sources, _facts, lifecycle) = analyze(&["helper_plays.py"]);
     let module = scene(&lifecycle, "helper_plays.ModuleHelper");
-    // `flourish(self, sq)` is not a self-method call: unchanged summary
-    // semantics — the scene widens, no play fact is fabricated.
-    assert!(module.plays.is_empty());
+    // `flourish(self, sq)` resolves to the project module-level function:
+    // scene runs inline it exactly like a self-method helper — the scene
+    // argument flows as the live scene state and the play materializes as
+    // a real traced fact anchored at the play call in the helper body.
+    assert_eq!(module.plays.len(), 1);
+    let play = &module.plays[0];
+    assert!(!module.summary_derived_plays.contains(&play.play_group));
+    assert_eq!(play.kind, PlayKind::Play);
+    assert_eq!(play.certainty, Presence::Present);
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "scene.play(FadeIn(mob))"
+    );
+    assert_eq!(play.call_path.len(), 1);
+    assert_eq!(
+        slice_at(
+            &sources,
+            play.call_path[0].file,
+            play.call_path[0].start,
+            play.call_path[0].end,
+        ),
+        "flourish(self, sq)"
+    );
+    // The caller's square is the introducer target and ends as a member:
+    // helper effects applied exactly once against the live caller state.
+    let sq = alloc_id(module, &sources, "Square()");
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert_eq!(state.introducer, Truth::Yes);
+    assert!(state.targets.contains(&sq));
+    assert_eq!(
+        module.final_membership(&sq),
+        Some((Presence::Present, Presence::Present))
+    );
 }
 
 #[test]
@@ -1233,7 +1352,10 @@ fn z_index_unknown_on_unproven_writes() {
         z_of(unknown, &sources, "Square(**{\"z_index\": 2})"),
         Num::Unknown
     );
-    // A helper summary's mutate widens instead of staying stale.
+    // A summary-applied helper's mutate widens instead of staying stale
+    // (the recursive helper's cycle-closing call falls back to the §5.7
+    // summary; its Style mutate must not leave the inline-traced exact
+    // write in place).
     assert_eq!(z_of(unknown, &sources, "Circle()"), Num::Unknown);
     // `family=False` still writes the receiver exactly.
     assert_eq!(z_of(unknown, &sources, "Dot()"), Num::int(4));
@@ -1374,4 +1496,184 @@ fn non_literal_play_run_time_widens_constructor_literals() {
     assert_eq!(play.duration, Num::Unknown, "**kw may carry run_time");
     let state = play.animations[0].state.as_ref().expect("state");
     assert_eq!(state.run_time, Num::Unknown);
+}
+
+// ---------------------------------------------------------------------------
+// Imported helpers (cross-file), module-level binding forms, and the
+// depth-cap play-visibility guarantee.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn imported_helper_play_materializes_in_the_helper_file() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let imported = scene(&lifecycle, "imported_helpers.ImportedHelper");
+    assert_eq!(imported.plays.len(), 1);
+    let play = &imported.plays[0];
+    assert!(!imported.summary_derived_plays.contains(&play.play_group));
+    assert_eq!(play.certainty, Presence::Present);
+    // The play-level run_time kwarg written in the helper applies.
+    assert_eq!(play.duration, Num::int(2));
+    // The fact is anchored at the play call in the *other* file.
+    assert_ne!(play.site.file, imported.file);
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "scene.play(FadeIn(mob), run_time=2)"
+    );
+    assert_eq!(play.call_path.len(), 1);
+    assert_eq!(play.call_path[0].file, imported.file);
+    assert_eq!(
+        slice_at(
+            &sources,
+            play.call_path[0].file,
+            play.call_path[0].start,
+            play.call_path[0].end,
+        ),
+        "flourish(self, sq)"
+    );
+    // The caller's square is the target and ends as a member.
+    let sq = alloc_id(imported, &sources, "Square()");
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert!(state.targets.contains(&sq));
+    assert_eq!(
+        imported.final_membership(&sq),
+        Some((Presence::Present, Presence::Present))
+    );
+}
+
+#[test]
+fn updater_registered_inside_an_imported_helper_appears_in_facts() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let updater = scene(&lifecycle, "imported_helpers.ImportedUpdater");
+    let sq = alloc_id(updater, &sources, "Square()");
+    assert_eq!(updater.updaters.len(), 1);
+    let registration = &updater.updaters[0];
+    assert_eq!(registration.host, UpdaterHost::Mobject(sq.clone()));
+    assert_eq!(registration.certainty, Presence::Present);
+    // Registered at the add_updater call inside the helper file.
+    assert_ne!(registration.site.file, updater.file);
+    assert!(
+        slice_at(
+            &sources,
+            registration.site.file,
+            registration.site.start,
+            registration.site.end,
+        )
+        .starts_with("mob.add_updater")
+    );
+    // The dt-lambda classifies through the shared callback machinery.
+    assert!(matches!(registration.fact.callback, CallbackRef::Lambda(_)));
+    assert_eq!(registration.body.uses_dt, Truth::Yes);
+    // scene.add(mob) inside the helper applied against the caller state.
+    assert_eq!(
+        updater.final_membership(&sq),
+        Some((Presence::Present, Presence::Present))
+    );
+}
+
+#[test]
+fn scene_bound_by_keyword_in_second_position_still_inlines() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let second = scene(&lifecycle, "imported_helpers.SceneSecond");
+    // `tag(sq, scene=self)`: the scene binds by keyword into the second
+    // parameter and still flows as the live scene state.
+    assert_eq!(second.plays.len(), 1);
+    let play = &second.plays[0];
+    assert_eq!(play.certainty, Presence::Present);
+    assert_eq!(
+        slice_at(&sources, play.site.file, play.site.start, play.site.end),
+        "scene.play(FadeIn(mob))"
+    );
+    let sq = alloc_id(second, &sources, "Square()");
+    let state = play.animations[0].state.as_ref().expect("state");
+    assert!(state.targets.contains(&sq));
+}
+
+#[test]
+fn imported_factory_and_animation_returns_keep_identity() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+
+    // Factory: the allocation site lives inside make_square (other file);
+    // the returned alias is what construct adds.
+    let factory = scene(&lifecycle, "imported_helpers.ImportedFactory");
+    let sq = alloc_id(factory, &sources, "Square()");
+    assert_ne!(sq.site.file, factory.file);
+    assert_eq!(
+        factory.final_membership(&sq),
+        Some((Presence::Present, Presence::Present))
+    );
+
+    // Animation factory: the FadeIn created inside the helper is the
+    // played animation, targeting the caller's square.
+    let animation = scene(&lifecycle, "imported_helpers.ImportedAnimation");
+    assert_eq!(animation.plays.len(), 1);
+    let play = &animation.plays[0];
+    assert!(!animation.summary_derived_plays.contains(&play.play_group));
+    let played = &play.animations[0];
+    assert!(played.animation.is_some());
+    let state = played.state.as_ref().expect("animation state tracked");
+    assert_eq!(state.introducer, Truth::Yes);
+    let target = alloc_id(animation, &sources, "Square()");
+    assert!(state.targets.contains(&target));
+}
+
+#[test]
+fn star_args_forwarding_stays_conservative() {
+    let (_sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let star = scene(&lifecycle, "imported_helpers.StarForward");
+    // `flourish(self, *args)` voids positional binding: the scene
+    // parameter stays Unknown inside the helper, so no play fact is
+    // fabricated and nothing becomes a certain effect.
+    assert!(star.plays.is_empty());
+}
+
+#[test]
+fn third_party_imported_call_stays_unknown() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let third = scene(&lifecycle, "imported_helpers.ThirdParty");
+    // `boost` comes from an unresolvable third-party module: never
+    // inlined, no plays fabricated, and the scene state widens.
+    assert!(third.plays.is_empty());
+    let sq = alloc_id(third, &sources, "Square()");
+    let (root, _family) = third.final_membership(&sq).expect("tracked");
+    assert_ne!(root, Presence::Present);
+    // A third-party call is not an inline fallback: it was never an
+    // inline candidate (the frontier lists only resolved project defs).
+    assert!(lifecycle.inline_fallbacks.is_empty());
+}
+
+// Depth-cap play visibility: the `FallbackReason::DepthCap` frontier
+// takes the *same* fallback branch as `Recursion` above (one shared
+// reason check in `inline_fallback_reason`, one shared summary
+// application and play-record rehydration), so the recursion tests cover
+// the rehydration semantics. An end-to-end 32-deep acyclic chain is not
+// exercisable as a test: each inline level runs the callee body once in
+// the caller's fixpoint pass and once in the emitting pass, so a chain of
+// depth d costs ~2^d body executions (measured ×1.9 per level) — which is
+// exactly why the cap is a work-bounding backstop that never decides
+// ordinary programs.
+
+/// Summary tables expose the play records directly: a recursive helper's
+/// summary keeps its play site with the literal-derived duration.
+#[test]
+fn method_summaries_carry_play_records() {
+    let (sources, facts, _lifecycle) = analyze(&["helper_plays.py"]);
+    let profile = knowledge::load(knowledge::DEFAULT_PROFILE).expect("profile loads");
+    let defs = DefMap::build(&sources, &facts.index);
+    let table = summaries::build(&sources, &facts.index, &facts.calls, Some(&profile), &defs);
+    let pulse = table
+        .get("helper_plays.RecursiveWait.pulse")
+        .expect("summary");
+    assert_eq!(pulse.plays.len(), 1, "one record per site and kind");
+    let record = &pulse.plays[0];
+    assert_eq!(record.kind, PlayKind::Wait);
+    assert_eq!(record.duration, Num::int(3));
+    assert_eq!(
+        slice_at(
+            &sources,
+            record.site.file,
+            record.site.start,
+            record.site.end
+        ),
+        "self.wait(3)"
+    );
 }

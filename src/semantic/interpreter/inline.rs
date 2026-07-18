@@ -3,13 +3,15 @@
 //!
 //! # The summary-vs-inline duality invariant
 //!
-//! For any `self.<method>()` / `super().<method>()` call that resolves to
-//! a project definition, **exactly one** of the two execution modes
-//! applies — never both, never neither:
+//! For any call that resolves to a project definition — `self.<method>()`
+//! / `super().<method>()` scene-helper dispatch *and* project
+//! module-level functions (same-module or imported), whether the scene is
+//! passed positionally, by keyword, or not at all — **exactly one** of
+//! the two execution modes applies — never both, never neither:
 //!
-//! 1. **Inline execution** ([`Machine::inline_scene_method`]): only
+//! 1. **Inline execution** ([`Machine::inline_project_callable`]): only
 //!    during scene runs (`Machine::scene_run`), only while the called
-//!    method is not already on the inline stack (cycle detection) and
+//!    definition is not already on the inline stack (cycle detection) and
 //!    the stack is shallower than the [`INLINE_DEPTH_SAFETY_CAP`]
 //!    work-bounding backstop. The helper body executes against the live
 //!    caller state, so it covers *everything* the body does: membership /
@@ -19,26 +21,53 @@
 //!    judged on the caller's actual updater state, and statement
 //!    snapshots inside the helper body. The §5.7 summary is *not* applied
 //!    for an inlined call (its only contribution is the return alias).
+//!    For scene-method helpers the receiver binds to the scene; for
+//!    module-level helpers every parameter binds from the written
+//!    arguments, so a scene argument (`flourish(self, m)`, `tag(m,
+//!    scene=self)`) flows as the live scene state in *any* position. A
+//!    `*args` splat at the call site voids positional binding: the
+//!    parameters stay `Unknown` and scene effects inside the body degrade
+//!    to unknown mutations — conservative, never wrong. (Known scope
+//!    limit, both modes: a scene-attribute write through a non-`self`
+//!    parameter name, `scene.attr = x`, is not tracked.)
 //! 2. **Summary application** ([`Machine::apply_summary_call`]): for
 //!    summary runs (SCC fixpoints stay compositional), for the cycle /
-//!    safety-cap fallback frontier of scene runs, and for calls that are not
-//!    scene-helper dispatch (project constructors, mobject methods,
-//!    module-level functions). It replays the callable's parameter-
-//!    relative effect summary — membership, children, updaters,
-//!    mutations, allocations, animation creation, `self` attribute
-//!    writes — against the caller state with combined certainty.
-//!    Plays inside the summarized body are **not** materialized (frontier
-//!    plays stay unmaterialized: missing information, never a wrong
-//!    fact), and no snapshots are recorded inside the callee.
+//!    safety-cap fallback frontier of scene runs, and for calls that are
+//!    not helper dispatch (project constructors, mobject methods). It
+//!    replays the callable's parameter-relative effect summary —
+//!    membership, children, updaters, mutations, allocations, animation
+//!    creation, `self` attribute writes — against the caller state with
+//!    combined certainty, and no snapshots are recorded inside the
+//!    callee. Plays inside the summarized body do **not** run the §3.2
+//!    pipeline; instead the summary's [`SummaryPlay`] records rehydrate
+//!    into conservative summary-derived [`PlayFact`]s (always
+//!    `Maybe`-certainty, open repetitions, syntactic fields only — the
+//!    exact populated-vs-degraded field list is documented on
+//!    [`SceneLifecycle::summary_derived_plays`]), so plays behind the
+//!    frontier stay visible without fabricating pipeline effects.
 //!
-//! The next capability (module-level helpers) must keep this contract:
-//! whichever mode handles a call site owns *all* of that call's effects,
+//! Whichever mode handles a call site owns *all* of that call's effects,
 //! so no effect is ever applied twice (inline + summary) or dropped
-//! (neither mode).
+//! (neither mode). Rehydrated play records are summary *facts*, not
+//! effects: an inlined call never touches them (its plays are traced),
+//! and a summary-applied call materializes each frontier play site
+//! exactly once per record.
+//!
+//! Every scene-run fallback to mode 2 on a helper-dispatch call is
+//! recorded as a [`FallbackFact`] (`Recursion` / `DepthCap` /
+//! `Unresolvable`) in [`LifecycleFacts::inline_fallbacks`] — the
+//! analysis-coverage frontier. Calls whose callee never resolved to a
+//! project definition (unknown names, multiple candidates, third-party
+//! imports) are not fallbacks: they were never inline candidates and
+//! keep the DESIGN §5.3 widening semantics (third-party code is never
+//! inlined).
 //!
 //! [`INLINE_DEPTH_SAFETY_CAP`]: self::INLINE_DEPTH_SAFETY_CAP
 //! [`PlayFact`]: super::PlayFact
 //! [`PlayFact::call_path`]: super::PlayFact::call_path
+//! [`FallbackFact`]: super::FallbackFact
+//! [`LifecycleFacts::inline_fallbacks`]: super::LifecycleFacts::inline_fallbacks
+//! [`SceneLifecycle::summary_derived_plays`]: super::SceneLifecycle::summary_derived_plays
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,9 +77,10 @@ use crate::frontend::index::{ProjectIndex, QualifiedCall, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::events::MutationKind;
 use crate::semantic::heap::AbstractHeap;
-use crate::semantic::state::{MobjectState, SceneState};
+use crate::semantic::state::{MobjectState, PlayGroupId, SceneState};
 use crate::semantic::summaries::{
-    MethodSummary, SummaryEffect, SummaryEvent, SummaryOperand, SummaryReturn, SummaryTable,
+    MethodSummary, SummaryEffect, SummaryEvent, SummaryOperand, SummaryPlay, SummaryReturn,
+    SummaryTable,
 };
 use crate::semantic::values::{
     AllocationSite, CallContextId, Cardinality, KindSet, Num, ObjectId, Presence, Truth,
@@ -64,20 +94,23 @@ use super::exec::{
 };
 use super::heap_ops::{seed_path_counts, widen_z_index_family};
 use super::mro::linearize_project;
-use super::{DefMap, FnDef, ReturnFact, TargetRequirement, TargetRequirementFact};
+use super::{
+    DefMap, FallbackFact, FallbackReason, FnDef, PlayFact, PlayKind, PlayedAnimation, ReturnFact,
+    TargetRequirement, TargetRequirementFact,
+};
 
 /// Safety backstop on the inline stack depth (DESIGN §5.1 step 5).
 ///
-/// Termination is guaranteed by CYCLE DETECTION — a `self.<helper>()`
-/// call whose method is already on the inline stack falls back to the
-/// DESIGN §5.7 effect summary — so this cap never decides ordinary
-/// programs (any acyclic chain of up to 32 distinct helpers inlines
-/// fully). It exists ONLY to bound work on pathological call graphs
-/// (e.g. dozens of distinct helpers fanning out at every level). When
-/// hit, the behavior is the established conservative fallback: the
-/// summary applies membership / updater effects while plays inside the
-/// unexpanded frontier stay unmaterialized — missing information, never
-/// a wrong fact.
+/// Termination is guaranteed by CYCLE DETECTION — a helper call whose
+/// callee is already on the inline stack falls back to the DESIGN §5.7
+/// effect summary — so this cap never decides ordinary programs (any
+/// acyclic chain of up to 32 distinct helpers inlines fully). It exists
+/// ONLY to bound work on pathological call graphs (e.g. dozens of
+/// distinct helpers fanning out at every level). When hit, the behavior
+/// is the established conservative fallback: the summary applies
+/// membership / updater effects, and plays inside the unexpanded
+/// frontier materialize only as summary-derived maybe-certainty records
+/// (never as fabricated pipeline facts).
 const INLINE_DEPTH_SAFETY_CAP: usize = 32;
 
 impl<'a> Machine<'a, '_> {
@@ -107,12 +140,7 @@ impl<'a> Machine<'a, '_> {
         fact: Option<&'a QualifiedCall>,
         state: &mut ExecState,
     ) -> AbstractValue {
-        // Cycle detection: the method identity already on the inline
-        // stack means this call closes a recursion cycle (direct or
-        // mutual) — the summary fallback keeps the analysis terminating
-        // and the semantics conservative.
-        let cyclic = self.inline_stack.iter().any(|(name, _)| name == qualified);
-        if !self.scene_run || cyclic || self.inline_stack.len() >= INLINE_DEPTH_SAFETY_CAP {
+        if !self.scene_run {
             return self.apply_summary_call(
                 qualified,
                 Some(AbstractValue::SelfScene),
@@ -121,7 +149,8 @@ impl<'a> Machine<'a, '_> {
                 state,
             );
         }
-        let Some(def) = self.ctx.defs.defs.get(qualified).cloned() else {
+        if let Some(reason) = self.inline_fallback_reason(qualified) {
+            self.record_fallback(qualified, call, reason);
             return self.apply_summary_call(
                 qualified,
                 Some(AbstractValue::SelfScene),
@@ -129,24 +158,102 @@ impl<'a> Machine<'a, '_> {
                 fact,
                 state,
             );
-        };
-        self.inline_scene_method(qualified, &def, call, state)
+        }
+        let def = self
+            .ctx
+            .defs
+            .defs
+            .get(qualified)
+            .cloned()
+            .expect("inline_fallback_reason checked the definition exists");
+        self.inline_project_callable(qualified, &def, call, true, state)
+    }
+
+    /// A direct / module-alias call resolved to a project *module-level*
+    /// function definition: inline the body during scene runs (a scene
+    /// argument flows as the live scene state in any parameter position),
+    /// apply the effect summary otherwise. Cycle detection and the depth
+    /// cap are shared with scene-method helpers — mixed method/function
+    /// recursion closes the same guard.
+    pub(super) fn call_module_function(
+        &mut self,
+        qualified: &str,
+        call: &'a ast::ExprCall,
+        fact: Option<&'a QualifiedCall>,
+        state: &mut ExecState,
+    ) -> AbstractValue {
+        if !self.scene_run {
+            return self.apply_summary_call(qualified, None, call, fact, state);
+        }
+        if let Some(reason) = self.inline_fallback_reason(qualified) {
+            self.record_fallback(qualified, call, reason);
+            return self.apply_summary_call(qualified, None, call, fact, state);
+        }
+        let def = self
+            .ctx
+            .defs
+            .defs
+            .get(qualified)
+            .cloned()
+            .expect("inline_fallback_reason checked the definition exists");
+        self.inline_project_callable(qualified, &def, call, false, state)
+    }
+
+    /// Why `qualified` cannot be inlined at the current point of a scene
+    /// run, or `None` when inlining applies. Cycle detection: the callee
+    /// identity already on the inline stack means this call closes a
+    /// recursion cycle (direct or mutual) — the summary fallback keeps
+    /// the analysis terminating and the semantics conservative.
+    fn inline_fallback_reason(&self, qualified: &str) -> Option<FallbackReason> {
+        if self.inline_stack.iter().any(|(name, _)| name == qualified) {
+            return Some(FallbackReason::Recursion);
+        }
+        if self.inline_stack.len() >= INLINE_DEPTH_SAFETY_CAP {
+            return Some(FallbackReason::DepthCap);
+        }
+        if !self.ctx.defs.defs.contains_key(qualified) {
+            return Some(FallbackReason::Unresolvable);
+        }
+        None
+    }
+
+    /// Records one inline fallback for the coverage frontier
+    /// (`LifecycleFacts::inline_fallbacks`); final emitting pass only, so
+    /// fixpoint passes do not duplicate the fact.
+    fn record_fallback(
+        &mut self,
+        qualified: &str,
+        call: &'a ast::ExprCall,
+        reason: FallbackReason,
+    ) {
+        if !self.emit {
+            return;
+        }
+        self.ctx.record_inline_fallback(FallbackFact {
+            site: self.site(call.range()),
+            callee: qualified.to_owned(),
+            reason,
+        });
     }
 
     /// Executes one resolved helper body inline (cycle-guarded by the
-    /// caller). Arguments bind to the declared parameter names, the
-    /// receiver binds to the scene, and every recorded op composes the
-    /// call site's certainty / loop context through
-    /// [`Machine::base_block`].
+    /// caller). Arguments bind to the declared parameter names, and every
+    /// recorded op composes the call site's certainty / loop context
+    /// through [`Machine::base_block`]. With `binds_scene_receiver` the
+    /// first parameter is the implicit `self` receiver and binds to the
+    /// scene (scene-method helpers); without it every parameter binds
+    /// from the written arguments (module-level helpers), so a scene
+    /// argument flows as the live scene state wherever it was passed.
     #[allow(
         clippy::too_many_lines,
         reason = "argument binding, frame switch, and write-back form one sequence"
     )]
-    fn inline_scene_method(
+    fn inline_project_callable(
         &mut self,
         qualified: &str,
         def: &FnDef<'a>,
         call: &'a ast::ExprCall,
+        binds_scene_receiver: bool,
         state: &mut ExecState,
     ) -> AbstractValue {
         let call_site = self.site(call.range());
@@ -160,7 +267,7 @@ impl<'a> Machine<'a, '_> {
             .args
             .iter()
             .any(|arg| matches!(arg, ast::Expr::Starred(_)));
-        let mut next = 1usize;
+        let mut next = usize::from(binds_scene_receiver);
         for arg in &call.args {
             if let ast::Expr::Starred(starred) = arg {
                 self.eval_expr(&starred.value, state);
@@ -208,8 +315,10 @@ impl<'a> Machine<'a, '_> {
         for arg in [&def.args.vararg, &def.args.kwarg].into_iter().flatten() {
             bindings.insert(arg.arg.to_string(), AbstractValue::Unknown);
         }
-        if let Some(receiver) = params.first() {
-            bindings.insert(receiver.clone(), AbstractValue::SelfScene);
+        if binds_scene_receiver {
+            if let Some(receiver) = params.first() {
+                bindings.insert(receiver.clone(), AbstractValue::SelfScene);
+            }
         }
 
         // Switch to the callee frame.
@@ -343,6 +452,7 @@ impl<'a> Machine<'a, '_> {
         for event in &summary.events {
             self.apply_summary_event(event, &slots, self_value.as_ref(), &child_context, state);
         }
+        self.rehydrate_summary_plays(&summary, call_site);
         match &summary.returns {
             SummaryReturn::SelfValue => self_value.unwrap_or(AbstractValue::Unknown),
             SummaryReturn::Param(position) => slots
@@ -360,6 +470,70 @@ impl<'a> Machine<'a, '_> {
                 }
             }
             SummaryReturn::Unknown => AbstractValue::Unknown,
+        }
+    }
+
+    /// Materializes the summary's play records as summary-derived
+    /// [`PlayFact`]s (final emitting pass only).
+    ///
+    /// The DESIGN §3.2 pipeline is *not* re-run: only the record's
+    /// syntactic facts survive (site, kind, literal duration, argument
+    /// sites, stop condition / frozen frame / `*args` flags), every
+    /// caller-state-dependent judgment degrades to `Maybe` / `Unknown`,
+    /// certainty is capped at `Maybe`, and repetitions are the open
+    /// `[0, ∞)` interval — a summarized site (recursion in particular)
+    /// may execute any number of times per caller run (the exact
+    /// populated-vs-degraded contract is documented on
+    /// `SceneLifecycle::summary_derived_plays`). During summary runs the
+    /// same push feeds the enclosing extraction, which is how records
+    /// propagate transitively through helper chains.
+    fn rehydrate_summary_plays(&mut self, summary: &MethodSummary, call_site: AllocationSite) {
+        if !self.emit {
+            return;
+        }
+        for record in &summary.plays {
+            let group = self.play_counter;
+            self.play_counter += 1;
+            let mut call_path: Vec<AllocationSite> =
+                self.inline_stack.iter().map(|(_, site)| *site).collect();
+            call_path.push(call_site);
+            let animations = record
+                .animation_sites
+                .iter()
+                .map(|site| PlayedAnimation {
+                    site: *site,
+                    animation: None,
+                    state: None,
+                    replacement_target: None,
+                    from_builder: false,
+                    convertible: Truth::Maybe,
+                    channels_known: Truth::Maybe,
+                })
+                .collect();
+            self.sink.plays.push(PlayFact {
+                site: record.site,
+                play_group: PlayGroupId(group),
+                kind: record.kind,
+                duration: record.duration.clone(),
+                animations,
+                dynamic_wait: match record.kind {
+                    PlayKind::Wait => Truth::Maybe,
+                    PlayKind::Play => Truth::No,
+                },
+                has_stop_condition: record.has_stop_condition,
+                frozen_frame: record.frozen_frame,
+                always_update_mobjects: Truth::Maybe,
+                star_args: record.star_args,
+                certainty: Presence::Maybe,
+                repetitions: Num::Interval {
+                    lo: Some(0.0),
+                    hi: None,
+                },
+                call_path,
+            });
+            if self.scene_run {
+                self.ctx.mark_summary_play(group);
+            }
         }
     }
 
@@ -813,6 +987,32 @@ pub(crate) fn summarize_callable(
         }
     }
 
+    // Play / wait records: one per site and kind, in body order. The
+    // summary-run play facts carry caller-state-dependent judgments made
+    // against placeholder state (auto-add certainty, wait dynamics,
+    // suspension) — only the syntactic fields survive into the record;
+    // rehydration degrades everything else (never a wrong fact).
+    // Rehydrated callee records already sit in `sink.plays`, so records
+    // propagate transitively; deduplication by site keeps recursive SCC
+    // iteration from growing the list unboundedly.
+    let mut plays: Vec<SummaryPlay> = Vec::new();
+    let mut play_sites: BTreeSet<(AllocationSite, bool)> = BTreeSet::new();
+    for fact in &sink.plays {
+        if !play_sites.insert((fact.site, matches!(fact.kind, PlayKind::Wait))) {
+            continue;
+        }
+        plays.push(SummaryPlay {
+            site: fact.site,
+            kind: fact.kind,
+            duration: fact.duration.clone(),
+            animation_sites: fact.animations.iter().map(|played| played.site).collect(),
+            has_stop_condition: fact.has_stop_condition,
+            frozen_frame: fact.frozen_frame,
+            star_args: fact.star_args,
+            certainty: fact.certainty,
+        });
+    }
+
     // Return alias: all return paths must agree.
     let mut returns: Option<SummaryReturn> = None;
     for observation in &sink.returns {
@@ -878,6 +1078,7 @@ pub(crate) fn summarize_callable(
         qualified_name: qualified_name.to_owned(),
         params,
         events,
+        plays,
         returns,
         return_fact,
         converged: true,

@@ -392,6 +392,14 @@ pub(super) fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
             })
         })
         .collect();
+    // Play groups rehydrated from effect summaries during this scene's
+    // lifecycle runs (drained per scene: the context is shared across
+    // scenes, which run strictly sequentially).
+    let summary_derived_plays = ctx
+        .take_summary_play_groups()
+        .into_iter()
+        .map(crate::semantic::state::PlayGroupId)
+        .collect();
     SceneLifecycle {
         qualified_name: record.qualified_name.clone(),
         file: record.file,
@@ -401,6 +409,7 @@ pub(super) fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
         events,
         snapshots: sink.snapshots,
         plays: sink.plays,
+        summary_derived_plays,
         updaters: sink.updaters,
         updater_removals: sink.updater_removals,
         builders: sink.builders,

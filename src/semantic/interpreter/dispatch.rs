@@ -3,6 +3,7 @@
 //! method resolution along the profile base chain, project-override
 //! distrust, and the scene / mobject method effect arms.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rustpython_parser::ast::{self, Ranged};
@@ -23,7 +24,8 @@ use super::heap_ops::{
     mutator_channels, seed_path_counts, seed_z_index, set_z_index_family_arg,
 };
 use super::{
-    DefMap, FixedAction, FixedKind, FixedRegistrationFact, TargetRequirement, TargetRequirementFact,
+    DefMap, FallbackFact, FixedAction, FixedKind, FixedRegistrationFact, TargetRequirement,
+    TargetRequirementFact,
 };
 
 /// Lifecycle methods whose project override invalidates curated animation
@@ -48,6 +50,15 @@ pub(super) struct Ctx<'a> {
     pub(super) defs: &'a DefMap<'a>,
     pub(super) summaries: &'a SummaryTable,
     call_facts: BTreeMap<(FileId, u32, u32), &'a QualifiedCall>,
+    /// Scene-run call sites whose helper inlining fell back to the effect
+    /// summary; accumulated during the scene runs, drained once by
+    /// `analyze` into `LifecycleFacts::inline_fallbacks`. A side channel
+    /// because the machines borrow the trace sink exclusively.
+    inline_fallbacks: RefCell<Vec<FallbackFact>>,
+    /// `PlayGroupId` values of summary-derived plays rehydrated during
+    /// the *current* scene run; drained per scene by `run_scene` into
+    /// `SceneLifecycle::summary_derived_plays`.
+    summary_play_groups: RefCell<BTreeSet<u64>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -75,6 +86,8 @@ impl<'a> Ctx<'a> {
             defs,
             summaries,
             call_facts,
+            inline_fallbacks: RefCell::new(Vec::new()),
+            summary_play_groups: RefCell::new(BTreeSet::new()),
         }
     }
 
@@ -82,6 +95,26 @@ impl<'a> Ctx<'a> {
         self.call_facts
             .get(&(file, range.start().into(), range.end().into()))
             .copied()
+    }
+
+    /// Records one scene-run inline fallback (final emitting pass only).
+    pub(super) fn record_inline_fallback(&self, fact: FallbackFact) {
+        self.inline_fallbacks.borrow_mut().push(fact);
+    }
+
+    /// Drains every recorded inline fallback.
+    pub(super) fn take_inline_fallbacks(&self) -> Vec<FallbackFact> {
+        std::mem::take(&mut *self.inline_fallbacks.borrow_mut())
+    }
+
+    /// Marks one play group of the current scene run as summary-derived.
+    pub(super) fn mark_summary_play(&self, group: u64) {
+        self.summary_play_groups.borrow_mut().insert(group);
+    }
+
+    /// Drains the summary-derived play groups of the current scene run.
+    pub(super) fn take_summary_play_groups(&self) -> BTreeSet<u64> {
+        std::mem::take(&mut *self.summary_play_groups.borrow_mut())
     }
 
     /// The curated symbol entry for calling `method` on `class_id`,
@@ -385,7 +418,14 @@ impl<'a> Machine<'a, '_> {
         }
         if candidates.len() == 1 {
             let candidate = candidates[0].clone();
-            if self.ctx.defs.defs.contains_key(&candidate) {
+            if let Some(def) = self.ctx.defs.defs.get(&candidate) {
+                if def.class.is_none() {
+                    // A project module-level function (same-module or
+                    // resolved through imports): scene runs inline it —
+                    // a scene passed as an argument flows as the live
+                    // scene state (DESIGN §2.1 "Scene helper").
+                    return self.call_module_function(&candidate, call, fact, state);
+                }
                 return self.apply_summary_call(&candidate, None, call, fact, state);
             }
             if self.ctx.index.classes.contains_key(&candidate) {

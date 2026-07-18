@@ -20,13 +20,18 @@
 //!
 //! - A `self.play(...)` inside a helper contributes its *membership*
 //!   effects (auto-add, introducer add, remover remove) to the summary;
-//!   the play group itself is not summarizable (its duration, auto-add
-//!   certainty, and wait dynamics depend on the caller's state at the
-//!   call point). Scene runs therefore *inline* resolvable
-//!   `self.<helper>()` bodies instead of applying their summaries, which
-//!   materializes helper plays as real per-call-site `PlayFact`s; the
-//!   summary path remains for summary runs and for the bounded-depth /
-//!   recursion fallback, where frontier plays stay unmaterialized.
+//!   the full play pipeline is not summarizable (its auto-add certainty
+//!   and wait dynamics depend on the caller's state at the call point).
+//!   Scene runs therefore *inline* resolvable helper bodies (Scene
+//!   methods and project module-level functions alike) instead of
+//!   applying their summaries, which materializes helper plays as real
+//!   per-call-site `PlayFact`s. The summary path remains for summary runs
+//!   and for the recursion / depth-cap fallback; there the summary's
+//!   [`SummaryPlay`] records — the play sites with their *syntactic*
+//!   facts (literal duration, argument sites, stop condition, frozen
+//!   frame) — are rehydrated into conservative maybe-certainty
+//!   `PlayFact`s so plays behind the frontier stay visible without
+//!   re-running the DESIGN §3.2 pipeline.
 //! - Effects on values that are neither parameters, `self`, nor local
 //!   allocations become [`SummaryOperand::Opaque`] and are applied as
 //!   unknown mutations, never as certain facts.
@@ -36,9 +41,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::frontend::index::{ProjectIndex, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::events::MutationKind;
-use crate::semantic::interpreter::{DefMap, FnDef, ReturnFact};
+use crate::semantic::interpreter::{DefMap, FnDef, PlayKind, ReturnFact};
 use crate::semantic::state::{AnimationState, CallbackRef, UpdaterFact};
-use crate::semantic::values::{AllocationSite, KindSet, Presence};
+use crate::semantic::values::{AllocationSite, KindSet, Num, Presence};
 use crate::source::SourceManager;
 
 /// Maximum fixpoint iterations for one recursive SCC before widening.
@@ -202,6 +207,45 @@ pub struct SummaryEvent {
     pub effect: SummaryEffect,
 }
 
+/// One `play` / `wait` site reached by the summarized callable (directly
+/// or through further summarized callees), reduced to its *syntactic*
+/// facts.
+///
+/// A record is deliberately weaker than a traced
+/// [`PlayFact`](crate::semantic::interpreter::PlayFact): it keeps only
+/// what does not depend on the caller's state at the call point — the
+/// call site, play vs wait, the literal-derived duration, the argument
+/// expression sites, and the written `stop_condition` / `frozen_frame` /
+/// `*args` flags. Everything the DESIGN §3.2 pipeline would judge against
+/// live state (auto-add, wait dynamics, suspension, animation identity)
+/// is *absent* and must be rehydrated as `Maybe` / `Unknown`, never
+/// re-derived. Records exist so recursion and the inline depth cap do not
+/// lose plays entirely; each site appears once per kind (executions are
+/// unbounded, so per-site multiplicity carries no information).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SummaryPlay {
+    /// Source range of the whole `play` / `wait` call inside the helper.
+    pub site: AllocationSite,
+    /// Play vs wait.
+    pub kind: PlayKind,
+    /// The duration derivable from literals alone (`run_time` kwargs,
+    /// curated constructor literals, literal wait arguments); `Unknown`
+    /// whenever any contribution is not a literal.
+    pub duration: Num,
+    /// Source ranges of the non-starred play arguments (empty for waits).
+    pub animation_sites: Vec<AllocationSite>,
+    /// A `stop_condition` keyword was written at the call.
+    pub has_stop_condition: bool,
+    /// Literal `frozen_frame` keyword, when written.
+    pub frozen_frame: Option<bool>,
+    /// A `*args` splat appeared among the play arguments.
+    pub star_args: bool,
+    /// Path certainty *within* the summarized body (`Present` = on every
+    /// path through the callable). Rehydration composes this downward —
+    /// a rehydrated fact is never more certain than `Maybe`.
+    pub certainty: Presence,
+}
+
 /// What the callable's return value aliases (DESIGN §5.6 `ReturnAlias`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SummaryReturn {
@@ -225,6 +269,10 @@ pub struct MethodSummary {
     pub params: Vec<String>,
     /// Effects in body order.
     pub events: Vec<SummaryEvent>,
+    /// Play / wait sites reached by the callable (directly or through
+    /// summarized callees), one record per site and kind, in body order.
+    /// These are syntactic-fact records only; see [`SummaryPlay`].
+    pub plays: Vec<SummaryPlay>,
     /// Return-value alias fact.
     pub returns: SummaryReturn,
     /// Return-path classification (all-paths mobject return, bare-return
@@ -243,6 +291,7 @@ impl MethodSummary {
             qualified_name: qualified_name.to_owned(),
             params,
             events: Vec::new(),
+            plays: Vec::new(),
             returns: SummaryReturn::Unknown,
             return_fact: ReturnFact::unknown(),
             converged: true,
@@ -326,7 +375,10 @@ pub fn build(
         if !converged {
             // Widen only the unknown part: keep the last iterate's effects
             // and add one unknown-mutation over everything the callable
-            // could reach through its parameters (DESIGN §5.7).
+            // could reach through its parameters (DESIGN §5.7). The play
+            // records survive widening: they are purely syntactic
+            // may-happen facts, so keeping them can only reveal plays,
+            // never fabricate state.
             for name in &component {
                 let Some(def) = defs.defs.get(name) else {
                     continue;

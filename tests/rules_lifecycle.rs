@@ -142,13 +142,16 @@ fn mlc104_non_positive_duration_golden() {
     // `.animate` play through two call sites passing *different*
     // mobjects: exactly one diagnostic, anchored at the `run_time=0`
     // literal — never one per execution, never silenced by the differing
-    // targets.
+    // targets. helper_lib.py holds a *module-level* helper imported by
+    // module_helper.py from another file: the play inlines the same way
+    // and the diagnostic anchors in the helper's file.
     assert_golden(
         "MLC104",
         &[
             "alias.py:6:19 MLC104 error certain",
             "helper.py:6:40 MLC104 error certain",
             "helper.py:14:54 MLC104 error certain",
+            "helper_lib.py:5:37 MLC104 error certain",
             "invalid.py:7:44 MLC104 error certain",
             "invalid.py:8:44 MLC104 error certain",
             "invalid.py:9:19 MLC104 error certain",

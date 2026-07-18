@@ -182,3 +182,12 @@ class WideChain(Scene):
         self.shine(sq)
         self.shine(sq)
         self.shine(sq)
+
+
+class RecursiveWait(Scene):
+    def pulse(self):
+        self.wait(3)
+        self.pulse()
+
+    def construct(self):
+        self.pulse()

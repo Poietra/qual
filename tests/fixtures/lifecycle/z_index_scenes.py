@@ -3,6 +3,7 @@ from manim import Circle, Dot, Scene, Square, VGroup
 
 def restyle(mob):
     mob.set_z_index(3)
+    restyle(mob)
 
 
 class ZFacts(Scene):
