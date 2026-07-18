@@ -120,9 +120,10 @@ pub struct SceneCoverage {
     /// staleness and channel rules stayed silent for them.
     pub builders_with_unknown_target: usize,
     /// Helper calls that fell back to an effect summary instead of being
-    /// inlined (recursion cycles / depth cap). Present only when the
-    /// lifecycle fact layer exposes the count; see
-    /// [`helper_inline_fallbacks`].
+    /// inlined (recursion cycles / depth cap / unresolvable callees).
+    /// Absent: the fact layer records the frontier project-wide only
+    /// (see [`helper_inline_fallbacks`]), so the count lives on
+    /// [`ProjectCoverage`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub helper_inline_fallbacks: Option<usize>,
 }
@@ -170,7 +171,9 @@ pub struct ProjectCoverage {
     pub builders_with_unknown_target: usize,
     /// Union of the per-file `apis_not_in_profile` sets.
     pub apis_not_in_profile: BTreeSet<String>,
-    /// Total helper inline fallbacks, when the fact layer exposes them.
+    /// Helper call sites that fell back to an effect summary instead of
+    /// being inlined ([`LifecycleFacts::inline_fallbacks`]),
+    /// deduplicated across scenes sharing a helper chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub helper_inline_fallbacks: Option<usize>,
 }
@@ -192,15 +195,15 @@ pub struct CoverageReport {
 
 /// Per-scene helper-inline-fallback count.
 ///
-/// A sibling fact (`LifecycleFacts::inline_fallbacks`) records the helper
-/// call sites that fell back to an effect summary instead of being
-/// inlined. Until that field lands in this build the count is
-/// unavailable, and the report omits the row instead of inventing a zero
-/// (absence of the fact is not a fact of absence). Hooking the field up
-/// is a one-line change here.
+/// [`LifecycleFacts::inline_fallbacks`] records the helper call sites
+/// that fell back to an effect summary instead of being inlined — but
+/// project-wide, deduplicated across scenes that share a helper chain,
+/// so no sound per-scene attribution exists. The per-scene row therefore
+/// stays absent (a split would fabricate attribution) while the project
+/// total reports the real frontier count.
 #[allow(
     clippy::unnecessary_wraps,
-    reason = "signature is the stable hookup point for the sibling fact"
+    reason = "signature is the stable hookup point should the fact gain a per-scene shape"
 )]
 fn helper_inline_fallbacks(_lifecycle: &LifecycleFacts, _scene: &SceneLifecycle) -> Option<usize> {
     None
@@ -251,7 +254,7 @@ pub fn collect(
     }
     scenes.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let project = project_totals(&files, &scenes);
+    let project = project_totals(&files, &scenes, lifecycle.inline_fallbacks.len());
     CoverageReport {
         knowledge_profile: profile.name.clone(),
         target_python: target_python.to_owned(),
@@ -417,7 +420,11 @@ fn collect_import_froms<'a>(stmts: &'a [ast::Stmt], out: &mut Vec<&'a ast::StmtI
     }
 }
 
-fn project_totals(files: &[FileCoverage], scenes: &[SceneCoverage]) -> ProjectCoverage {
+fn project_totals(
+    files: &[FileCoverage],
+    scenes: &[SceneCoverage],
+    inline_fallbacks: usize,
+) -> ProjectCoverage {
     let mut totals = ProjectCoverage {
         files: files.len(),
         files_parsed: files.iter().filter(|file| file.parsed).count(),
@@ -449,22 +456,12 @@ fn project_totals(files: &[FileCoverage], scenes: &[SceneCoverage]) -> ProjectCo
             .iter()
             .flat_map(|file| file.apis_not_in_profile.iter().cloned())
             .collect(),
-        helper_inline_fallbacks: None,
+        // The frontier fact is recorded project-wide (deduplicated
+        // across scenes sharing a helper chain), so the total comes
+        // straight from the lifecycle fact layer rather than a
+        // per-scene sum.
+        helper_inline_fallbacks: Some(inline_fallbacks),
     };
-    // Sum the per-scene fallback counts only when every scene exposes one:
-    // a partial sum would understate the total.
-    if !scenes.is_empty()
-        && scenes
-            .iter()
-            .all(|scene| scene.helper_inline_fallbacks.is_some())
-    {
-        totals.helper_inline_fallbacks = Some(
-            scenes
-                .iter()
-                .filter_map(|scene| scene.helper_inline_fallbacks)
-                .sum(),
-        );
-    }
 
     let mut names: BTreeMap<&str, usize> = BTreeMap::new();
     for file in files {
@@ -693,8 +690,8 @@ fn render_confidence_line(out: &mut String, project: &ProjectCoverage) {
 ///
 /// Top-level keys: `knowledge_profile`, `target_python`, `files`,
 /// `scenes`, `project` (see the field docs above for each object's keys;
-/// `helper_inline_fallbacks` appears only when the lifecycle fact layer
-/// provides the count). Keys are stable; numbers are counts of facts.
+/// `helper_inline_fallbacks` appears on `project` only — the frontier is
+/// recorded project-wide). Keys are stable; numbers are counts of facts.
 #[must_use]
 pub fn render_json(report: &CoverageReport) -> String {
     let mut output =

@@ -46,9 +46,22 @@ interpreter modularization).
   constructor state — per file, per scene, and as project totals with a
   count-based confidence line. Numbers are counts of computed facts;
   output is deterministic. The JSON keys are documented in the README;
-  a `helper_inline_fallbacks` count joins the report once the lifecycle
-  fact layer exposes it (the key is absent until then, never a
-  fabricated zero).
+  the `helper_inline_fallbacks` count reports the
+  `LifecycleFacts::inline_fallbacks` frontier on the project totals
+  (recorded project-wide and deduplicated across scenes sharing a helper
+  chain, so the count appears on `project` only — never split per scene).
+- New rule `MLR123` (error/high, phase 4): a curated OpenGL-only mesh
+  mobject (`Object3D` / `Mesh` / `FullScreenQuad` from
+  `manim.renderer.shader`, the `OpenGLSurface` family, or a project
+  subclass provably rooted at one) definitely added to a scene while an
+  active profile targets Cairo — `Camera.type_or_raise` raises
+  `TypeError` at the first captured frame. Silent on OpenGL-only profile
+  sets, Maybe adds, Unknown kinds, and mixed mesh/Mobject inheritance.
+  Seven upstream mesh classes were curated into
+  `src/knowledge/profiles/v0_20.json` (verified against the pinned clean
+  base commit); as a side effect `MLR101`/`MLR126` now correctly see the
+  `OpenGLSurface` family's kinds. Rule counts: 80 implemented /
+  12 reserved.
 - Reverse-direction `target-python` hint on parse failures: when a file
   fails to parse, the configured target is below 3.7, and the failing
   line (or the parser message) mentions `async`/`await` as a word, the

@@ -1120,7 +1120,7 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 79] = [
+    const DOCS: [(&str, &str); 80] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -1168,6 +1168,7 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLR119", include_str!("../docs/rules/MLR119.md")),
         ("MLR120", include_str!("../docs/rules/MLR120.md")),
         ("MLR121", include_str!("../docs/rules/MLR121.md")),
+        ("MLR123", include_str!("../docs/rules/MLR123.md")),
         ("MLR124", include_str!("../docs/rules/MLR124.md")),
         ("MLR125", include_str!("../docs/rules/MLR125.md")),
         ("MLR126", include_str!("../docs/rules/MLR126.md")),

@@ -1,8 +1,12 @@
-from manim import FadeIn, Square
+from manim import FadeIn, RIGHT, Square
 
 
 def flourish(scene, mob):
     scene.play(FadeIn(mob), run_time=2)
+
+
+def wiggle(scene, mob):
+    scene.play(mob.animate.shift(RIGHT), run_time=2)
 
 
 def spin(scene, mob):

@@ -1,6 +1,6 @@
 from external_pkg import boost
-from helper_lib import entrance, flourish, make_square, spin, tag
-from manim import Scene, Square
+from helper_lib import entrance, flourish, make_square, spin, tag, wiggle
+from manim import Circle, Scene, Square
 
 
 class ImportedHelper(Scene):
@@ -44,3 +44,18 @@ class ThirdParty(Scene):
     def construct(self):
         sq = Square()
         boost(self, sq)
+
+
+class ImportedAnimateTwoTargets(Scene):
+    def construct(self):
+        a = Square()
+        b = Circle()
+        wiggle(self, a)
+        wiggle(self, b)
+
+
+class ImportedLoop(Scene):
+    def construct(self):
+        sq = Square()
+        for _ in range(3):
+            flourish(self, sq)

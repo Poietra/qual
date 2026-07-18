@@ -216,7 +216,7 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
 
 ## 解析カバレッジ
 
-保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のかを区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン。
+保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のかを区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン、インライン化されずサマリーへフォールバックしたヘルパー呼び出し(再帰・深さ上限・解決不能。プロジェクト全体で重複排除して集計)。
 
 すべての数値は計算済みファクトの個数であり、比率は「解決済み / 総数」の単純なカウント対のみです。`--format json` は安定したキーを持つ機械可読ドキュメントを出力します(トップレベルキー: `knowledge_profile`、`target_python`、`files`、`scenes`、`project`。詳細は英語版 README を参照)。出力は決定的で、同一入力に対してバイト単位で安定です。
 
@@ -250,7 +250,7 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 
 ## ルールカタログ
 
-4 ファミリーで 92 個のルール ID を予約しており、**79 個が実装済み、13 個が reserved** です。
+4 ファミリーで 92 個のルール ID を予約しており、**80 個が実装済み、12 個が reserved** です。
 
 | ファミリー | 実装済み | reserved |
 | --- | --- | --- |
@@ -259,7 +259,7 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 | MLP パフォーマンス | 21 | 6 |
 | MLD 決定性 / 可搬性 | 7 | 0 |
 
-reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、knowledge profile 上の mesh / `Object3D` クラスの検証(`MLR123`)、プロセスグローバルな SVG キャッシュ意味論の検証(`MLP217`)、ローカルフォークのオーバーレイプロファイル(`MLP214`/`MLP225`)。
+reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、プロセスグローバルな SVG キャッシュ意味論の検証(`MLP217`)、ローカルフォークのオーバーレイプロファイル(`MLP214`/`MLP225`)。
 
 ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`manim-lint explain <ID>` でも読めます。
 

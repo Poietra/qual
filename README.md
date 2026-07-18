@@ -356,6 +356,7 @@ project
   constructs above target-python (MLC000): 1
   unresolved imports: 2 (1 star, 1 relative)
   manim APIs not in the knowledge profile: 1
+  helper calls summarized, not inlined: 0
   top unresolved calls: mystery x1
 
 analysis confidence: 1/1 files parsed, 6/7 calls resolved, 1/2 play durations known, 1/1 scene constructors resolved (counts of analyzed facts, not estimates)
@@ -371,10 +372,11 @@ stable machine-readable document with top-level keys
 `path`, `constructor_state_unknown`, `plays`,
 `plays_with_unknown_duration`, `builders`,
 `builders_with_unknown_target`), and `project` (the totals plus
-`top_unresolved_call_names`). A `helper_inline_fallbacks` count appears
-on scenes and the project once the lifecycle fact layer exposes it;
-until then the key is absent rather than a fabricated zero. Output is
-deterministic and byte-stable for identical inputs.
+`top_unresolved_call_names` and `helper_inline_fallbacks` — the helper
+call sites where inlining fell back to an effect summary, recorded
+project-wide and deduplicated across scenes sharing a helper chain, so
+the count appears on `project` only). Output is deterministic and
+byte-stable for identical inputs.
 
 ## CI integration
 
@@ -406,13 +408,13 @@ Or upload SARIF so findings appear in the GitHub code-scanning UI:
 
 ## Rule catalog
 
-92 rule IDs are reserved across the four families; **79 are implemented and
-13 are reserved**:
+92 rule IDs are reserved across the four families; **80 are implemented and
+12 are reserved**:
 
 | Family | Implemented | Reserved |
 | --- | --- | --- |
 | MLC lifecycle / correctness | 28 | 3 |
-| MLR rendering | 23 | 4 |
+| MLR rendering | 24 | 3 |
 | MLP performance | 21 | 6 |
 | MLD determinism / portability | 7 | 0 |
 
@@ -422,7 +424,6 @@ on a named capability the fact layers do not provide yet — for example
 post-Transform identity facts (`MLC116`), cross-registration updater
 read-after-write ordering facts (`MLR109`), SVG asset content facts
 (`MLR118`), an alias-safe cross-object `z_index` stacking proof (`MLR122`),
-a curated mesh / `Object3D` class in the knowledge profile (`MLR123`),
 curated process-global SVG cache semantics (`MLP217`), and a local fork
 overlay profile (`MLP214`/`MLP225`).
 
@@ -496,7 +497,7 @@ deterministic and byte-stable for the same input.
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
   ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
   states each rule's exact scope.
-- **Not yet implemented.** The 13 reserved rules (see above); the SQLite
+- **Not yet implemented.** The 12 reserved rules (see above); the SQLite
   result cache (`--no-cache` is an accepted no-op); threshold calibration
   against rendered baselines; a nightly render-comparison CI.
 

@@ -364,3 +364,57 @@ fn cost_report_composes_looped_helper_call_site_frames() {
         "the direct execution must prove the callback: {output}"
     );
 }
+
+/// Wave-11 composition: an *imported* module-level helper (cross-file
+/// inlining) inside a literal `range(3)` loop must multiply exactly like
+/// a method helper — the caller's trip interval keys the helper play's
+/// execution via the call path, and each execution keeps the literal 2 s
+/// grid from the play-level `run_time` kwarg.
+const IMPORTED_HELPER_LIB: &str = "\
+from manim import *
+
+
+def go(scene, m):
+    scene.play(m.animate.shift(RIGHT), run_time=2)
+";
+
+const IMPORTED_LOOPED_SCENE: &str = "\
+from helper_lib import go
+from manim import *
+
+
+class Looped(Scene):
+    def construct(self):
+        tracker = ValueTracker(0)
+        a = Square()
+        b = Circle()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(a, b, label)
+        for _ in range(3):
+            go(self, a)
+        go(self, b)
+";
+
+#[test]
+fn cost_report_composes_imported_helper_loop_frames() {
+    let dir = project(&[
+        ("helper_lib.py", IMPORTED_HELPER_LIB),
+        ("looped.py", IMPORTED_LOOPED_SCENE),
+    ]);
+    let output = cost_output(dir.path(), None).unwrap();
+
+    // One play row per call site, anchored in the helper's file, each
+    // with the exact per-execution grid.
+    let play_rows = output
+        .lines()
+        .filter(|line| line.contains("helper_lib.py:5:5 play duration 2 s -> frames ~120"))
+        .count();
+    assert_eq!(play_rows, 2, "one play row per call site: {output}");
+
+    // The direct call site proves ~120 frames; the looped site is
+    // branch-dependent and adds up to 3 x 120 above.
+    assert!(
+        output.contains("MathTex construction x ~120 to ~480 invocations across 1 proven play(s)"),
+        "loop trips must multiply the looped execution's frames: {output}"
+    );
+}

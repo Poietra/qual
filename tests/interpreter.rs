@@ -1677,3 +1677,63 @@ fn method_summaries_carry_play_records() {
         "self.wait(3)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Wave-11 composition: the play-kwarg run_time decomposition (helper
+// execution identity) must survive *module-level* helper inlining (helper
+// reach), and caller loop trip counts must compose across files.
+// ---------------------------------------------------------------------------
+
+/// An imported module-level helper reached from two call sites passing
+/// *different* mobjects keeps the literal play-level `run_time` per
+/// execution: the identity decomposition composes with cross-file
+/// inlining, and the merged per-site builder view makes no
+/// cross-execution identity claim.
+#[test]
+fn imported_animate_helper_keeps_exact_duration_across_differing_targets() {
+    let (sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let two = scene(&lifecycle, "imported_helpers.ImportedAnimateTwoTargets");
+    assert_eq!(two.plays.len(), 2, "one play fact per call site");
+    let a = alloc_id(two, &sources, "Square()");
+    let b = alloc_id(two, &sources, "Circle()");
+    for play in &two.plays {
+        assert_eq!(play.duration, Num::int(2), "the play kwarg survives");
+        assert_eq!(play.certainty, Presence::Present);
+        assert_eq!(play.repetitions, Num::int(1));
+        // Anchored at the play inside the helper's file.
+        assert_ne!(play.site.file, two.file);
+        assert!(!two.summary_derived_plays.contains(&play.play_group));
+    }
+    let first = two.plays[0].animations[0].state.as_ref().expect("state");
+    let second = two.plays[1].animations[0].state.as_ref().expect("state");
+    assert!(first.targets.contains(&a));
+    assert!(second.targets.contains(&b));
+    assert_eq!(first.run_time, Num::int(2));
+    assert_eq!(second.run_time, Num::int(2));
+    assert_ne!(two.plays[0].call_path, two.plays[1].call_path);
+    let builder = two.builders.values().next().expect("builder fact");
+    assert_eq!(builder.target, None, "no cross-execution identity claim");
+    assert_eq!(builder.played, Truth::Yes);
+}
+
+/// An imported helper called inside a literal `range(3)` loop composes
+/// the caller's trip count into the play fact's repetition interval —
+/// cross-file, exactly like a method helper.
+#[test]
+fn imported_helper_loop_trip_count_composes_into_repetitions() {
+    let (_sources, _facts, lifecycle) = analyze(&["imported_helpers.py", "helper_lib.py"]);
+    let looped = scene(&lifecycle, "imported_helpers.ImportedLoop");
+    assert_eq!(looped.plays.len(), 1, "one fact per call site");
+    let play = &looped.plays[0];
+    assert_eq!(play.certainty, Presence::Maybe);
+    assert_eq!(
+        play.repetitions,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: Some(3.0),
+        },
+        "the caller's literal trip count threads through cross-file inlining"
+    );
+    assert_eq!(play.duration, Num::int(2));
+    assert!(!looped.summary_derived_plays.contains(&play.play_group));
+}

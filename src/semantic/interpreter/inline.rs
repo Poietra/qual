@@ -45,6 +45,12 @@
 //!    exact populated-vs-degraded field list is documented on
 //!    [`SceneLifecycle::summary_derived_plays`]), so plays behind the
 //!    frontier stay visible without fabricating pipeline effects.
+//!    (Known scope limit: summary runs are context-free and bind no
+//!    parameter as the scene, so a play through a scene *parameter* of a
+//!    module-level helper produces no [`SummaryPlay`] record — behind a
+//!    module-helper recursion / depth-cap frontier only the traced first
+//!    inline level keeps those sites visible, and the recorded
+//!    [`FallbackFact`] marks the loss for coverage reporting.)
 //!
 //! Whichever mode handles a call site owns *all* of that call's effects,
 //! so no effect is ever applied twice (inline + summary) or dropped
