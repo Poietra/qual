@@ -1,7 +1,7 @@
 //! Inline suppression comments (DESIGN §8.3).
 //!
-//! - `code  # manim-lint: ignore[MLC108]` suppresses that statement's
-//!   diagnostics (matched by line in Phase 0).
+//! - `code  # manim-lint: ignore[MLC108]` suppresses that *statement's*
+//!   diagnostics.
 //! - A standalone `# manim-lint: ignore[...]` comment applies to the next
 //!   statement.
 //! - `# manim-lint: file-ignore[MLP]` applies to the whole file and is only
@@ -10,6 +10,30 @@
 //! - An unknown rule ID inside a suppression produces its own `MLC001`
 //!   warning and suppresses nothing. Unknown IDs in *config* are exit 2
 //!   instead (validated by the config loader).
+//!
+//! # Statement granularity
+//!
+//! "Statement" is resolved against the AST at line granularity, recursing
+//! into every compound-statement suite:
+//!
+//! - a *simple* statement covers its whole source extent, continuation
+//!   lines included — `self.play(\n ... \n)` is one span, so both the
+//!   end-of-line form (a comment on any of its lines) and the standalone
+//!   form (a comment on the line above it) suppress diagnostics anchored
+//!   anywhere inside the call;
+//! - a *compound* statement (`def`, `class`, `if`, `for`, `while`,
+//!   `with`, `try`, `match`, and their `async` / `elif` variants) covers
+//!   only its **header** lines — from its first line to the line of the
+//!   colon opening its suite — never its body. Suppressing a whole suite
+//!   with one comment would hide unrelated findings.
+//!
+//! A standalone comment *inside* a multi-line statement (e.g. within a
+//! parenthesized argument list) belongs to that statement, not to the
+//! statement after it. A suppression covers every diagnostic whose primary
+//! span **starts** within the target statement's line span. When the file
+//! has no AST (syntax error), the Phase 0 line behavior is the fallback:
+//! end-of-line comments target their own line, standalone comments the
+//! next line holding code.
 
 use std::collections::BTreeMap;
 
@@ -23,8 +47,10 @@ use crate::source::{Comment, SourceFile};
 /// Suppressions collected from one file's comments.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SuppressionIndex {
-    /// Selectors applying to diagnostics that start on a given line.
-    line_selectors: BTreeMap<usize, Vec<String>>,
+    /// Selectors applying to diagnostics whose primary span starts within
+    /// an inclusive one-based line interval (a statement's span, see the
+    /// module docs).
+    span_selectors: BTreeMap<(usize, usize), Vec<String>>,
     /// Selectors applying to every diagnostic in the file.
     file_selectors: Vec<String>,
 }
@@ -40,19 +66,21 @@ impl SuppressionIndex {
         {
             return true;
         }
-        self.line_selectors
-            .get(&diagnostic.primary_span.start.line)
-            .is_some_and(|selectors| {
-                selectors
-                    .iter()
-                    .any(|selector| selector_matches(selector, &diagnostic.rule_id))
+        let line = diagnostic.primary_span.start.line;
+        self.span_selectors
+            .iter()
+            .any(|(&(start, end), selectors)| {
+                (start..=end).contains(&line)
+                    && selectors
+                        .iter()
+                        .any(|selector| selector_matches(selector, &diagnostic.rule_id))
             })
     }
 
     /// Whether the index contains no suppressions at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.line_selectors.is_empty() && self.file_selectors.is_empty()
+        self.span_selectors.is_empty() && self.file_selectors.is_empty()
     }
 }
 
@@ -71,6 +99,7 @@ pub fn selector_matches(selector: &str, rule_id: &str) -> bool {
 pub fn collect(file: &SourceFile) -> (SuppressionIndex, Vec<Diagnostic>) {
     let mut index = SuppressionIndex::default();
     let mut warnings = Vec::new();
+    let statements = statement_spans(file);
     let code_lines = code_lines(file);
     let header_end = header_end_line(file);
 
@@ -81,14 +110,10 @@ pub fn collect(file: &SourceFile) -> (SuppressionIndex, Vec<Diagnostic>) {
         let rest = comment.text[directive + "manim-lint:".len()..].trim_start();
         match parse_directive(rest) {
             Some((DirectiveKind::Ignore, selectors)) => {
-                let target_line = if comment.own_line {
-                    next_code_line(&code_lines, comment.line)
-                } else {
-                    Some(comment.line)
-                };
+                let target = target_span(statements.as_deref(), &code_lines, comment);
                 let valid = validate(selectors, file, comment, &mut warnings);
-                if let Some(line) = target_line {
-                    index.line_selectors.entry(line).or_default().extend(valid);
+                if let Some(span) = target {
+                    index.span_selectors.entry(span).or_default().extend(valid);
                 }
             }
             Some((DirectiveKind::FileIgnore, selectors)) => {
@@ -113,6 +138,159 @@ pub fn collect(file: &SourceFile) -> (SuppressionIndex, Vec<Diagnostic>) {
         }
     }
     (index, warnings)
+}
+
+/// The inclusive line interval an `ignore` comment applies to (DESIGN §8.3
+/// and the module docs).
+///
+/// With a parsed AST: a comment on a line some statement covers (an
+/// end-of-line comment, or a standalone comment inside a multi-line
+/// statement's continuation) targets the innermost covering statement; a
+/// standalone comment between statements targets the next statement. An
+/// end-of-line comment no statement covers (e.g. on a bare `else:` line)
+/// falls back to its own line. Without an AST the Phase 0 line behavior
+/// applies throughout.
+fn target_span(
+    statements: Option<&[(usize, usize)]>,
+    code_lines: &[usize],
+    comment: &Comment,
+) -> Option<(usize, usize)> {
+    if let Some(spans) = statements {
+        if let Some(covering) = innermost_covering(spans, comment.line) {
+            return Some(covering);
+        }
+        if comment.own_line {
+            return next_span(spans, comment.line);
+        }
+        return Some((comment.line, comment.line));
+    }
+    if comment.own_line {
+        next_code_line(code_lines, comment.line).map(|line| (line, line))
+    } else {
+        Some((comment.line, comment.line))
+    }
+}
+
+/// The innermost statement span covering `line`: among covering spans the
+/// one starting last (most nested), narrowest on a tie (inline suites).
+fn innermost_covering(spans: &[(usize, usize)], line: usize) -> Option<(usize, usize)> {
+    spans
+        .iter()
+        .copied()
+        .filter(|(start, end)| (*start..=*end).contains(&line))
+        .max_by_key(|&(start, end)| (start, std::cmp::Reverse(end)))
+}
+
+/// The first statement span starting after `line` (spans are sorted).
+fn next_span(spans: &[(usize, usize)], line: usize) -> Option<(usize, usize)> {
+    let position = spans.partition_point(|(start, _)| *start <= line);
+    spans.get(position).copied()
+}
+
+/// Inclusive one-based line spans of every statement (module docs), or
+/// `None` when the file has no AST.
+fn statement_spans(file: &SourceFile) -> Option<Vec<(usize, usize)>> {
+    let module = file.ast()?;
+    let colons = suite_colon_offsets(file);
+    let mut spans = Vec::new();
+    collect_statement_spans(file, &colons, &module.body, &mut spans);
+    spans.sort_unstable();
+    spans.dedup();
+    Some(spans)
+}
+
+/// Byte offsets of every `:` token at bracket depth zero, sorted. Inside a
+/// compound statement's range, the first such colon is the one opening its
+/// suite (colons in argument lists, subscripts, dict displays, and
+/// annotations sit inside brackets; f-strings lex as single tokens).
+fn suite_colon_offsets(file: &SourceFile) -> Vec<usize> {
+    let mut depth = 0_usize;
+    let mut colons = Vec::new();
+    for (token, range) in file.tokens() {
+        match token {
+            Tok::Lpar | Tok::Lsqb | Tok::Lbrace => depth += 1,
+            Tok::Rpar | Tok::Rsqb | Tok::Rbrace => depth = depth.saturating_sub(1),
+            Tok::Colon if depth == 0 => colons.push(range.start().into()),
+            _ => {}
+        }
+    }
+    colons
+}
+
+/// Records each statement's span and recurses into compound suites.
+fn collect_statement_spans(
+    file: &SourceFile,
+    colons: &[usize],
+    statements: &[ast::Stmt],
+    spans: &mut Vec<(usize, usize)>,
+) {
+    for statement in statements {
+        let range = statement.range();
+        let start_byte = usize::from(range.start());
+        let start = file.line_of_byte(start_byte);
+        let suites = child_suites(statement);
+        if suites.is_empty() {
+            // Simple statement: the whole extent, continuation lines
+            // included.
+            spans.push((start, file.line_of_byte(range.end().into())));
+        } else {
+            // Compound statement: header lines only — up to the colon
+            // opening its suite, so a comment line between the header and
+            // the first body statement stays attributable to that body
+            // statement.
+            let position = colons.partition_point(|offset| *offset < start_byte);
+            let header_end = colons
+                .get(position)
+                .filter(|offset| **offset < usize::from(range.end()))
+                .map_or(start, |offset| file.line_of_byte(*offset).max(start));
+            spans.push((start, header_end));
+            for suite in suites {
+                collect_statement_spans(file, colons, suite, spans);
+            }
+        }
+    }
+}
+
+/// The nested statement suites of a compound statement (empty for simple
+/// statements).
+fn child_suites(statement: &ast::Stmt) -> Vec<&[ast::Stmt]> {
+    match statement {
+        ast::Stmt::FunctionDef(inner) => vec![&inner.body],
+        ast::Stmt::AsyncFunctionDef(inner) => vec![&inner.body],
+        ast::Stmt::ClassDef(inner) => vec![&inner.body],
+        ast::Stmt::If(inner) => vec![&inner.body, &inner.orelse],
+        ast::Stmt::While(inner) => vec![&inner.body, &inner.orelse],
+        ast::Stmt::For(inner) => vec![&inner.body, &inner.orelse],
+        ast::Stmt::AsyncFor(inner) => vec![&inner.body, &inner.orelse],
+        ast::Stmt::With(inner) => vec![&inner.body],
+        ast::Stmt::AsyncWith(inner) => vec![&inner.body],
+        ast::Stmt::Try(inner) => {
+            let mut suites: Vec<&[ast::Stmt]> = vec![&inner.body];
+            for handler in &inner.handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                suites.push(&handler.body);
+            }
+            suites.push(&inner.orelse);
+            suites.push(&inner.finalbody);
+            suites
+        }
+        ast::Stmt::TryStar(inner) => {
+            let mut suites: Vec<&[ast::Stmt]> = vec![&inner.body];
+            for handler in &inner.handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                suites.push(&handler.body);
+            }
+            suites.push(&inner.orelse);
+            suites.push(&inner.finalbody);
+            suites
+        }
+        ast::Stmt::Match(inner) => inner
+            .cases
+            .iter()
+            .map(|case| case.body.as_slice())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +476,187 @@ mod tests {
     }
 
     #[test]
+    fn standalone_suppression_covers_the_whole_multiline_statement() {
+        // The review example: the diagnostic anchors on the `self.play(`
+        // line *and* rules may anchor deeper inside the continuation; the
+        // standalone form must cover the entire statement.
+        let sources = file_from(
+            "# manim-lint: ignore[MLC102]\n\
+             self.play(\n\
+             \x20   square.shift(RIGHT)\n\
+             )\n\
+             other = 1\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(2, "MLC102")), "start line");
+        assert!(
+            index.suppresses(&diagnostic_at(3, "MLC102")),
+            "continuation line"
+        );
+        assert!(index.suppresses(&diagnostic_at(4, "MLC102")), "close line");
+        assert!(
+            !index.suppresses(&diagnostic_at(5, "MLC102")),
+            "the next statement is not covered"
+        );
+        assert!(!index.suppresses(&diagnostic_at(2, "MLC104")));
+    }
+
+    #[test]
+    fn end_of_line_suppression_covers_the_whole_multiline_statement() {
+        for text in [
+            // Comment on the first line of the statement…
+            "self.play(  # manim-lint: ignore[MLC102]\n\
+             \x20   square.shift(RIGHT)\n\
+             )\n",
+            // …and on its closing line: both are "the same statement".
+            "self.play(\n\
+             \x20   square.shift(RIGHT)\n\
+             )  # manim-lint: ignore[MLC102]\n",
+        ] {
+            let sources = file_from(text);
+            let (index, warnings) = collect(&sources.files()[0]);
+            assert!(warnings.is_empty());
+            for line in 1..=3 {
+                assert!(
+                    index.suppresses(&diagnostic_at(line, "MLC102")),
+                    "line {line} of {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn standalone_comment_inside_a_parenthesized_continuation() {
+        // A comment *inside* the statement belongs to that statement, not
+        // to the statement after it.
+        let sources = file_from(
+            "self.play(\n\
+             \x20   # manim-lint: ignore[MLC102]\n\
+             \x20   square.shift(RIGHT)\n\
+             )\n\
+             other = 1\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(1, "MLC102")));
+        assert!(index.suppresses(&diagnostic_at(3, "MLC102")));
+        assert!(!index.suppresses(&diagnostic_at(5, "MLC102")));
+    }
+
+    #[test]
+    fn stacked_standalone_comments_all_reach_the_next_statement() {
+        let sources = file_from(
+            "# manim-lint: ignore[MLC102]\n\
+             # manim-lint: ignore[MLC104]\n\
+             self.play(\n\
+             \x20   square.shift(RIGHT)\n\
+             )\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(3, "MLC102")));
+        assert!(index.suppresses(&diagnostic_at(4, "MLC104")));
+        assert!(!index.suppresses(&diagnostic_at(3, "MLC101")));
+    }
+
+    #[test]
+    fn compound_statement_suppression_covers_the_header_not_the_body() {
+        let sources = file_from(
+            "# manim-lint: ignore[MLP201]\n\
+             for item in items:\n\
+             \x20   process(item)\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(2, "MLP201")), "header line");
+        assert!(
+            !index.suppresses(&diagnostic_at(3, "MLP201")),
+            "a suite is never suppressed wholesale"
+        );
+    }
+
+    #[test]
+    fn nested_statements_resolve_to_the_innermost_span() {
+        let sources = file_from(
+            "def construct(self):\n\
+             \x20   self.play(\n\
+             \x20       square.shift(RIGHT)\n\
+             \x20   )  # manim-lint: ignore[MLC102]\n\
+             \x20   self.add(square)\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(2, "MLC102")));
+        assert!(index.suppresses(&diagnostic_at(3, "MLC102")));
+        assert!(
+            !index.suppresses(&diagnostic_at(5, "MLC102")),
+            "the sibling statement is not covered"
+        );
+        assert!(
+            !index.suppresses(&diagnostic_at(1, "MLC102")),
+            "the enclosing def header is not covered"
+        );
+    }
+
+    #[test]
+    fn standalone_comment_at_the_top_of_a_body_reaches_the_first_statement() {
+        // The comment sits between the `def` header and the first body
+        // statement: it belongs to the body statement, not the header.
+        let sources = file_from(
+            "def construct(self):\n\
+             \x20   # manim-lint: ignore[MLC101]\n\
+             \x20   self.play(\n\
+             \x20   )\n\
+             \x20   self.play()\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(3, "MLC101")));
+        assert!(index.suppresses(&diagnostic_at(4, "MLC101")));
+        assert!(!index.suppresses(&diagnostic_at(1, "MLC101")), "header");
+        assert!(!index.suppresses(&diagnostic_at(5, "MLC101")), "sibling");
+    }
+
+    #[test]
+    fn multiline_def_header_is_one_span_up_to_its_colon() {
+        let sources = file_from(
+            "# manim-lint: ignore[MLC105]\n\
+             def helper(\n\
+             \x20   value,\n\
+             ):\n\
+             \x20   return value\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert!(warnings.is_empty());
+        for line in 2..=4 {
+            assert!(
+                index.suppresses(&diagnostic_at(line, "MLC105")),
+                "header line {line}"
+            );
+        }
+        assert!(!index.suppresses(&diagnostic_at(5, "MLC105")), "body");
+    }
+
+    #[test]
+    fn unparsable_file_falls_back_to_line_matching() {
+        // `def = 1` lexes but does not parse: no AST, Phase 0 fallback.
+        let sources = file_from(
+            "x = 1  # manim-lint: ignore[MLC108]\n\
+             # manim-lint: ignore[MLP201]\n\
+             y = 2\n\
+             def = 1\n",
+        );
+        let file = &sources.files()[0];
+        assert!(file.ast().is_none(), "fixture must fail to parse");
+        let (index, warnings) = collect(file);
+        assert!(warnings.is_empty());
+        assert!(index.suppresses(&diagnostic_at(1, "MLC108")));
+        assert!(index.suppresses(&diagnostic_at(3, "MLP201")));
+        assert!(!index.suppresses(&diagnostic_at(4, "MLP201")));
+    }
+
+    #[test]
     fn prefix_selector_suppresses_whole_category() {
         let sources = file_from("x = 1  # manim-lint: ignore[MLP]\n");
         let (index, _) = collect(&sources.files()[0]);
@@ -335,6 +694,21 @@ mod tests {
         // The valid ID in the same directive still suppresses.
         assert!(index.suppresses(&diagnostic_at(1, "MLC108")));
         assert!(!index.suppresses(&diagnostic_at(1, "MLC999")));
+    }
+
+    #[test]
+    fn unknown_rule_id_on_a_multiline_statement_still_warns() {
+        // The statement-span rework must not change MLC001 semantics.
+        let sources = file_from(
+            "# manim-lint: ignore[MLC999]\n\
+             self.play(\n\
+             \x20   square.shift(RIGHT)\n\
+             )\n",
+        );
+        let (index, warnings) = collect(&sources.files()[0]);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].rule_id, "MLC001");
+        assert!(!index.suppresses(&diagnostic_at(2, "MLC999")));
     }
 
     #[test]

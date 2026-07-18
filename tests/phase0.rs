@@ -215,6 +215,42 @@ fn valid_inline_suppression_suppresses_by_line() {
 }
 
 #[test]
+fn inline_suppression_covers_a_multiline_statement() {
+    // DESIGN §8.3: a suppression targets the *statement*, so a diagnostic
+    // anchored inside a multi-line call is covered by a standalone comment
+    // above it, while the next statement still reports.
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("demo.py"),
+        "from manim import *\n\
+         \n\
+         \n\
+         class Demo(Scene):\n\
+         \x20   def construct(self):\n\
+         \x20       # manim-lint: ignore[MLC101]\n\
+         \x20       self.play(\n\
+         \x20       )\n\
+         \x20       self.play()\n",
+    )
+    .unwrap();
+    let report = check(&args_for(project.path(), OutputFormat::Concise)).unwrap();
+    let mlc101: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC101")
+        .collect();
+    assert_eq!(mlc101.len(), 1, "only the unsuppressed play reports");
+    assert_eq!(mlc101[0].primary_span.start.line, 9);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.rule_id != "MLC001"),
+        "the suppression itself is valid"
+    );
+}
+
+#[test]
 fn cli_fps_override_beats_profile_value() {
     let project = tempfile::tempdir().unwrap();
     write_project(project.path());

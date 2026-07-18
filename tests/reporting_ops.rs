@@ -158,7 +158,7 @@ fn baseline_write_filter_and_line_insertion_survival() {
     assert_eq!(report.exit, ExitStatus::Failure, "MLC000 still fails");
 
     // The written file matches the v1 shape: schema_version 1, sorted
-    // entries with the four fingerprint fields and the scene placeholder.
+    // entries with the four fingerprint fields.
     let text = std::fs::read_to_string(&baseline_path).unwrap();
     let value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
     assert_eq!(value["schema_version"], 1);
@@ -168,7 +168,9 @@ fn baseline_write_filter_and_line_insertion_survival() {
         for key in ["rule_id", "path", "scene", "token_hash"] {
             assert!(entry.get(key).is_some(), "missing entry key {key}");
         }
-        assert_eq!(entry["scene"], "", "scene is the empty placeholder");
+        // This fixture has no Scene classes, so every diagnostic is
+        // outside any scene.
+        assert_eq!(entry["scene"], "", "no enclosing Scene class");
         assert!(
             entry["token_hash"]
                 .as_str()
@@ -208,6 +210,101 @@ fn baseline_write_filter_and_line_insertion_survival() {
     assert!(
         report.diagnostics.is_empty(),
         "inserting an unrelated line must not invalidate the baseline"
+    );
+    assert_eq!(report.exit, ExitStatus::Success);
+}
+
+/// Two Scene classes with token-identical `construct` bodies: without
+/// scene attribution their fingerprints would collide.
+const TWIN_SCENES: &str = "\
+from manim import *
+
+
+class SceneA(Scene):
+    def construct(self):
+        self.play()
+        self.wait(1)
+
+
+class SceneB(Scene):
+    def construct(self):
+        self.play()
+        self.wait(1)
+";
+
+#[test]
+fn identical_findings_in_two_scenes_get_distinct_fingerprints() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("demo.py"), TWIN_SCENES).unwrap();
+    let baseline_path = project.path().join("baseline.json");
+
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.write_baseline = Some(baseline_path.clone());
+    let report = check(&args).unwrap();
+    let empty_plays = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "MLC101")
+        .count();
+    assert_eq!(empty_plays, 2, "one empty play per scene");
+
+    let text = std::fs::read_to_string(&baseline_path).unwrap();
+    let value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
+    let entries: Vec<&Value> = value["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter(|entry| entry["rule_id"] == "MLC101")
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0]["token_hash"], entries[1]["token_hash"],
+        "the surrounding tokens are identical"
+    );
+    assert_eq!(entries[0]["scene"], "demo.SceneA");
+    assert_eq!(entries[1]["scene"], "demo.SceneB");
+
+    // Round trip: the scene-aware baseline suppresses everything, and
+    // re-writing it is byte-identical.
+    let again = project.path().join("baseline2.json");
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.baseline = Some(baseline_path.clone());
+    args.write_baseline = Some(again.clone());
+    let report = check(&args).unwrap();
+    assert!(report.diagnostics.is_empty(), "all diagnostics are known");
+    assert_eq!(
+        std::fs::read(&baseline_path).unwrap(),
+        std::fs::read(&again).unwrap(),
+        "scene-aware baseline output must be byte-stable"
+    );
+}
+
+#[test]
+fn pre_attribution_baseline_with_empty_scenes_still_suppresses() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("demo.py"), TWIN_SCENES).unwrap();
+    let baseline_path = project.path().join("baseline.json");
+
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.write_baseline = Some(baseline_path.clone());
+    check(&args).unwrap();
+
+    // Rewrite the baseline the way a pre-attribution build would have
+    // written it: every scene field blanked.
+    let text = std::fs::read_to_string(&baseline_path).unwrap();
+    let mut value: Value = serde_json::from_str(&text).expect("valid baseline JSON");
+    for entry in value["entries"].as_array_mut().expect("entries") {
+        entry["scene"] = Value::String(String::new());
+    }
+    std::fs::write(&baseline_path, serde_json::to_string(&value).unwrap()).unwrap();
+
+    let mut args = args_for(project.path(), OutputFormat::Concise);
+    args.baseline = Some(baseline_path);
+    let report = check(&args).unwrap();
+    assert!(
+        report.diagnostics.is_empty(),
+        "stored empty scenes act as wildcards: {:?}",
+        report.diagnostics
     );
     assert_eq!(report.exit, ExitStatus::Success);
 }

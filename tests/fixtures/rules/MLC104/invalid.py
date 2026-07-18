@@ -10,3 +10,5 @@ class Demo(Scene):
         self.wait(-1.5)
         self.wait(duration=0.0)
         self.play(Wait(run_time=0))
+        self.play(FadeIn(square, run_time=0))
+        self.play(Wait(0))

@@ -4,12 +4,23 @@
 //!
 //! A fingerprint never contains line numbers. It is
 //! `rule ID + relative path + qualified Scene name + surrounding token hash`.
-//! The Scene name is an empty placeholder string until lifecycle facts
-//! exist; the field is designed in now so the file format never changes.
-//! The token hash covers the token kinds and texts of the diagnostic
-//! statement line and its nearest non-blank neighbor line on each side, so
-//! inserting unrelated lines elsewhere in the file does not invalidate the
-//! entries.
+//! The Scene name is the qualified name of the discovered Scene class whose
+//! `class` statement encloses the diagnostic's primary span (resolved via
+//! [`SceneSpans`] from the project index), or the empty string for
+//! diagnostics outside every Scene. It distinguishes otherwise identical
+//! findings — e.g. two Scene classes with token-identical `construct`
+//! bodies in one file. The token hash covers the token kinds and texts of
+//! the diagnostic statement line and its nearest non-blank neighbor line on
+//! each side, so inserting unrelated lines elsewhere in the file does not
+//! invalidate the entries.
+//!
+//! # Compatibility: the empty scene as a wildcard
+//!
+//! Baselines written before scene attribution existed store `scene: ""` for
+//! every entry. So that those files keep suppressing, matching treats a
+//! *stored* empty scene as a wildcard: it matches a diagnostic regardless
+//! of its computed scene (an exact scene match is always consumed first).
+//! A stored non-empty scene only matches that same computed scene.
 //!
 //! The on-disk format is JSON matching `schemas/baseline-v1.json`:
 //! `schema_version` 1 plus a sorted entry list, serialized byte-stably.
@@ -20,6 +31,7 @@ use rustpython_parser::Tok;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Diagnostic;
+use crate::frontend::index::ProjectIndex;
 use crate::source::{SourceFile, SourceManager};
 
 /// Schema version written to and required from baseline files.
@@ -35,11 +47,68 @@ pub struct BaselineEntry {
     pub rule_id: String,
     /// Project-relative POSIX path of the diagnosed file.
     pub path: String,
-    /// Qualified Scene name. Currently always the empty placeholder string;
-    /// it is populated once lifecycle facts exist.
+    /// Qualified name of the discovered Scene class enclosing the
+    /// diagnostic, or `""` outside every Scene. A *stored* `""` also acts
+    /// as a wildcard when matching, for baselines written before scene
+    /// attribution existed (module docs).
     pub scene: String,
     /// Hash of the surrounding tokens: `fnv1a64:` plus 16 hex digits.
     pub token_hash: String,
+}
+
+/// Scene attribution for fingerprints: per file, the line spans of every
+/// discovered Scene class (DESIGN §8.3 "qualified Scene").
+///
+/// Built from the project index rather than lifecycle facts: the index
+/// records every discovered Scene subclass with its file and `class`
+/// statement span, whether or not its lifecycle could be interpreted. The
+/// default (empty) attribution maps every diagnostic to the empty scene.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SceneSpans {
+    /// Relative path → sorted `(start_line, end_line, qualified_name)` of
+    /// its Scene class statements.
+    per_file: BTreeMap<String, Vec<(usize, usize, String)>>,
+}
+
+impl SceneSpans {
+    /// Resolves every discovered Scene class of the index to inclusive
+    /// one-based line spans in its file.
+    #[must_use]
+    pub fn build(index: &ProjectIndex, sources: &SourceManager) -> Self {
+        let mut per_file: BTreeMap<String, Vec<(usize, usize, String)>> = BTreeMap::new();
+        for name in &index.scene_classes {
+            let Some(record) = index.classes.get(name) else {
+                continue;
+            };
+            let file = sources.file(record.file);
+            let span = file.span_of_range(record.range);
+            per_file
+                .entry(file.relative_path().to_owned())
+                .or_default()
+                .push((
+                    span.start.line,
+                    span.end.line,
+                    record.qualified_name.clone(),
+                ));
+        }
+        for spans in per_file.values_mut() {
+            spans.sort();
+        }
+        Self { per_file }
+    }
+
+    /// The qualified name of the innermost Scene class whose `class`
+    /// statement spans `line` of `path`; `""` outside every Scene.
+    fn scene_for(&self, path: &str, line: usize) -> &str {
+        let Some(spans) = self.per_file.get(path) else {
+            return "";
+        };
+        spans
+            .iter()
+            .filter(|(start, end, _)| (*start..=*end).contains(&line))
+            .max_by_key(|(start, ..)| *start)
+            .map_or("", |(_, _, name)| name.as_str())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -95,33 +164,58 @@ impl Baseline {
     /// the input order of the survivors.
     ///
     /// Each entry hides at most one diagnostic: duplicated code producing
-    /// the same fingerprint twice needs two entries to hide both.
+    /// the same fingerprint twice needs two entries to hide both. An exact
+    /// scene match is consumed first; a stored empty scene then matches
+    /// any computed scene (wildcard compatibility with baselines written
+    /// before scene attribution, see the module docs).
     #[must_use]
-    pub fn filter(&self, diagnostics: Vec<Diagnostic>, sources: &SourceManager) -> Vec<Diagnostic> {
+    pub fn filter(
+        &self,
+        diagnostics: Vec<Diagnostic>,
+        sources: &SourceManager,
+        scenes: &SceneSpans,
+    ) -> Vec<Diagnostic> {
         let mut remaining = self.counts.clone();
         diagnostics
             .into_iter()
             .filter(|diagnostic| {
-                let entry = entry_for(diagnostic, sources);
-                match remaining.get_mut(&entry) {
-                    Some(count) if *count > 0 => {
-                        *count -= 1;
-                        false
-                    }
-                    _ => true,
+                let entry = entry_for(diagnostic, sources, scenes);
+                if consume(&mut remaining, &entry) {
+                    return false;
                 }
+                if !entry.scene.is_empty() {
+                    let legacy = BaselineEntry {
+                        scene: String::new(),
+                        ..entry
+                    };
+                    if consume(&mut remaining, &legacy) {
+                        return false;
+                    }
+                }
+                true
             })
             .collect()
+    }
+}
+
+/// Consumes one count of `entry` from the remaining multiset, if any.
+fn consume(remaining: &mut BTreeMap<BaselineEntry, usize>, entry: &BaselineEntry) -> bool {
+    match remaining.get_mut(entry) {
+        Some(count) if *count > 0 => {
+            *count -= 1;
+            true
+        }
+        _ => false,
     }
 }
 
 /// Renders the baseline document for the given diagnostics: schema version
 /// 1, sorted entries, byte-stable, terminated by one newline.
 #[must_use]
-pub fn render(diagnostics: &[Diagnostic], sources: &SourceManager) -> String {
+pub fn render(diagnostics: &[Diagnostic], sources: &SourceManager, scenes: &SceneSpans) -> String {
     let mut entries: Vec<BaselineEntry> = diagnostics
         .iter()
-        .map(|diagnostic| entry_for(diagnostic, sources))
+        .map(|diagnostic| entry_for(diagnostic, sources, scenes))
         .collect();
     entries.sort();
     let document = BaselineDocument {
@@ -140,7 +234,11 @@ pub fn render(diagnostics: &[Diagnostic], sources: &SourceManager) -> String {
 /// failed to lex) hashes an empty token context; the computation is the
 /// same on the write and the match side, so such entries still round-trip.
 #[must_use]
-pub fn entry_for(diagnostic: &Diagnostic, sources: &SourceManager) -> BaselineEntry {
+pub fn entry_for(
+    diagnostic: &Diagnostic,
+    sources: &SourceManager,
+    scenes: &SceneSpans,
+) -> BaselineEntry {
     let file = sources
         .files()
         .iter()
@@ -148,7 +246,9 @@ pub fn entry_for(diagnostic: &Diagnostic, sources: &SourceManager) -> BaselineEn
     BaselineEntry {
         rule_id: diagnostic.rule_id.clone(),
         path: diagnostic.path.clone(),
-        scene: String::new(),
+        scene: scenes
+            .scene_for(&diagnostic.path, diagnostic.primary_span.start.line)
+            .to_owned(),
         token_hash: token_hash(file, diagnostic.primary_span.start.line),
     }
 }
@@ -270,12 +370,19 @@ mod tests {
         }
     }
 
+    /// Attribution mapping lines 1..=5 of `scene.py` to `scene.Demo`.
+    fn demo_scene_spans() -> SceneSpans {
+        let mut per_file = BTreeMap::new();
+        per_file.insert("scene.py".to_owned(), vec![(1, 5, "scene.Demo".to_owned())]);
+        SceneSpans { per_file }
+    }
+
     #[test]
     fn fingerprint_ignores_line_shifts_from_distant_edits() {
         let original = sources_from("a = 1\nb = 2\n\ntarget = 3\n\nc = 4\n");
         let shifted = sources_from("inserted = 0\na = 1\nb = 2\n\ntarget = 3\n\nc = 4\n");
-        let before = entry_for(&diagnostic_at(4), &original);
-        let after = entry_for(&diagnostic_at(5), &shifted);
+        let before = entry_for(&diagnostic_at(4), &original, &SceneSpans::default());
+        let after = entry_for(&diagnostic_at(5), &shifted, &SceneSpans::default());
         assert_eq!(before, after, "distant insertion must not change the hash");
     }
 
@@ -283,20 +390,75 @@ mod tests {
     fn fingerprint_changes_when_a_neighbor_line_changes() {
         let original = sources_from("a = 1\ntarget = 3\nc = 4\n");
         let touched = sources_from("a = 999\ntarget = 3\nc = 4\n");
-        let before = entry_for(&diagnostic_at(2), &original);
-        let after = entry_for(&diagnostic_at(2), &touched);
+        let before = entry_for(&diagnostic_at(2), &original, &SceneSpans::default());
+        let after = entry_for(&diagnostic_at(2), &touched, &SceneSpans::default());
         assert_ne!(before.token_hash, after.token_hash);
     }
 
     #[test]
     fn duplicate_entries_hide_exactly_that_many_diagnostics() {
         let sources = sources_from("target = 3\n");
+        let scenes = SceneSpans::default();
         let diagnostics = vec![diagnostic_at(1), diagnostic_at(1), diagnostic_at(1)];
-        let baseline_text = render(&diagnostics[..2], &sources);
+        let baseline_text = render(&diagnostics[..2], &sources, &scenes);
         let baseline = Baseline::parse(&baseline_text).expect("valid baseline");
         assert_eq!(baseline.len(), 2);
-        let survivors = baseline.filter(diagnostics, &sources);
+        let survivors = baseline.filter(diagnostics, &sources, &scenes);
         assert_eq!(survivors.len(), 1, "two entries hide two diagnostics");
+    }
+
+    #[test]
+    fn entries_carry_the_enclosing_scene_and_empty_outside() {
+        let sources = sources_from("a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n");
+        let scenes = demo_scene_spans();
+        let inside = entry_for(&diagnostic_at(2), &sources, &scenes);
+        assert_eq!(inside.scene, "scene.Demo");
+        let outside = entry_for(&diagnostic_at(6), &sources, &scenes);
+        assert_eq!(outside.scene, "", "line 6 is outside the Scene span");
+    }
+
+    #[test]
+    fn stored_empty_scene_matches_any_computed_scene() {
+        // A baseline written before scene attribution stores `scene: ""`;
+        // it must keep suppressing a diagnostic now attributed to a Scene.
+        let sources = sources_from("target = 3\n");
+        let legacy = render(&[diagnostic_at(1)], &sources, &SceneSpans::default());
+        let baseline = Baseline::parse(&legacy).expect("valid baseline");
+        let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &demo_scene_spans());
+        assert!(survivors.is_empty(), "legacy empty scene is a wildcard");
+    }
+
+    #[test]
+    fn stored_scene_does_not_match_a_different_scene() {
+        let sources = sources_from("target = 3\n");
+        let mut other = BTreeMap::new();
+        other.insert(
+            "scene.py".to_owned(),
+            vec![(1, 5, "scene.Other".to_owned())],
+        );
+        let written = render(
+            &[diagnostic_at(1)],
+            &sources,
+            &SceneSpans { per_file: other },
+        );
+        let baseline = Baseline::parse(&written).expect("valid baseline");
+        let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &demo_scene_spans());
+        assert_eq!(
+            survivors.len(),
+            1,
+            "a stored non-empty scene only matches that scene"
+        );
+    }
+
+    #[test]
+    fn scene_attribution_round_trips_through_render_and_filter() {
+        let sources = sources_from("target = 3\n");
+        let scenes = demo_scene_spans();
+        let written = render(&[diagnostic_at(1)], &sources, &scenes);
+        assert!(written.contains("scene.Demo"));
+        let baseline = Baseline::parse(&written).expect("valid baseline");
+        let survivors = baseline.filter(vec![diagnostic_at(1)], &sources, &scenes);
+        assert!(survivors.is_empty(), "same attribution matches exactly");
     }
 
     #[test]
@@ -312,8 +474,8 @@ mod tests {
         let mut second = diagnostic_at(2);
         second.rule_id = "MLC000".to_owned();
         let diagnostics = vec![diagnostic_at(1), second];
-        let first_render = render(&diagnostics, &sources);
-        let second_render = render(&diagnostics, &sources);
+        let first_render = render(&diagnostics, &sources, &SceneSpans::default());
+        let second_render = render(&diagnostics, &sources, &SceneSpans::default());
         assert_eq!(first_render.as_bytes(), second_render.as_bytes());
         let value: serde_json::Value = serde_json::from_str(&first_render).expect("valid JSON");
         let entries = value["entries"].as_array().expect("entries");

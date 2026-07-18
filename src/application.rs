@@ -192,11 +192,16 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
 
     diagnostics.sort_by(Diagnostic::compare_stable);
 
+    // Baseline fingerprints attribute each diagnostic to its enclosing
+    // discovered Scene class (DESIGN §8.3: rule ID + relative path +
+    // qualified Scene + surrounding token hash).
+    let scene_spans = baseline::SceneSpans::build(context.project_index(), &sources);
+
     // `--write-baseline` records the diagnostics as computed above, before
     // any `--baseline` filtering, so old entries are never dropped when
     // both flags are combined.
     if let Some(path) = &args.write_baseline {
-        let document = baseline::render(&diagnostics, &sources);
+        let document = baseline::render(&diagnostics, &sources, &scene_spans);
         std::fs::write(path, document).map_err(|source| ApplicationError::Io {
             path: path.clone(),
             source,
@@ -216,7 +221,7 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
                 path = path.display()
             ))
         })?;
-        diagnostics = known.filter(diagnostics, &sources);
+        diagnostics = known.filter(diagnostics, &sources, &scene_spans);
     }
 
     let fix_report = if args.fix {

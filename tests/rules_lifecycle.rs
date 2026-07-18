@@ -145,6 +145,8 @@ fn mlc104_non_positive_duration_golden() {
             "invalid.py:10:19 MLC104 error certain",
             "invalid.py:11:28 MLC104 error certain",
             "invalid.py:12:33 MLC104 error certain",
+            "invalid.py:13:43 MLC104 error certain",
+            "invalid.py:14:24 MLC104 error certain",
         ],
     );
 }
@@ -615,19 +617,71 @@ fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
 
 #[test]
 fn lifecycle_rule_metadata_matches_the_design_catalog() {
-    let expected: [(&str, Severity, Confidence); 10] = [
-        ("MLC101", Severity::Error, Confidence::Certain),
-        ("MLC102", Severity::Error, Confidence::High),
-        ("MLC103", Severity::Error, Confidence::Certain),
-        ("MLC104", Severity::Error, Confidence::Certain),
-        ("MLC105", Severity::Error, Confidence::High),
-        ("MLC106", Severity::Error, Confidence::Certain),
-        ("MLC109", Severity::Error, Confidence::Certain),
-        ("MLC122", Severity::Error, Confidence::High),
-        ("MLC126", Severity::Error, Confidence::High),
-        ("MLC127", Severity::Info, Confidence::Certain),
+    let expected: [(&str, Severity, Confidence, &[&str]); 10] = [
+        (
+            "MLC101",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC102",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC103",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls"],
+        ),
+        // MLC104 diagnoses from *played* lifecycle facts (DESIGN §3.2:
+        // durations are validated at play time, not at construction).
+        (
+            "MLC104",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls", "lifecycle"],
+        ),
+        (
+            "MLC105",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC106",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC109",
+            Severity::Error,
+            Confidence::Certain,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC122",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC126",
+            Severity::Error,
+            Confidence::High,
+            &["qualified-calls"],
+        ),
+        (
+            "MLC127",
+            Severity::Info,
+            Confidence::Certain,
+            &["qualified-calls"],
+        ),
     ];
-    for (rule, severity, confidence) in expected {
+    for (rule, severity, confidence, capabilities) in expected {
         let metadata = registry::metadata_for(rule)
             .unwrap_or_else(|| panic!("{rule} must be registered as implemented"));
         assert!(metadata.default_enabled, "{rule} defaults to enabled");
@@ -635,8 +689,7 @@ fn lifecycle_rule_metadata_matches_the_design_catalog() {
         assert_eq!(metadata.minimum_confidence, confidence, "{rule} confidence");
         assert_eq!(metadata.implementation_phase, 1, "{rule} phase");
         assert_eq!(
-            metadata.required_capabilities,
-            ["qualified-calls"],
+            metadata.required_capabilities, capabilities,
             "{rule} capabilities"
         );
     }
