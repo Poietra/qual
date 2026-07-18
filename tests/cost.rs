@@ -1045,6 +1045,129 @@ fn helper_driven_play_proves_execution_and_frame_bounds() {
     );
 }
 
+/// One helper played from TWO call sites is two executions: the play
+/// site inside `flash` renders one 2 s frame grid per call site, so the
+/// callback's proven total is 240 frames across 2 proven plays — never
+/// one collapsed entry of 120 / 1 (each execution is a distinct
+/// (site, call path) identity, DESIGN §4.1).
+const TWO_CALL_SITE_HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        a = Square()
+        b = Circle()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(a, b, label)
+        self.flash(a)
+        self.flash(b)
+";
+
+#[test]
+fn helper_played_from_two_call_sites_counts_both_executions() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", TWO_CALL_SITE_HELPER_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // The interpreter emits one play fact per call site (same play span
+    // inside the helper, distinct call paths).
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 2, "one play fact per helper call site");
+
+    // The execution evidence keeps both executions: MLP201 / MLP226
+    // quantities cite two proven plays whose call paths name the two
+    // call sites in construct.
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 2, "2 proven plays, one per site");
+    assert!(execution.maybe.is_empty());
+    assert!(!execution.unresolved);
+    assert_eq!(execution.proven[0].site, execution.proven[1].site);
+    let call_sites: Vec<&str> = execution
+        .proven
+        .iter()
+        .map(|play| {
+            let step = play.call_path.first().expect("helper play has a path");
+            &sources.file(step.file).text()[step.start as usize..step.end as usize]
+        })
+        .collect();
+    assert_eq!(call_sites, vec!["self.flash(a)", "self.flash(b)"]);
+
+    // 2 executions × ceil(2 s × 60 fps) = 240 frames — not 120.
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(240.0),
+            hi: Some(240.0),
+        })
+    );
+}
+
+/// Call-site multiplicity and loop repetitions compose multiplicatively:
+/// one call site inside a literal `range(2)` loop stays a single
+/// execution entry whose repetition interval is `[0, 2]`, while the
+/// direct call site is a second entry — 120 proven frames from the
+/// direct site plus up to 2 × 120 frames from the looped site, never a
+/// doubled or collapsed count.
+const MIXED_LOOP_AND_DIRECT_HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        square = Square()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(square, label)
+        self.flash(square)
+        for _ in range(2):
+            self.flash(square)
+";
+
+#[test]
+fn loop_repetitions_compose_with_call_site_multiplicity() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", MIXED_LOOP_AND_DIRECT_HELPER_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 2, "one play fact per helper call site");
+
+    // The straight-line call site proves one execution ×1; the looped
+    // call site is branch-dependent (maybe) with the literal trip count
+    // as its repetition interval — one entry, not two.
+    let math_tex = call_index(&facts, MATH_TEX, 0);
+    let execution = cost.call_execution(math_tex);
+    assert_eq!(execution.proven.len(), 1, "the direct call site proves");
+    assert_eq!(execution.maybe.len(), 1, "the looped call site is a maybe");
+    assert_eq!(execution.proven[0].repetitions, Num::int(1));
+    assert_eq!(
+        execution.maybe[0].repetitions,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: Some(2.0),
+        }
+    );
+    assert_ne!(execution.proven[0].call_path, execution.maybe[0].call_path);
+
+    // 120 proven frames; the looped site adds up to 2 × 120 above.
+    assert_eq!(
+        cost.proven_frames_for_call(math_tex),
+        Some(Num::Interval {
+            lo: Some(120.0),
+            hi: Some(360.0),
+        })
+    );
+}
+
 /// A non-literal `suspend_mobject_updating` value proves nothing about
 /// suspension: the targeted host's execution becomes a maybe, never a
 /// proven claim in either direction (DESIGN §15 invariant 2).
@@ -1281,4 +1404,44 @@ fn unknown_loop_trip_count_opens_the_upper_bound() {
         }),
         "an unbounded repetition count must not stay at one play's frames"
     );
+}
+
+/// The same collapse in the site-anchored size queries: a Transform
+/// helper played from two call sites executes its play site twice, and
+/// the first play's topology change (curve alignment) happens *before*
+/// the second execution. A query anchored at the shared play site cannot
+/// distinguish the executions, so it must hold at every one of them —
+/// the pre-first-play `|C(Square)=4 − C(Circle)=8| = 4` is a fabricated
+/// number for the second play and must not be claimed for either.
+const REPEATED_HELPER_TRANSFORM_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def morph(self, src, dst):
+        self.play(Transform(src, dst))
+
+    def construct(self):
+        sq = Square()
+        circle = Circle()
+        self.morph(sq, circle)
+        self.morph(sq, circle)
+";
+
+#[test]
+fn repeated_helper_transform_voids_the_site_anchored_curve_delta() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", REPEATED_HELPER_TRANSFORM_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 2, "one play fact per helper call site");
+    for play in &scene.plays {
+        assert_eq!(
+            cost.curve_delta_for_transform("scene.Demo", play, &play.animations[0]),
+            Num::Unknown,
+            "a multi-execution play site must not claim the pre-first-play delta"
+        );
+    }
+    let _ = facts;
 }

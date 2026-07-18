@@ -189,6 +189,57 @@ fn cost_report_counts_helper_plays() {
     );
 }
 
+/// One helper played from two call sites (`self.flash(a)` then
+/// `self.flash(b)`): each call site renders its own 2 s frame grid, so
+/// the report lists one play row per execution and the callback's
+/// quantities sum both — 240 invocations across 2 proven plays, never a
+/// collapsed 120 / 1.
+const TWO_CALL_SITE_HELPER_SCENE: &str = "\
+from manim import *
+
+
+class Twice(Scene):
+    def flash(self, mob):
+        self.play(FadeIn(mob), run_time=2)
+
+    def construct(self):
+        tracker = ValueTracker(0)
+        a = Square()
+        b = Circle()
+        label = always_redraw(lambda: MathTex(f\"x = {tracker.get_value():.2f}\"))
+        self.add(a, b, label)
+        self.flash(a)
+        self.flash(b)
+";
+
+#[test]
+fn cost_report_counts_each_helper_call_site_as_its_own_play() {
+    let dir = project(&[("twice.py", TWO_CALL_SITE_HELPER_SCENE)]);
+    let output = cost_output(dir.path(), None).unwrap();
+
+    // One play row per execution of the helper play site.
+    let play_rows = output
+        .lines()
+        .filter(|line| line.contains("twice.py:6:9 play duration 2 s -> frames ~120"))
+        .count();
+    assert_eq!(play_rows, 2, "one play row per helper call site: {output}");
+
+    // Both executions prove the callback and both are counted: 2 × 120
+    // frames, cited as 2 proven plays.
+    assert!(
+        output.contains("proven execution plays: twice.py:6:9, twice.py:6:9"),
+        "the liveness note must cite both executions: {output}"
+    );
+    assert!(
+        output.contains("MathTex construction x ~240 invocations across 2 proven play(s)"),
+        "both call sites must be summed: {output}"
+    );
+    assert!(
+        output.contains("MathTex distinct cache keys: ~240 across 2 proven play(s)"),
+        "resource-key growth must count both executions: {output}"
+    );
+}
+
 #[test]
 fn cost_scene_filter_selects_one_scene() {
     let dir = project(&[("demo.py", LITERAL_SCENE), ("loose.py", UNKNOWN_SCENE)]);

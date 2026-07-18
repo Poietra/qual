@@ -68,6 +68,13 @@ pub struct ExecutionPlay {
     pub scene: String,
     /// Source site of the `play` / `wait` call.
     pub site: AllocationSite,
+    /// The `self.<helper>()` call sites through which the lifecycle
+    /// method reached this play, outermost first
+    /// ([`PlayFact::call_path`]); empty for plays written directly in a
+    /// lifecycle method. Part of the execution identity: one helper
+    /// played from two call sites is two executions that each render
+    /// their own frame grid, never one collapsed entry.
+    pub call_path: Vec<AllocationSite>,
     /// Play vs wait.
     pub kind: PlayKind,
     /// The play's duration fact (seconds).
@@ -100,7 +107,7 @@ pub struct EntryLiveness {
     /// exists and callers must treat execution as *possible*, never as
     /// proven or as provably absent.
     pub resolved: bool,
-    /// The execution plays, ascending by (scene, site).
+    /// The execution plays, ascending by (scene, site, call path).
     pub plays: Vec<ExecutionPlay>,
 }
 
@@ -365,9 +372,14 @@ fn may_removed(scene: &SceneLifecycle, host: Option<&ObjectId>, callback: &Callb
     false
 }
 
-/// Play accumulator keyed by (scene, play site); a proven verdict wins
-/// over a maybe verdict for the same play.
-type PlayMap = BTreeMap<(String, AllocationSite), ExecutionPlay>;
+/// Play accumulator keyed by execution identity — (scene, play site,
+/// helper call path). Distinct call sites of one helper are distinct
+/// executions (each renders its own frame grid, DESIGN §4.1), so they
+/// must not collapse into one entry; repetitions of the *same* call site
+/// (loops) stay one entry whose [`ExecutionPlay::repetitions`] interval
+/// carries the trip count — the two compose multiplicatively. A proven
+/// verdict wins over a maybe verdict for the same execution.
+type PlayMap = BTreeMap<(String, AllocationSite, Vec<AllocationSite>), ExecutionPlay>;
 
 fn record_play(
     plays: &mut PlayMap,
@@ -377,7 +389,11 @@ fn record_play(
     proven: bool,
     full_duration_proven: bool,
 ) {
-    let key = (scene.qualified_name.clone(), play.site);
+    let key = (
+        scene.qualified_name.clone(),
+        play.site,
+        play.call_path.clone(),
+    );
     let certainty = if proven {
         ExecutionCertainty::Proven
     } else {
@@ -391,6 +407,7 @@ fn record_play(
                 ExecutionPlay {
                     scene: scene.qualified_name.clone(),
                     site: play.site,
+                    call_path: play.call_path.clone(),
                     kind: play.kind,
                     duration,
                     certainty,

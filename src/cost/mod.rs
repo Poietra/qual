@@ -372,7 +372,10 @@ impl CostFacts {
         }
         let mut proven: Vec<&ExecutionPlay> = Vec::new();
         let mut maybe: Vec<&ExecutionPlay> = Vec::new();
-        let mut seen: BTreeSet<(&str, AllocationSite)> = BTreeSet::new();
+        // Dedup across entry roots by execution identity: the helper
+        // call path is part of the key, so two call sites of one helper
+        // stay two executions (only genuinely identical plays collapse).
+        let mut seen: BTreeSet<(&str, AllocationSite, &[AllocationSite])> = BTreeSet::new();
         for key in &keys {
             let Some(entry) = self.liveness.get(key) else {
                 unresolved = true;
@@ -383,7 +386,7 @@ impl CostFacts {
                 continue;
             }
             for play in &entry.plays {
-                if !seen.insert((play.scene.as_str(), play.site)) {
+                if !seen.insert((play.scene.as_str(), play.site, play.call_path.as_slice())) {
                     continue;
                 }
                 match play.certainty {

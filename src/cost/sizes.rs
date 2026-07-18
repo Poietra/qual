@@ -116,8 +116,18 @@ fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SceneSizes {
     records: BTreeMap<ObjectId, SizeRecord>,
-    /// First event index per source site (program order anchor).
+    /// First event index per source site (program order anchor; seeds
+    /// the played-topology poisons at the earliest execution).
     site_event: BTreeMap<AllocationSite, usize>,
+    /// Query anchor per source site: the event index at which the site's
+    /// **last** execution starts. A site inside a helper reached from
+    /// several call sites executes several times, and an anchored size
+    /// claim must hold at every execution — so queries anchor at the
+    /// last start, and any poison before it voids the claim (DESIGN §15
+    /// invariant 9: silence over a wrong exact number). Continuation
+    /// events of a play (finish / suspend / resume / frame callbacks)
+    /// never start a new execution of the play site.
+    site_query_anchor: BTreeMap<AllocationSite, usize>,
     /// Alias-resolved objects allocated at a site (constructions and
     /// copies).
     objects_by_site: BTreeMap<AllocationSite, BTreeSet<ObjectId>>,
@@ -130,11 +140,21 @@ pub struct SceneSizes {
 }
 
 impl SceneSizes {
-    /// The program-order event index anchored at `site`, if any event was
-    /// recorded there.
+    /// The program-order event index of the **first** event recorded at
+    /// `site`, if any.
     #[must_use]
     pub fn event_index_of(&self, site: AllocationSite) -> Option<usize> {
         self.site_event.get(&site).copied()
+    }
+
+    /// The conservative query anchor of `site`: the start of its last
+    /// execution (equals [`Self::event_index_of`] for sites executed
+    /// once).
+    fn query_anchor_of(&self, site: AllocationSite) -> Option<usize> {
+        self.site_query_anchor
+            .get(&site)
+            .or_else(|| self.site_event.get(&site))
+            .copied()
     }
 
     /// The abstract objects a call at `site` is *about*: objects allocated
@@ -157,13 +177,16 @@ impl SceneSizes {
     /// Sizes of `object` as observable at `at` (a source site anchoring a
     /// program point). A field poisoned strictly before that point — or
     /// anywhere, when `at` is `None` or unanchored — reads `Unknown`.
+    /// A site executed several times (a helper body reached from several
+    /// call sites) anchors at its **last** execution start: the claim
+    /// must hold at every execution the site stands for.
     #[must_use]
     pub fn sizes_at(&self, object: &ObjectId, at: Option<AllocationSite>) -> ObjectSizes {
         let object = self.alias.get(object).unwrap_or(object);
         let Some(record) = self.records.get(object) else {
             return ObjectSizes::unknown();
         };
-        let query_index = at.and_then(|site| self.event_index_of(site));
+        let query_index = at.and_then(|site| self.query_anchor_of(site));
         let void = |poison: Option<usize>| -> bool {
             match (poison, query_index) {
                 (None, _) => false,
@@ -362,6 +385,7 @@ fn resolve_scene(
 ) -> SceneSizes {
     let heap = &scene.final_heap;
     let mut site_event: BTreeMap<AllocationSite, usize> = BTreeMap::new();
+    let mut site_query_anchor: BTreeMap<AllocationSite, usize> = BTreeMap::new();
     let mut mutation_targets_by_site: BTreeMap<AllocationSite, BTreeSet<ObjectId>> =
         BTreeMap::new();
     let alias = collect_aliases(scene);
@@ -371,6 +395,9 @@ fn resolve_scene(
 
     for (index, event) in scene.events.iter().enumerate() {
         site_event.entry(event.site).or_insert(index);
+        if starts_execution(&event.event) {
+            site_query_anchor.insert(event.site, index);
+        }
         match &event.event {
             Event::AddChild(edge) => {
                 if event.certainty == Presence::Present {
@@ -455,10 +482,27 @@ fn resolve_scene(
     SceneSizes {
         records,
         site_event,
+        site_query_anchor,
         objects_by_site,
         mutation_targets_by_site,
         alias,
     }
+}
+
+/// Whether an event marks the start of a (possibly repeated) execution
+/// of its source site. A play's finish / suspension bookkeeping and the
+/// per-frame callback markers continue the execution its `BeginPlay`
+/// started, so they never advance the site's query anchor past the
+/// play's own begin point (the play itself must keep seeing the
+/// pre-play sizes, `sizes_at`'s strict poison comparison).
+const fn starts_execution(event: &Event) -> bool {
+    !matches!(
+        event,
+        Event::FinishPlay(_)
+            | Event::SuspendUpdater(_)
+            | Event::ResumeUpdater(_)
+            | Event::FrameCallback(_)
+    )
 }
 
 struct Resolver<'a> {
