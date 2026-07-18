@@ -8,13 +8,18 @@ use serde_json::json;
 
 use manim_lint::application::manim_surface;
 use manim_lint::config::model::{Platform, RenderProfile, Renderer};
-use manim_lint::cost::CostFacts;
 use manim_lint::cost::contexts::HotEntryKind;
 use manim_lint::cost::estimator::{frames_for_duration, symbolic_frames};
 use manim_lint::cost::model::{frame_buffer_bytes, pixel_frames};
+use manim_lint::cost::thresholds::{
+    LARGE_FAMILY_GATE, LARGE_POINTS_GATE, PER_FRAME_ALLOCATION_GATE,
+    TRANSFORM_CURVE_INSERTION_GATE, TRANSFORM_FAMILY_GATE, transform_begin_gate_met,
+};
+use manim_lint::cost::{CostFacts, HotTargetKind};
 use manim_lint::frontend::index::{FrontendFacts, QualifiedCall, analyze};
 use manim_lint::knowledge::{self, KnowledgeProfile};
 use manim_lint::semantic::events::Multiplicity;
+use manim_lint::semantic::interpreter::LifecycleFacts;
 use manim_lint::semantic::values::Num;
 use manim_lint::source::SourceManager;
 
@@ -71,6 +76,31 @@ fn cost_facts(
     profiles: &[RenderProfile],
 ) -> CostFacts {
     CostFacts::compute(sources, &facts.index, &facts.calls, Some(profile), profiles)
+}
+
+/// Cost facts with the lifecycle cardinalities bridged in, plus the
+/// lifecycle facts themselves (for play-level queries).
+fn cost_facts_with_lifecycle(
+    sources: &SourceManager,
+    facts: &FrontendFacts,
+    profile: &KnowledgeProfile,
+    profiles: &[RenderProfile],
+) -> (CostFacts, LifecycleFacts) {
+    let lifecycle = manim_lint::semantic::interpreter::analyze(
+        sources,
+        &facts.index,
+        &facts.calls,
+        Some(profile),
+    );
+    let cost = CostFacts::compute_with_lifecycle(
+        sources,
+        &facts.index,
+        &facts.calls,
+        Some(profile),
+        profiles,
+        &lifecycle,
+    );
+    (cost, lifecycle)
 }
 
 /// Index of the `nth` call fact whose candidates contain `candidate`.
@@ -361,8 +391,9 @@ fn evidence_json_matches_the_design_shape() {
     let (sources, facts, profile) = analyzed(&[("scene.py", UPDATER_SCENE)]);
     let cost = cost_facts(&sources, &facts, &profile, &[render_profile(60.0)]);
 
-    // Hot MathTex: frame-callback context, symbolic frames (null), no
-    // fabricated family size, provenance in state_path.
+    // Hot MathTex: frame-callback context, symbolic frames (null),
+    // provenance in state_path. Unknown sizes are omitted entirely —
+    // never a fabricated number.
     let math_tex = call_index(&facts, MATH_TEX, 0);
     assert_eq!(
         cost.evidence_for(math_tex),
@@ -370,7 +401,6 @@ fn evidence_json_matches_the_design_shape() {
             "invocation_context": "frame-callback",
             "multiplicity": ["frames"],
             "frames": null,
-            "family_size": null,
             "renderer": ["cairo"],
             "state_path": ["construct", "updater:8"],
         })
@@ -384,9 +414,327 @@ fn evidence_json_matches_the_design_shape() {
             "invocation_context": null,
             "multiplicity": [],
             "frames": {"lower": 120, "upper": 120},
-            "family_size": null,
             "renderer": ["cairo"],
             "state_path": [],
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle-bridged size facts (DESIGN §4.1 N_family / P / C).
+// ---------------------------------------------------------------------------
+
+const SQUARE: &str = "manim.mobject.geometry.polygram.Square";
+const CIRCLE: &str = "manim.mobject.geometry.arc.Circle";
+const LINE: &str = "manim.mobject.geometry.line.Line";
+const RECTANGLE: &str = "manim.mobject.geometry.polygram.Rectangle";
+const VGROUP: &str = "manim.mobject.types.vectorized_mobject.VGroup";
+const TRANSFORM: &str = "manim.animation.transform.Transform";
+const NUMPY_ZEROS: &str = "numpy.zeros";
+
+const GEOMETRY_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        line = Line()
+        circle = Circle()
+        gridded = Rectangle(grid_xstep=1.0)
+        self.add(sq, line, circle, gridded)
+";
+
+#[test]
+fn curated_geometry_resolves_exact_curve_and_point_counts() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", GEOMETRY_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // polygram.py: Square → Rectangle → Polygon(UR, UL, DL, DR): 4 cubic
+    // curves, 4 points each on the Cairo layout.
+    let square = call_index(&facts, SQUARE, 0);
+    assert_eq!(cost.curves_of_target(square), Num::int(4));
+    assert_eq!(cost.points_of_target(square), Num::int(16));
+    assert_eq!(cost.family_size_of_target(square), Num::int(1));
+
+    // line.py: default path_arc=0 → one cubic segment.
+    let line = call_index(&facts, LINE, 0);
+    assert_eq!(cost.curves_of_target(line), Num::int(1));
+    assert_eq!(cost.points_of_target(line), Num::int(4));
+
+    // arc.py: Circle → Arc(angle=TAU, num_components=9) → 8 cubic curves.
+    let circle = call_index(&facts, CIRCLE, 0);
+    assert_eq!(cost.curves_of_target(circle), Num::int(8));
+    assert_eq!(cost.points_of_target(circle), Num::int(32));
+
+    // grid_xstep adds Line submobjects (polygram.py Rectangle.__init__):
+    // the curated default-path claim is void.
+    let gridded = call_index(&facts, RECTANGLE, 0);
+    assert_eq!(cost.curves_of_target(gridded), Num::Unknown);
+    assert_eq!(cost.points_of_target(gridded), Num::Unknown);
+
+    // Without the lifecycle bridge every size query stays Unknown.
+    let plain = cost_facts(&sources, &facts, &profile, &[render_profile(60.0)]);
+    assert_eq!(plain.curves_of_target(square), Num::Unknown);
+    assert_eq!(plain.family_size_of_target(square), Num::Unknown);
+}
+
+const LOOP_GROUP_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        group = VGroup()
+        for i in range(10):
+            group.add(Square())
+        self.add(group)
+";
+
+#[test]
+fn literal_loop_family_widens_to_open_interval_and_never_confirms_gates() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", LOOP_GROUP_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // The loop-created Square id has Many cardinality and its AddChild is
+    // branch-dependent: the family widens to an open-above interval with
+    // no fake exact bound.
+    let group = call_index(&facts, VGROUP, 0);
+    let family = cost.family_size_of_target(group);
+    assert_eq!(
+        family,
+        Num::Interval {
+            lo: Some(1.0),
+            hi: None,
+        }
+    );
+    let curves = cost.curves_of_target(group);
+    assert_eq!(
+        curves,
+        Num::Interval {
+            lo: Some(0.0),
+            hi: None,
+        }
+    );
+
+    // An open-above interval proves no minimum: no gate is confirmed.
+    assert!(!LARGE_FAMILY_GATE.confirmed_by(&family));
+    assert!(!TRANSFORM_FAMILY_GATE.confirmed_by(&family));
+    assert!(!TRANSFORM_CURVE_INSERTION_GATE.confirmed_by(&curves));
+}
+
+/// A construct body building `VGroup(Square(), ... × 40)` in a straight
+/// line: every member edge is definite and singleton.
+fn large_group_scene(updater_line: &str) -> String {
+    let members = std::iter::repeat_n("Square()", 40)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "from manim import *\n\n\nclass Demo(Scene):\n    def construct(self):\n        group = VGroup({members})\n{updater_line}        self.add(group)\n        self.wait(1)\n"
+    )
+}
+
+#[test]
+fn straight_line_group_confirms_large_family_with_exact_counts() {
+    let source = large_group_scene("");
+    let (sources, facts, profile) = analyzed(&[("scene.py", source.as_str())]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let group = call_index(&facts, VGROUP, 0);
+    let family = cost.family_size_of_target(group);
+    assert_eq!(family, Num::int(41), "group + 40 definite members");
+    assert_eq!(cost.curves_of_target(group), Num::int(160));
+    let points = cost.points_of_target(group);
+    assert_eq!(points, Num::int(640));
+
+    assert!(LARGE_FAMILY_GATE.confirmed_by(&family));
+    assert!(!LARGE_POINTS_GATE.confirmed_by(&points), "640 < 1024");
+
+    // Evidence carries the real bounds and round-trips through JSON.
+    let evidence = cost.evidence_for(group);
+    assert_eq!(evidence["family_size"], json!({"lower": 41, "upper": 41}));
+    assert_eq!(evidence["points"], json!({"lower": 640, "upper": 640}));
+}
+
+#[test]
+fn hot_copy_and_family_walk_resolve_updater_host_sizes() {
+    let copy_scene = large_group_scene("        group.add_updater(lambda m: m.copy())\n");
+    let (sources, facts, profile) = analyzed(&[("scene.py", copy_scene.as_str())]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let copy: Vec<_> = cost.copy_align_targets_in_hot_contexts().collect();
+    assert_eq!(copy.len(), 1, "exactly one hot copy fact");
+    assert_eq!(copy[0].kind, HotTargetKind::Copy);
+    assert_eq!(copy[0].method, "copy");
+    assert_eq!(copy[0].scene, "scene.Demo");
+    assert_eq!(copy[0].sizes.family, Num::int(41));
+    assert!(LARGE_FAMILY_GATE.confirmed_by(&copy[0].sizes.family));
+    assert_eq!(
+        LARGE_FAMILY_GATE.citation(),
+        "N_family >= 32 (MLP202/MLP203 emission gate, DESIGN 7.3)"
+    );
+
+    let walk_scene = large_group_scene("        group.add_updater(lambda m: m.get_family())\n");
+    let (sources, facts, profile) = analyzed(&[("scene.py", walk_scene.as_str())]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+    let walks: Vec<_> = cost.family_walk_queries_in_hot_contexts().collect();
+    assert_eq!(walks.len(), 1);
+    assert_eq!(walks[0].kind, HotTargetKind::FamilyWalk);
+    assert_eq!(walks[0].method, "get_family");
+    assert_eq!(walks[0].sizes.family, Num::int(41));
+}
+
+const TRANSFORM_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        circle = Circle()
+        self.play(Transform(sq, circle))
+";
+
+#[test]
+fn transform_between_known_sizes_yields_exact_curve_delta() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", TRANSFORM_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    assert_eq!(scene.plays.len(), 1);
+    let play = &scene.plays[0];
+    assert_eq!(play.animations.len(), 1);
+    let delta = cost.curve_delta_for_transform("scene.Demo", play, &play.animations[0]);
+    assert_eq!(delta, Num::int(4), "|C(Square)=4 − C(Circle)=8|");
+
+    // Small family + small insertion: the MLP207/208 begin gate stays shut.
+    let transform = call_index(&facts, TRANSFORM, 0);
+    let source_family = cost.family_size_of_target(call_index(&facts, SQUARE, 0));
+    assert!(!transform_begin_gate_met(&source_family, &delta));
+    let _ = transform;
+}
+
+const POISONED_TRANSFORM_SCENE: &str = "\
+from manim import *
+
+
+class Demo(Scene):
+    def construct(self):
+        sq = Square()
+        circle = Circle()
+        sq.become(circle)
+        self.play(Transform(sq, circle))
+";
+
+#[test]
+fn count_changing_mutation_before_play_voids_the_curve_delta() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", POISONED_TRANSFORM_SCENE)]);
+    let (cost, lifecycle) =
+        cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    let scene = lifecycle.scene("scene.Demo").expect("scene analyzed");
+    let play = &scene.plays[0];
+    // `become` rewrote sq's geometry before the play: no fake delta.
+    assert_eq!(
+        cost.curve_delta_for_transform("scene.Demo", play, &play.animations[0]),
+        Num::Unknown
+    );
+    let _ = facts;
+}
+
+const ALLOCATION_SCENE: &str = "\
+from manim import *
+import numpy as np
+
+
+class Demo(Scene):
+    def construct(self):
+        n = 100
+        sq = Square()
+        sq.add_updater(lambda m: np.zeros(100000))
+        sq.add_updater(lambda m: np.zeros(3))
+        sq.add_updater(lambda m: np.zeros(n))
+        sq.add_updater(lambda m: np.zeros(100000, dtype=\"float32\"))
+        self.wait(1)
+";
+
+#[test]
+fn per_frame_allocation_bytes_from_literal_ndarray_sizes_only() {
+    let (sources, facts, profile) = analyzed(&[("scene.py", ALLOCATION_SCENE)]);
+    let (cost, _) = cost_facts_with_lifecycle(&sources, &facts, &profile, &[render_profile(60.0)]);
+
+    // 100_000 float64 elements = 800_000 bytes: above the 64 KiB gate.
+    let large = call_index(&facts, NUMPY_ZEROS, 0);
+    let bytes = cost.per_frame_allocation_bytes(large);
+    assert_eq!(bytes, Num::int(800_000));
+    assert!(PER_FRAME_ALLOCATION_GATE.confirmed_by(&bytes));
+    assert!(cost.is_call_in_hot_context(large).is_some());
+
+    // A small coordinate-sized vector is provable but below the gate.
+    let small = call_index(&facts, NUMPY_ZEROS, 1);
+    assert_eq!(cost.per_frame_allocation_bytes(small), Num::int(24));
+    assert!(!PER_FRAME_ALLOCATION_GATE.confirmed_by(&cost.per_frame_allocation_bytes(small)));
+
+    // A non-literal length is Unknown and never passes the gate.
+    let dynamic = call_index(&facts, NUMPY_ZEROS, 2);
+    assert_eq!(cost.per_frame_allocation_bytes(dynamic), Num::Unknown);
+    assert!(!PER_FRAME_ALLOCATION_GATE.confirmed_by(&Num::Unknown));
+
+    // dtype="float32" halves the element size.
+    let typed = call_index(&facts, NUMPY_ZEROS, 3);
+    assert_eq!(cost.per_frame_allocation_bytes(typed), Num::int(400_000));
+}
+
+#[test]
+fn unknown_and_symbolic_sizes_never_confirm_thresholds() {
+    for gate in &manim_lint::cost::thresholds::ALL_GATES {
+        assert!(!gate.confirmed_by(&Num::Unknown), "{}", gate.name);
+        assert!(
+            !gate.confirmed_by(&Num::Symbol("family".to_owned())),
+            "{}",
+            gate.name
+        );
+        assert!(
+            !gate.confirmed_by(&Num::Interval {
+                lo: None,
+                hi: Some(1e9),
+            }),
+            "open-below never confirms {}",
+            gate.name
+        );
+    }
+    // A proven lower bound at the minimum confirms; just below does not.
+    assert!(TRANSFORM_FAMILY_GATE.confirmed_by(&Num::int(32)));
+    assert!(!TRANSFORM_FAMILY_GATE.confirmed_by(&Num::int(31)));
+    assert!(TRANSFORM_FAMILY_GATE.confirmed_by(&Num::Interval {
+        lo: Some(50.0),
+        hi: None,
+    }));
+    assert!(transform_begin_gate_met(&Num::int(40), &Num::Unknown));
+    assert!(transform_begin_gate_met(&Num::Unknown, &Num::int(256)));
+    assert!(!transform_begin_gate_met(&Num::Unknown, &Num::Unknown));
+
+    // The citable evidence carries the gate identity and real bounds.
+    let evidence = TRANSFORM_FAMILY_GATE.evidence(&Num::int(40));
+    assert_eq!(
+        evidence,
+        json!({
+            "threshold": "transform-family-gate",
+            "quantity": "N_family",
+            "minimum": 32.0,
+            "value": {"lower": 40, "upper": 40},
+            "confirmed": true,
+        })
+    );
+    assert_eq!(
+        TRANSFORM_FAMILY_GATE.evidence(&Num::Unknown),
+        json!({
+            "threshold": "transform-family-gate",
+            "quantity": "N_family",
+            "minimum": 32.0,
+            "value": null,
+            "confirmed": false,
         })
     );
 }

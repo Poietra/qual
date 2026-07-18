@@ -283,8 +283,11 @@ pub fn multiplicity_factor_names(multiplicity: &Multiplicity) -> Vec<String> {
 
 /// Machine-readable evidence in the DESIGN §6.3 shape.
 ///
-/// Unknown facts serialize as `null` (or an all-`null` bound object), never
-/// as a fabricated number; empty collections serialize as `[]`.
+/// Unknown frame counts serialize as `null`, never as a fabricated
+/// number; empty collections serialize as `[]`. Size facts
+/// (`family_size`, `points`) appear **only** when a real lower or upper
+/// bound is known — an unknown size is omitted entirely rather than
+/// carrying a fake number.
 #[derive(Debug, Clone, Default)]
 pub struct Evidence {
     /// Lifecycle phase of the diagnosed operation.
@@ -293,8 +296,10 @@ pub struct Evidence {
     pub multiplicity: Vec<String>,
     /// Frame-count estimate; symbolic / unknown serializes as `null`.
     pub frames: Option<Num>,
-    /// Family-size estimate; symbolic / unknown serializes as `null`.
+    /// Family-size estimate; omitted unless real bounds are known.
     pub family_size: Option<Num>,
+    /// Point-count estimate; omitted unless real bounds are known.
+    pub points: Option<Num>,
     /// Renderers of the analyzed profiles.
     pub renderers: Vec<Renderer>,
     /// State path (origin function, then provenance labels).
@@ -310,6 +315,7 @@ impl Evidence {
             multiplicity: multiplicity_factor_names(&hot.multiplicity),
             frames: Some(frames),
             family_size: None,
+            points: None,
             renderers: renderers_of(profiles),
             state_path: hot.state_path(),
         }
@@ -318,21 +324,34 @@ impl Evidence {
     /// Serializes into the DESIGN §6.3 JSON shape.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut json = json!({
             "invocation_context": match self.invocation_context {
                 Some(InvocationContext::Unknown) | None => Value::Null,
                 Some(context) => Value::String(invocation_context_label(context).to_owned()),
             },
             "multiplicity": self.multiplicity,
             "frames": self.frames.as_ref().map_or(Value::Null, num_bounds_json),
-            "family_size": self.family_size.as_ref().map_or(Value::Null, num_bounds_json),
             "renderer": self
                 .renderers
                 .iter()
                 .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>(),
             "state_path": self.state_path,
-        })
+        });
+        let fields = json
+            .as_object_mut()
+            .expect("evidence JSON is always an object");
+        // Size facts carry real bounds or are absent — never a fabricated
+        // number and never a null placeholder.
+        for (key, value) in [("family_size", &self.family_size), ("points", &self.points)] {
+            if let Some(value) = value {
+                let bounds = num_bounds_json(value);
+                if !bounds.is_null() {
+                    fields.insert(key.to_owned(), bounds);
+                }
+            }
+        }
+        json
     }
 }
 
