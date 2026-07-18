@@ -119,6 +119,7 @@ manim-lint explain MLC102               # full documentation for a rule
 manim-lint rules                        # every rule ID, phase, and status
 manim-lint config                       # resolved effective configuration
 manim-lint cost scenes/demo.py          # per-scene cost breakdown
+manim-lint coverage .                   # what the analysis could not resolve
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -126,7 +127,9 @@ least one does; `2` — command-line, configuration, or internal error.
 
 Useful `check` options: `--select` / `--ignore`, `--min-confidence`,
 `--fail-level`, `--profile`, `--renderer`, `--fps`,
-`--resolution WIDTHxHEIGHT`, `--statistics`, and the baseline/fix options
+`--resolution WIDTHxHEIGHT`, `--statistics`, `--analysis-summary` (the
+coverage report below, printed to stderr after the diagnostics; stdout
+and the exit code are untouched), and the baseline/fix options
 described below. `--select` also narrows the analysis itself: fact layers
 no selected rule needs (the lifecycle interpreter, the symbolic cost
 model) are skipped, so a narrow select is faster than a full run. The
@@ -320,6 +323,58 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
   resource-key growth:
     scenes/demo.py:9:39 MathTex distinct cache keys: one per rendered frame (f-string key varies per frame)
 ```
+
+## Analysis coverage
+
+The analyzer's conservative silences are correct but invisible: a clean
+run does not tell you whether there were no problems or whether half the
+project could not be analyzed. `manim-lint coverage` (and
+`manim-lint check --analysis-summary`, which prints the same report to
+stderr without touching stdout or the exit code) surfaces everything the
+analysis could **not** resolve:
+
+```console
+$ manim-lint coverage .
+analysis coverage (knowledge profile upstream_0_20, target-python 3.9)
+
+scene.py
+  constructs above target-python (MLC000): 1
+  star imports from unresolved modules: 1
+  unresolved relative imports: 1
+  calls with no resolved target: 1 of 7 (mystery x1)
+  manim APIs not in the knowledge profile: manim.utils.rate_functions.ease_in_sine
+
+scene scene.Demo (scene.py)
+  plays with unknown duration: 1 of 2
+  .animate builders with unknown target: 0 of 0
+
+project
+  files parsed: 1 of 1
+  calls resolved: 6 of 7
+  play durations known: 1 of 2
+  scene constructors resolved: 1 of 1
+  constructs above target-python (MLC000): 1
+  unresolved imports: 2 (1 star, 1 relative)
+  manim APIs not in the knowledge profile: 1
+  top unresolved calls: mystery x1
+
+analysis confidence: 1/1 files parsed, 6/7 calls resolved, 1/2 play durations known, 1/1 scene constructors resolved (counts of analyzed facts, not estimates)
+```
+
+Every number is a count of computed facts; the only ratios are plain
+`resolved / total` count pairs. `--format json` emits the same data as a
+stable machine-readable document with top-level keys
+`knowledge_profile`, `target_python`, `files[]` (`path`, `parsed`,
+`gated_constructs`, `unresolved_star_imports`,
+`unresolved_relative_imports`, `calls`, `unresolved_calls`,
+`unresolved_call_names`, `apis_not_in_profile`), `scenes[]` (`name`,
+`path`, `constructor_state_unknown`, `plays`,
+`plays_with_unknown_duration`, `builders`,
+`builders_with_unknown_target`), and `project` (the totals plus
+`top_unresolved_call_names`). A `helper_inline_fallbacks` count appears
+on scenes and the project once the lifecycle fact layer exposes it;
+until then the key is absent rather than a fabricated zero. Output is
+deterministic and byte-stable for identical inputs.
 
 ## CI integration
 

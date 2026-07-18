@@ -255,6 +255,58 @@ pub fn gate(file: &SourceFile, target_python: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// Appends the reverse-direction `target-python` hint to a parse-failure
+/// `MLC000` diagnostic (DESIGN §7.1 honesty, roadmap remnant).
+///
+/// The bundled parser uses the fixed 3.12 grammar, where `async` and
+/// `await` are hard keywords. Python 3.6 still treated them as soft
+/// keywords, so source that legally uses them as identifiers (`async = 1`)
+/// is valid for a 3.6 target yet fails to parse here. When the configured
+/// target predates the 3.7 reservation, the file failed to parse, and the
+/// failing line (or the parser's own message) mentions `async` / `await`
+/// as a word, the diagnostic gains a hedged note — a hint, not a claim,
+/// because the file may be broken for other reasons too. Anything else
+/// (parsed files, newer targets, decode failures with no text) is left
+/// untouched.
+pub fn append_pre37_async_hint(
+    file: &SourceFile,
+    target_python: &str,
+    diagnostic: &mut crate::diagnostic::Diagnostic,
+) {
+    const HINT: &str = " (note: this may be valid Python 3.6 source; manim-lint \
+                        parses with the 3.12 grammar, where `async`/`await` are \
+                        reserved keywords)";
+    let Some(target) = parse_python_version(target_python) else {
+        return;
+    };
+    if target >= (3, 7) || file.is_parsed() {
+        return;
+    }
+    let mentions = |text: &str| contains_word(text, "async") || contains_word(text, "await");
+    let line = diagnostic.primary_span.start.line;
+    if mentions(file.line_text(line)) || mentions(&diagnostic.message) {
+        diagnostic.message.push_str(HINT);
+    }
+}
+
+/// Whether `text` contains `word` delimited by non-identifier characters.
+fn contains_word(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut start = 0;
+    while let Some(position) = text[start..].find(word) {
+        let begin = start + position;
+        let end = begin + word.len();
+        let before_ok = begin == 0 || !is_ident(bytes[begin - 1]);
+        let after_ok = end >= bytes.len() || !is_ident(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = begin + 1;
+    }
+    false
+}
+
 /// Exhaustive AST walk collecting gated constructs.
 struct Walker {
     target: PythonVersion,

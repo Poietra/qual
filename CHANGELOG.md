@@ -33,6 +33,28 @@ interpreter modularization).
   helper inlining fell back to the effect summary, with its reason
   (`Recursion` / `DepthCap` / `Unresolvable`) — the analysis-coverage
   frontier.
+- Analysis-coverage reporting (the review's "trust feature"): a new
+  `manim-lint coverage [PATH...] [--format text|json]` subcommand and a
+  `check --analysis-summary` flag (same report on stderr after the
+  diagnostics; stdout and the exit code are untouched) that surface what
+  the conservative analysis could NOT resolve — unresolved imports
+  (unknown-module star imports, relative imports escaping the project
+  tree), calls with empty candidate sets (with top offending names),
+  plays with unknown durations, `.animate` builders with untracked
+  targets, constructs above `target-python` (MLC000), resolved `manim.*`
+  candidates absent from the knowledge profile, and scenes with unknown
+  constructor state — per file, per scene, and as project totals with a
+  count-based confidence line. Numbers are counts of computed facts;
+  output is deterministic. The JSON keys are documented in the README;
+  a `helper_inline_fallbacks` count joins the report once the lifecycle
+  fact layer exposes it (the key is absent until then, never a
+  fabricated zero).
+- Reverse-direction `target-python` hint on parse failures: when a file
+  fails to parse, the configured target is below 3.7, and the failing
+  line (or the parser message) mentions `async`/`await` as a word, the
+  `MLC000` message notes that the source may be valid Python 3.6 (where
+  the two were still soft keywords) and that manim-lint parses with the
+  3.12 grammar — a hedged hint, not a claim (`docs/rules/MLC000.md`).
 - Release quality gates (DESIGN §11.4): a labeled corpus gate
   (`tests/corpus/manifest-v1.json`, 35 cases pinning sha256 and exact
   expected diagnostics — true positives and false-positive guards across

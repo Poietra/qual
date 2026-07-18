@@ -78,11 +78,12 @@ manim-lint explain MLC102               # ルールの完全なドキュメン�
 manim-lint rules                        # 全ルール ID・フェーズ・実装状態
 manim-lint config                       # 解決済みの有効な設定
 manim-lint cost scenes/demo.py          # シーンごとのコスト内訳
+manim-lint coverage .                   # 解析が解決できなかったものの一覧
 ```
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
 
-主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、および後述の baseline / fix オプション。
+主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。
 
 `--format full` は各診断の下に説明と機械可読な根拠を表示します。
 
@@ -212,6 +213,12 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
   resource-key growth:
     scenes/demo.py:9:39 MathTex distinct cache keys: one per rendered frame (f-string key varies per frame)
 ```
+
+## 解析カバレッジ
+
+保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のかを区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン。
+
+すべての数値は計算済みファクトの個数であり、比率は「解決済み / 総数」の単純なカウント対のみです。`--format json` は安定したキーを持つ機械可読ドキュメントを出力します(トップレベルキー: `knowledge_profile`、`target_python`、`files`、`scenes`、`project`。詳細は英語版 README を参照)。出力は決定的で、同一入力に対してバイト単位で安定です。
 
 ## CI 連携
 

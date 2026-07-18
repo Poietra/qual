@@ -13,6 +13,7 @@ use crate::application;
 use crate::config::model::Renderer;
 use crate::diagnostic::{Confidence, Severity};
 use crate::reporting::OutputFormat;
+use crate::reporting::coverage::CoverageFormat;
 
 /// Process exit semantics (DESIGN §8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,15 @@ pub enum Command {
         #[arg(long)]
         scene: Option<String>,
     },
+    /// Report what the analysis could and could not resolve (unresolved
+    /// imports and calls, unknown durations, profile gaps).
+    Coverage {
+        /// Files or directories to analyze (default: current directory).
+        paths: Vec<PathBuf>,
+        /// Output format (text|json).
+        #[arg(long, default_value = "text")]
+        format: CoverageFormat,
+    },
 }
 
 /// Options for `manim-lint check`.
@@ -157,6 +167,10 @@ pub struct CheckArgs {
     /// Print per-rule diagnostic counts to stderr.
     #[arg(long)]
     pub statistics: bool,
+    /// Print an analysis-coverage summary to stderr after the diagnostics
+    /// (never changes stdout or the exit code).
+    #[arg(long)]
+    pub analysis_summary: bool,
 }
 
 /// Binary entry point: parses arguments, runs, prints, and maps exit codes.
@@ -241,5 +255,24 @@ mod tests {
     #[test]
     fn cli_rejects_unknown_format() {
         assert!(Cli::try_parse_from(["manim-lint", "check", "--format", "xml"]).is_err());
+    }
+
+    #[test]
+    fn cli_parses_the_coverage_subcommand_and_analysis_summary_flag() {
+        let cli = Cli::try_parse_from(["manim-lint", "coverage", "scenes", "--format", "json"])
+            .expect("parses");
+        let Command::Coverage { paths, format } = cli.command else {
+            panic!("expected coverage");
+        };
+        assert_eq!(paths, vec![PathBuf::from("scenes")]);
+        assert_eq!(format, CoverageFormat::Json);
+        assert!(Cli::try_parse_from(["manim-lint", "coverage", "--format", "xml"]).is_err());
+
+        let cli =
+            Cli::try_parse_from(["manim-lint", "check", "--analysis-summary"]).expect("parses");
+        let Command::Check(args) = cli.command else {
+            panic!("expected check");
+        };
+        assert!(args.analysis_summary);
     }
 }

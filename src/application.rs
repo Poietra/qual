@@ -14,6 +14,7 @@ use crate::cost;
 use crate::diagnostic::Diagnostic;
 use crate::frontend::{self, ManimSurface};
 use crate::knowledge::{self, KnowledgeProfile, SymbolKind};
+use crate::reporting::coverage::{self, CoverageFormat, CoverageReport};
 use crate::reporting::fixes::FixReport;
 use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
@@ -80,6 +81,7 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
         Command::Rules => Ok(Execution::success(render_rules())),
         Command::Config => run_config(),
         Command::Cost { path, scene } => run_cost(&path, scene.as_deref()),
+        Command::Coverage { paths, format } => run_coverage(&paths, format),
     }
 }
 
@@ -96,6 +98,8 @@ pub struct CheckReport {
     pub config: ResolvedConfig,
     /// Fix-application summary when `--fix` was given.
     pub fixes: Option<FixReport>,
+    /// Analysis-coverage report when `--analysis-summary` was given.
+    pub coverage: Option<CoverageReport>,
 }
 
 /// Runs `manim-lint check` and renders its output.
@@ -110,6 +114,11 @@ pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
         if !fix_report.is_empty() {
             stderr.push_str(&render_fix_summary(fix_report));
         }
+    }
+    // The coverage summary is a stderr-only section after everything else:
+    // it never changes stdout or the exit code (DESIGN §8.1 determinism).
+    if let Some(coverage) = &report.coverage {
+        stderr.push_str(&coverage::render_text(coverage));
     }
     Ok(Execution {
         stdout: report.output,
@@ -146,7 +155,13 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         let id = sources.load_file(path);
         let file = sources.file(id);
         if let Some(diagnostic) = file.parse_diagnostic() {
-            diagnostics.push(diagnostic.clone());
+            let mut diagnostic = diagnostic.clone();
+            frontend::features::append_pre37_async_hint(
+                file,
+                &config.target_python,
+                &mut diagnostic,
+            );
+            diagnostics.push(diagnostic);
         }
         diagnostics.extend(frontend::features::gate(file, &config.target_python));
         let (index, warnings) = suppressions::collect(file);
@@ -165,8 +180,21 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     // no facts at all). The `cost` command computes everything via its own
     // entry point.
     let rules = registry::enabled_rules(&config.select, &config.ignore);
-    let needs = FactNeeds::for_capabilities(&registry::capability_union(&rules));
+    let mut needs = FactNeeds::for_capabilities(&registry::capability_union(&rules));
+    // The coverage summary reads play-duration and builder facts, so it
+    // needs the lifecycle interpreter even when no selected rule does.
+    needs.lifecycle |= args.analysis_summary;
     let facts = compute_facts(&sources, &config, &profile, needs);
+    let coverage_report = args.analysis_summary.then(|| {
+        coverage::collect(
+            &sources,
+            &config.target_python,
+            &profile,
+            &facts.index,
+            &facts.calls,
+            &facts.lifecycle,
+        )
+    });
     let context = RuleContext::new(&sources, &config)
         .with_knowledge(&profile)
         .with_frontend(facts.index, facts.calls)
@@ -273,7 +301,61 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         exit,
         config,
         fixes: fix_report,
+        coverage: coverage_report,
     })
+}
+
+/// Runs `manim-lint coverage [PATH...] [--format text|json]`: the
+/// analysis-coverage report as a standalone command on stdout.
+///
+/// Computes the same fact stack a `check` run would (frontend facts plus
+/// the lifecycle interpreter; the cost model is not needed) and renders
+/// the counters of everything the analysis could not resolve. Always
+/// exits 0 unless configuration or IO fails (exit 2).
+pub fn run_coverage(
+    paths: &[PathBuf],
+    format: CoverageFormat,
+) -> Result<Execution, ApplicationError> {
+    let args = CheckArgs {
+        paths: paths.to_vec(),
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+    let mut sources = SourceManager::new(project_root);
+    for file in &files {
+        sources.load_file(file);
+    }
+    let facts = compute_facts(
+        &sources,
+        &config,
+        &profile,
+        FactNeeds {
+            lifecycle: true,
+            cost: false,
+        },
+    );
+    let report = coverage::collect(
+        &sources,
+        &config.target_python,
+        &profile,
+        &facts.index,
+        &facts.calls,
+        &facts.lifecycle,
+    );
+    let output = match format {
+        CoverageFormat::Text => coverage::render_text(&report),
+        CoverageFormat::Json => coverage::render_json(&report),
+    };
+    Ok(Execution::success(output))
 }
 
 /// Derives the frontend's Manim API surface from the loaded knowledge

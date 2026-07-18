@@ -289,6 +289,70 @@ fn target_python_gates_walrus_below_3_8() {
     assert!(report.diagnostics.is_empty(), "walrus is fine at 3.8");
 }
 
+/// Reverse direction of the syntax gate: `async` / `await` were soft
+/// keywords until 3.7, so `async = 1` is valid Python 3.6 source that the
+/// bundled 3.12 grammar cannot parse. Under a 3.6 target the parse-failure
+/// MLC000 carries a hedged hint; under 3.7+ (where the source really is a
+/// syntax error) it does not.
+#[test]
+fn pre37_async_identifier_parse_failure_carries_the_hint_under_3_6() {
+    const HINT: &str = "this may be valid Python 3.6 source";
+    let project = write_project_with(
+        "[tool.manim-lint]\ntarget-python = \"3.6\"\n",
+        "async = 1\n",
+    );
+    let report = check(&args_for(project.path())).unwrap();
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule_id == "MLC000")
+        .expect("the file fails to parse under the 3.12 grammar");
+    assert!(
+        diagnostic.message.contains(HINT) && diagnostic.message.contains("3.12 grammar"),
+        "the 3.6 target must hint at the grammar mismatch: {}",
+        diagnostic.message
+    );
+
+    for target in ["3.7", "3.12"] {
+        let project = write_project_with(
+            &format!("[tool.manim-lint]\ntarget-python = \"{target}\"\n"),
+            "async = 1\n",
+        );
+        let report = check(&args_for(project.path())).unwrap();
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.rule_id == "MLC000")
+            .expect("still a parse failure");
+        assert!(
+            !diagnostic.message.contains(HINT),
+            "targets at or above 3.7 reserve the keywords for real: {}",
+            diagnostic.message
+        );
+    }
+}
+
+/// The hint stays conservative: a 3.6-target parse failure with no
+/// `async` / `await` near the error is reported without the note.
+#[test]
+fn pre37_hint_is_absent_when_the_failure_does_not_mention_async() {
+    let project = write_project_with(
+        "[tool.manim-lint]\ntarget-python = \"3.6\"\n",
+        "def broken(:\n",
+    );
+    let report = check(&args_for(project.path())).unwrap();
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule_id == "MLC000")
+        .expect("parse failure");
+    assert!(
+        !diagnostic.message.contains("Python 3.6 source"),
+        "an unrelated syntax error must not gain the hint: {}",
+        diagnostic.message
+    );
+}
+
 #[test]
 fn config_command_states_what_is_enforced() {
     let project = write_project("[tool.manim-lint]\nmanim-version = \"0.20\"\n");

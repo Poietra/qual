@@ -2,6 +2,7 @@
 //! baseline files, and fix application.
 
 pub mod baseline;
+pub mod coverage;
 pub mod fixes;
 pub mod json;
 pub mod sarif;
