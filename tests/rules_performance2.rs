@@ -137,10 +137,16 @@ fn mlp219_long_lived_updater_golden() {
 #[test]
 fn mlp221_excessive_sample_count_golden() {
     // `valid.py` (sane literal steps; a two-element range) and
-    // `branch.py` (a non-literal range element) stay silent.
+    // `branch.py` (a non-literal range element) stay silent. `alias.py`
+    // reaches both call forms through `from manim import *`: the widened
+    // `upstream_0_20` profile curates `ParametricFunction` and
+    // `Axes.plot`, so star-import aliases resolve through the profile's
+    // exports rather than canonical-module-path import evidence.
     assert_golden(
         "MLP221",
         &[
+            "alias.py:6:17 MLP221 warning high",
+            "alias.py:8:17 MLP221 warning high",
             "invalid.py:8:17 MLP221 warning high",
             "invalid.py:10:17 MLP221 warning high",
         ],

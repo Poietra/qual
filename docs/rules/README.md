@@ -1,7 +1,7 @@
 # Rule catalog
 
-manim-lint reserves 92 rule IDs in four families. 52 are **implemented**;
-40 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
+manim-lint reserves 92 rule IDs in four families. 79 are **implemented**;
+13 are **reserved**. A reserved ID is honestly unimplemented: `manim-lint
 rules` lists it as `reserved`, `manim-lint check` never registers it, and it
 never fires. Each reserved rule waits on a named analysis capability that
 the fact layers do not provide yet; where that capability is known it is
@@ -18,7 +18,7 @@ Columns:
 - Implemented IDs link to their full documentation, which is also available
   as `manim-lint explain <ID>`.
 
-## MLC — lifecycle / correctness (25 implemented, 6 reserved)
+## MLC — lifecycle / correctness (28 implemented, 3 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
@@ -34,19 +34,19 @@ Columns:
 | [MLC108](MLC108.md) | implemented | warning | high | Two animations in one play write the same channel of the same mobject | |
 | [MLC109](MLC109.md) | implemented | error | certain | AnimationGroup / Succession constructed without animations | |
 | [MLC110](MLC110.md) | implemented | error | certain | Mobject.add(self) or a proven parent cycle | |
-| MLC111 | reserved | info | medium | Updater-bearing mobject leaves both the scene family and animation ownership for an interval | |
-| MLC112 | reserved | warning | high | Default wait() justified only by a one-argument updater proven to read frame-varying state | callback body summaries |
+| [MLC111](MLC111.md) | implemented | info | medium | Updater-bearing object is in neither the scene family nor an animation | |
+| [MLC112](MLC112.md) | implemented | warning | high | Default wait() freezes while a frame-varying one-argument updater is active | |
 | [MLC113](MLC113.md) | implemented | error | certain | Animation kwargs passed after a .animate method access | |
-| MLC114 | reserved | error | high | Unsupported .animate method chain containing an override animation | |
+| MLC114 | reserved | error | high | Unsupported .animate method chain containing an override animation | override-animation chain modeling |
 | [MLC115](MLC115.md) | implemented | warning | high | Scene.remove(child) is undone by re-adding the surviving parent | |
 | MLC116 | reserved | info | medium | Later operations confuse post-Transform source/target identity with scene membership | post-Transform identity facts |
 | [MLC117](MLC117.md) | implemented | warning | high | Mobject changed between .animate builder creation and play | |
-| MLC118 | reserved | info | medium | Normal animation targets a mobject with an active updater and the suspend/resume state divergence is provable | |
+| MLC118 | reserved | info | medium | Normal animation targets a mobject with an active updater and the suspend/resume state divergence is provable | suspend/resume state-divergence facts |
 | [MLC119](MLC119.md) | implemented | error | high | Scene.replace(old, new) with old definitely not in the scene | |
 | [MLC120](MLC120.md) | implemented | error | high | Restore without save_state() on any path | |
 | [MLC121](MLC121.md) | implemented | error | high | Scene.play / wait / pause called from a per-frame callback | |
 | [MLC122](MLC122.md) | implemented | error | high | ApplyMethod receives a method call result, not the bound method | |
-| MLC123 | reserved | error | high | Inline ApplyFunction callback does not return a Mobject on every path | callback body summaries |
+| [MLC123](MLC123.md) | implemented | error | high | ApplyFunction callback returns no mobject on some path | |
 | [MLC124](MLC124.md) | implemented | warning | high | .animate chains a method that does not mutate the target | |
 | [MLC125](MLC125.md) | implemented | warning | high | remove_updater callback identity matches no registered updater | |
 | [MLC126](MLC126.md) | implemented | error | high | Family child is not a Mobject, or not a VMobject in a VGroup | |
@@ -54,7 +54,7 @@ Columns:
 | [MLC128](MLC128.md) | implemented | error | high | Scene subclass \_\_init\_\_ never calls super().\_\_init\_\_() | |
 | [MLC129](MLC129.md) | implemented | warning | medium | play(..., lag_ratio=...) does not stagger multiple animations | |
 
-## MLR — rendering / renderer compatibility (14 implemented, 13 reserved)
+## MLR — rendering / renderer compatibility (23 implemented, 4 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
@@ -64,59 +64,59 @@ Columns:
 | [MLR104](MLR104.md) | implemented | error | high | Literal asset path does not resolve in the render search path | |
 | [MLR105](MLR105.md) | implemented | error | high | MarkupText literal contains provably invalid Pango markup | |
 | [MLR106](MLR106.md) | implemented | error | high | Literal NaN/inf flows into mobject geometry | |
-| MLR107 | reserved | warning | high | API / mobject combination unsupported or semantically different on the target renderer | |
-| MLR108 | reserved | warning | high | Renderer-divergent path assumes a fixed object stays visible after un-fixing | |
-| MLR109 | reserved | warning | medium | Updater read-after-write ordering makes a one-frame lag definite | |
-| MLR110 | reserved | error | high | Literal TeX brace / environment mismatch proven by a conservative parser | |
-| MLR111 | reserved | warning | high | Scene updater mutates a mobject that can escape Cairo's moving scope | |
-| MLR112 | reserved | warning | high | Raw `.points` access hard-codes one renderer's point layout | |
+| [MLR107](MLR107.md) | implemented | warning | high | API/mobject is unsupported under a renderer this run targets | |
+| [MLR108](MLR108.md) | implemented | warning | high | Object treated as still visible after a renderer-divergent remove_fixed_* call | |
+| MLR109 | reserved | warning | medium | Updater read-after-write ordering makes a one-frame lag definite | cross-registration read-after-write ordering facts |
+| [MLR110](MLR110.md) | implemented | error | high | Literal TeX has a definite brace/environment imbalance | |
+| [MLR111](MLR111.md) | implemented | warning | high | Scene updater mutates a mobject; the change may escape Cairo's moving scope | |
+| [MLR112](MLR112.md) | implemented | warning | high | Raw `.points` access assumes one renderer's fixed points-per-curve layout | |
 | [MLR113](MLR113.md) | implemented | info | high | Transform source and target are the same object | |
 | [MLR114](MLR114.md) | implemented | error | high | Literal points array is not N x 3 | |
 | [MLR115](MLR115.md) | implemented | error | certain | Literal font_size is zero or negative | |
-| MLR116 | reserved | error | high | add_line_to / close_path on an empty path, or an incomplete curve is drawn | interpreter tracking of point_count |
+| [MLR116](MLR116.md) | implemented | error | high | add_line_to/close_path on a provably empty path raises at render time | |
 | [MLR117](MLR117.md) | implemented | error | high | register_font() context manager is called without `with` | |
-| MLR118 | reserved | warning | high | Project SVG uses unsupported text/image/filter/mask/clipPath or an unresolved href | |
-| MLR119 | reserved | error | high | MovingCameraScene / camera.frame path incompatible with an OpenGL-including profile set | |
-| MLR120 | reserved | warning | high | Assumes the focal_distance setter is effective on an OpenGL profile | |
-| MLR121 | reserved | warning | high | shift(OUT) / set_z used only for stacking order in a 2D Cairo scene | |
-| MLR122 | reserved | warning | high | bring_to_front is defeated by a lower z_index | |
-| MLR123 | reserved | error | high | 3D object / mesh added under a Cairo or unknown-renderer profile | |
+| MLR118 | reserved | warning | high | Project SVG uses unsupported text/image/filter/mask/clipPath or an unresolved href | SVG asset content facts |
+| [MLR119](MLR119.md) | implemented | error | high | MovingCameraScene is incompatible with the OpenGL renderer this run targets | |
+| [MLR120](MLR120.md) | implemented | warning | high | focal_distance camera setter has no effect under the OpenGL renderer | |
+| [MLR121](MLR121.md) | implemented | warning | high | shift(OUT)/set_z has no effect in a 2D Cairo scene; use set_z_index | |
+| MLR122 | reserved | warning | high | bring_to_front is defeated by a lower z_index | alias-safe cross-object z_index stacking proof |
+| MLR123 | reserved | error | high | 3D object / mesh added under a Cairo or unknown-renderer profile | curated mesh/Object3D class in the knowledge profile |
 | [MLR124](MLR124.md) | implemented | warning | high | Text() literal contains Pango markup that plain Text renders verbatim | |
 | [MLR125](MLR125.md) | implemented | info | high | Bare Mobject() leaf added to the scene displays nothing | |
 | [MLR126](MLR126.md) | implemented | error | high | Literal opacity outside [0, 1] or negative stroke width | |
 | [MLR127](MLR127.md) | implemented | warning | high | Literal by-tex key cannot occur in the MathTex literal | |
 
-## MLP — performance (6 implemented, 21 reserved)
+## MLP — performance (21 implemented, 6 reserved)
 
 | ID | Status | Default severity | Min confidence | Summary | Blocked on |
 | --- | --- | --- | --- | --- | --- |
 | [MLP201](MLP201.md) | implemented | warning | high | Expensive Text/TeX/SVG/Surface construction inside a per-frame callback | |
-| MLP202 | reserved | warning | high | copy / deepcopy / become / align_data inside a hot context | family/points cardinality in CostFacts |
-| MLP203 | reserved | info | high | Family / bounding / arc-length / point-proportion queries inside a hot context | family/points cardinality in CostFacts |
+| [MLP202](MLP202.md) | implemented | warning | high | copy/become/align of a confirmed-large mobject inside a per-frame callback | |
+| [MLP203](MLP203.md) | implemented | info | high | Family-walk query of a confirmed-large mobject inside a per-frame callback | |
 | [MLP204](MLP204.md) | implemented | warning | high | Scene graph grows with a fresh mobject every frame inside an updater | |
 | [MLP205](MLP205.md) | implemented | warning | high | wait(frozen_frame=False) re-renders provably identical frames | |
 | [MLP206](MLP206.md) | implemented | warning | certain | Literal play duration shorter than one frame is clamped | |
-| MLP207 | reserved | info | medium | Transform between mobjects with very different topology / family / curve counts | family/points cardinality in CostFacts |
-| MLP208 | reserved | info | high | Transform of a large Text / MathTex family | family/points cardinality in CostFacts |
-| MLP209 | reserved | info | medium | Updater-bearing object early in Cairo's display order invalidates a large static suffix every frame | |
-| MLP210 | reserved | info | medium | Many short sequential plays inside a fixed-count loop | |
-| MLP211 | reserved | info | medium | Large per-frame list / ndarray / points allocation inside a hot context | family/points cardinality in CostFacts |
-| MLP212 | reserved | info | medium | Long animation of a full-screen translucent object or layer | |
-| MLP213 | reserved | info | medium | Calibrated workload / renderer mismatch (e.g. a large Cairo 3D Surface) | |
+| [MLP207](MLP207.md) | implemented | info | medium | Transform whose confirmed family size or curve insertion is large at begin | |
+| [MLP208](MLP208.md) | implemented | info | high | Transform of a large Text/MathTex family (copy + align + per-glyph interpolation) | |
+| [MLP209](MLP209.md) | implemented | info | medium | Animated or updater-bearing object early in Cairo's display order re-rasterizes a large static suffix | |
+| [MLP210](MLP210.md) | implemented | info | medium | Fixed-count loop issues many short sequential plays | |
+| [MLP211](MLP211.md) | implemented | info | medium | Large per-frame allocation inside a per-frame callback | |
+| MLP212 | reserved | info | medium | Long animation of a full-screen translucent object or layer | pixel-coverage facts |
+| MLP213 | reserved | info | medium | Calibrated workload / renderer mismatch (e.g. a large Cairo 3D Surface) | calibrated workload profiles |
 | MLP214 | reserved | info | high | Serial construction of distinct MathTex the local fork could precompile in parallel | local fork overlay profile |
-| MLP215 | reserved | warning | high | Provably no-op updater widens the moving scope or keeps a wait dynamic | |
-| MLP216 | reserved | info | medium | always_redraw rebuilds stable geometry that only receives affine / style mutation | family/points cardinality in CostFacts |
-| MLP217 | reserved | warning | high | Variable-key use_svg_cache=True in a hot callback grows the global cache every frame | |
-| MLP218 | reserved | info | high | Provably idempotent updater (no dt, no frame-varying reads) keeps a plain wait dynamic | callback body summaries |
-| MLP219 | reserved | info | medium | Updater's estimated lifetime spans many later plays | |
+| [MLP215](MLP215.md) | implemented | warning | high | Provably no-op updater widens dynamic waits or the play moving scope | |
+| [MLP216](MLP216.md) | implemented | info | medium | always_redraw rebuilds identical curated topology every frame | |
+| MLP217 | reserved | warning | high | Variable-key use_svg_cache=True in a hot callback grows the global cache every frame | curated process-global SVG cache semantics |
+| [MLP218](MLP218.md) | implemented | info | high | Provably frame-invariant updater is the only reason a wait renders dynamically | |
+| [MLP219](MLP219.md) | implemented | info | medium | Updater's estimated lifetime spans many subsequent plays | |
 | [MLP220](MLP220.md) | implemented | warning | high | TracedPath without dissipating_time accumulates over a long span | |
-| MLP221 | reserved | warning | high | Excessive sample count proven from a literal ParametricFunction / plot step | tuple literal facts, curated ParametricFunction |
-| MLP222 | reserved | warning | high | Moving ImageMobject, or a large image caught in a Cairo moving suffix | |
-| MLP223 | reserved | info | high | Fully transparent stroke keeps a positive width that is processed every frame | |
-| MLP224 | reserved | info | high | Repeated point_from_proportion / apply_function over long paths in a hot callback | |
+| [MLP221](MLP221.md) | implemented | warning | high | Literal t_range/x_range step proves an excessive sample count | |
+| [MLP222](MLP222.md) | implemented | warning | high | ImageMobject re-rasterized every frame inside Cairo's moving suffix | |
+| MLP223 | reserved | info | high | Fully transparent stroke keeps a positive width that is processed every frame | opacity-immutability facts |
+| [MLP224](MLP224.md) | implemented | info | high | point_from_proportion on a confirmed-long path inside a per-frame callback | |
 | MLP225 | reserved | info | high | Cost-report-only explanation of features that block local-fork fast paths | local fork overlay profile |
 | [MLP226](MLP226.md) | implemented | warning | high | Frame-varying Text/TeX cache key inside a per-frame callback | |
-| MLP227 | reserved | warning | high | always_update_mobjects=True with no time-dependent updater, scene updater, stop condition, or camera motion | |
+| [MLP227](MLP227.md) | implemented | warning | high | always_update_mobjects=True dynamicizes a provably static wait | |
 
 ## MLD — determinism / portability (7 implemented, 0 reserved)
 

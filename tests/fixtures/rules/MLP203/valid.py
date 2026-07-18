@@ -7,6 +7,6 @@ class Demo(Scene):
         dot = Dot()
         dot.add_updater(lambda m: m.next_to(anchor, UP))
         sq = Square()
-        sq.add_updater(lambda m: m.get_family())
+        sq.add_updater(lambda m: m.move_to(m.get_family()[0]))
         self.add(anchor, dot, sq)
         self.play(FadeIn(anchor), run_time=2)

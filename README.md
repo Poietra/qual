@@ -300,24 +300,24 @@ Or upload SARIF so findings appear in the GitHub code-scanning UI:
 
 ## Rule catalog
 
-92 rule IDs are reserved across the four families; **52 are implemented and
-40 are reserved**:
+92 rule IDs are reserved across the four families; **79 are implemented and
+13 are reserved**:
 
 | Family | Implemented | Reserved |
 | --- | --- | --- |
-| MLC lifecycle / correctness | 25 | 6 |
-| MLR rendering | 14 | 13 |
-| MLP performance | 6 | 21 |
+| MLC lifecycle / correctness | 28 | 3 |
+| MLR rendering | 23 | 4 |
+| MLP performance | 21 | 6 |
 | MLD determinism / portability | 7 | 0 |
 
 A reserved ID **never fires**: `manim-lint rules` lists it honestly as
 `reserved`, and `check` does not register it. Each reserved rule is blocked
 on a named capability the fact layers do not provide yet — for example
-callback body summaries (`MLC123`, `MLP218`, `MLC112`), family/points
-cardinality bridged into the cost facts (`MLP202`/`MLP203`/`MLP207`/
-`MLP208`/`MLP211`/`MLP216`), tuple literal facts and a curated
-`ParametricFunction` model (`MLP221`), interpreter tracking of `point_count`
-(`MLR116`), post-Transform identity facts (`MLC116`), and a local fork
+post-Transform identity facts (`MLC116`), cross-registration updater
+read-after-write ordering facts (`MLR109`), SVG asset content facts
+(`MLR118`), an alias-safe cross-object `z_index` stacking proof (`MLR122`),
+a curated mesh / `Object3D` class in the knowledge profile (`MLR123`),
+curated process-global SVG cache semantics (`MLP217`), and a local fork
 overlay profile (`MLP214`/`MLP225`).
 
 The full index with per-rule status, severity, and confidence is in
@@ -380,7 +380,7 @@ deterministic and byte-stable for the same input.
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
   ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
   states each rule's exact scope.
-- **Not yet implemented.** The 40 reserved rules (see above); the SQLite
+- **Not yet implemented.** The 13 reserved rules (see above); the SQLite
   result cache (`--no-cache` is an accepted no-op); threshold calibration
   against rendered baselines; a nightly render-comparison CI.
 

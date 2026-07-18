@@ -23,8 +23,11 @@
 //! silent when no active profile targets it (DESIGN §15 invariant 8).
 //!
 //! Still reserved: `MLR109` (updater ordering lag), `MLR118` (SVG asset
-//! content facts), `MLR122` (per-object literal `z_index` facts), and
-//! `MLR123` (no curated mesh / `Object3D` class in the knowledge profile).
+//! content facts), `MLR122` (the interpreter now tracks per-object
+//! `z_index`, but the alias-safe cross-object stacking proof — "a literal
+//! `set_z_index` on another object provably keeps this one below it" — is
+//! still missing), and `MLR123` (no curated mesh / `Object3D` class in
+//! the knowledge profile).
 
 mod assets;
 mod fixed_visibility;

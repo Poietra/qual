@@ -232,16 +232,16 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 
 ## ルールカタログ
 
-4 ファミリーで 92 個のルール ID を予約しており、**52 個が実装済み、40 個が reserved** です。
+4 ファミリーで 92 個のルール ID を予約しており、**79 個が実装済み、13 個が reserved** です。
 
 | ファミリー | 実装済み | reserved |
 | --- | --- | --- |
-| MLC ライフサイクル / 正しさ | 25 | 6 |
-| MLR レンダリング | 14 | 13 |
-| MLP パフォーマンス | 6 | 21 |
+| MLC ライフサイクル / 正しさ | 28 | 3 |
+| MLR レンダリング | 23 | 4 |
+| MLP パフォーマンス | 21 | 6 |
 | MLD 決定性 / 可搬性 | 7 | 0 |
 
-reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、コールバック本体の要約(`MLC123`、`MLP218`、`MLC112`)、コスト事実への family / points 基数の接続(`MLP202`/`MLP203`/`MLP207`/`MLP208`/`MLP211`/`MLP216`)、タプルリテラル事実と検証済み `ParametricFunction` モデル(`MLP221`)、解釈器での `point_count` 追跡(`MLR116`)、Transform 後の同一性事実(`MLC116`)、ローカルフォークのオーバーレイプロファイル(`MLP214`/`MLP225`)。
+reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、knowledge profile 上の mesh / `Object3D` クラスの検証(`MLR123`)、プロセスグローバルな SVG キャッシュ意味論の検証(`MLP217`)、ローカルフォークのオーバーレイプロファイル(`MLP214`/`MLP225`)。
 
 ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`manim-lint explain <ID>` でも読めます。
 
@@ -275,7 +275,7 @@ output ................... concise | full | json | sarif | github, fixes, cost r
 - **アセット検査は lint 実行マシンを調べます。** `MLR104` はリテラルなアセットパスを、lint を実行しているマシン上で Manim 自身のランタイム探索により解決します。プロジェクトツリー外の絶対パスについては、それは lint ホストに関する証拠であり、必ずしもレンダーホストのものではありません(例: CI で lint し、別マシンでレンダーするリポジトリ)。そのような診断は根拠として `environment_dependent: true` を持ちます。case-only の不一致は大文字小文字を区別する対象プラットフォーム(`linux`)に対してのみ報告されます。影響するプロファイルがすべて windows / macos を対象とする場合、宣言されたレンダーは書かれたとおりにファイルを解決できるため、linter は沈黙します。
 - **ソースエンコーディング。** PEP 263 宣言は WHATWG ラベルと CPython コーデック別名テーブル(`latin-1`、`cp932`、`koi8_r`、...)で解決します。linter が表現できない稀な Python コーデックは、明示的な `MLC000` の「not supported by manim-lint」通知とともにスキップされます — 対象の Python がそのファイルをデコードできない、という主張には決してなりません。
 - **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
-- **未実装。** 40 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
+- **未実装。** 13 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
 ## 開発
 

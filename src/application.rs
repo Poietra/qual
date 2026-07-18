@@ -864,7 +864,7 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
 
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 52] = [
+    const DOCS: [(&str, &str); 79] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -877,6 +877,8 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLC108", include_str!("../docs/rules/MLC108.md")),
         ("MLC109", include_str!("../docs/rules/MLC109.md")),
         ("MLC110", include_str!("../docs/rules/MLC110.md")),
+        ("MLC111", include_str!("../docs/rules/MLC111.md")),
+        ("MLC112", include_str!("../docs/rules/MLC112.md")),
         ("MLC113", include_str!("../docs/rules/MLC113.md")),
         ("MLC115", include_str!("../docs/rules/MLC115.md")),
         ("MLC117", include_str!("../docs/rules/MLC117.md")),
@@ -884,6 +886,7 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLC120", include_str!("../docs/rules/MLC120.md")),
         ("MLC121", include_str!("../docs/rules/MLC121.md")),
         ("MLC122", include_str!("../docs/rules/MLC122.md")),
+        ("MLC123", include_str!("../docs/rules/MLC123.md")),
         ("MLC124", include_str!("../docs/rules/MLC124.md")),
         ("MLC125", include_str!("../docs/rules/MLC125.md")),
         ("MLC126", include_str!("../docs/rules/MLC126.md")),
@@ -896,10 +899,19 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLR104", include_str!("../docs/rules/MLR104.md")),
         ("MLR105", include_str!("../docs/rules/MLR105.md")),
         ("MLR106", include_str!("../docs/rules/MLR106.md")),
+        ("MLR107", include_str!("../docs/rules/MLR107.md")),
+        ("MLR108", include_str!("../docs/rules/MLR108.md")),
+        ("MLR110", include_str!("../docs/rules/MLR110.md")),
+        ("MLR111", include_str!("../docs/rules/MLR111.md")),
+        ("MLR112", include_str!("../docs/rules/MLR112.md")),
         ("MLR113", include_str!("../docs/rules/MLR113.md")),
         ("MLR114", include_str!("../docs/rules/MLR114.md")),
         ("MLR115", include_str!("../docs/rules/MLR115.md")),
+        ("MLR116", include_str!("../docs/rules/MLR116.md")),
         ("MLR117", include_str!("../docs/rules/MLR117.md")),
+        ("MLR119", include_str!("../docs/rules/MLR119.md")),
+        ("MLR120", include_str!("../docs/rules/MLR120.md")),
+        ("MLR121", include_str!("../docs/rules/MLR121.md")),
         ("MLR124", include_str!("../docs/rules/MLR124.md")),
         ("MLR125", include_str!("../docs/rules/MLR125.md")),
         ("MLR126", include_str!("../docs/rules/MLR126.md")),
@@ -912,11 +924,26 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLD306", include_str!("../docs/rules/MLD306.md")),
         ("MLD307", include_str!("../docs/rules/MLD307.md")),
         ("MLP201", include_str!("../docs/rules/MLP201.md")),
+        ("MLP202", include_str!("../docs/rules/MLP202.md")),
+        ("MLP203", include_str!("../docs/rules/MLP203.md")),
         ("MLP204", include_str!("../docs/rules/MLP204.md")),
         ("MLP205", include_str!("../docs/rules/MLP205.md")),
         ("MLP206", include_str!("../docs/rules/MLP206.md")),
+        ("MLP207", include_str!("../docs/rules/MLP207.md")),
+        ("MLP208", include_str!("../docs/rules/MLP208.md")),
+        ("MLP209", include_str!("../docs/rules/MLP209.md")),
+        ("MLP210", include_str!("../docs/rules/MLP210.md")),
+        ("MLP211", include_str!("../docs/rules/MLP211.md")),
+        ("MLP215", include_str!("../docs/rules/MLP215.md")),
+        ("MLP216", include_str!("../docs/rules/MLP216.md")),
+        ("MLP218", include_str!("../docs/rules/MLP218.md")),
+        ("MLP219", include_str!("../docs/rules/MLP219.md")),
         ("MLP220", include_str!("../docs/rules/MLP220.md")),
+        ("MLP221", include_str!("../docs/rules/MLP221.md")),
+        ("MLP222", include_str!("../docs/rules/MLP222.md")),
+        ("MLP224", include_str!("../docs/rules/MLP224.md")),
         ("MLP226", include_str!("../docs/rules/MLP226.md")),
+        ("MLP227", include_str!("../docs/rules/MLP227.md")),
     ];
     let normalized = rule.to_ascii_uppercase();
     if let Some((_, text)) = DOCS.iter().find(|(id, _)| *id == normalized) {
@@ -1020,6 +1047,25 @@ mod tests {
             diagnostic("MLP201", "scene.py", here),
         ]);
         assert_eq!(ids(&collapsed), ["MLP226"]);
+    }
+
+    /// The wave-6 cardinality pairs collapse the same way: `MLP224`
+    /// (`point_from_proportion`) supersedes the generic family walk
+    /// `MLP203`, and `MLP208` (Text/TeX transform) supersedes the
+    /// generic `MLP207`, on a shared span in either input order.
+    #[test]
+    fn apply_supersedes_collapses_the_cardinality_pairs_on_one_span() {
+        let here = span(12, 21);
+        let collapsed = apply_supersedes(vec![
+            diagnostic("MLP203", "scene.py", here),
+            diagnostic("MLP224", "scene.py", here),
+        ]);
+        assert_eq!(ids(&collapsed), ["MLP224"]);
+        let collapsed = apply_supersedes(vec![
+            diagnostic("MLP208", "scene.py", here),
+            diagnostic("MLP207", "scene.py", here),
+        ]);
+        assert_eq!(ids(&collapsed), ["MLP208"]);
     }
 
     /// A different span or a different file is never collapsed: the

@@ -12,7 +12,7 @@
 //! the moving-suffix bounds are `Num::Exact` — an unknown order never
 //! produces a number.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
@@ -25,7 +25,7 @@ use crate::render_order::{
 };
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::interpreter::{PlayFact, SceneLifecycle};
-use crate::semantic::values::{KindSet, Num, NumLit, Presence};
+use crate::semantic::values::{KindSet, Num, NumLit, ObjectId, Presence};
 
 use super::frame_scope::{
     cairo_profile_names, camera_truth, frames_at_play, related_site, renders_frames, site_range,
@@ -35,9 +35,11 @@ use super::support::display_frames;
 /// Canonical id of the curated `ImageMobject` class.
 const IMAGE_MOBJECT: &str = "manim.mobject.types.image_mobject.ImageMobject";
 
-/// `MLP209` fires only on a proven static suffix of at least this many
-/// later display-list members (DESIGN §7.3 "large static suffix"; smaller
-/// suffixes re-rasterize little).
+/// `MLP209` fires only when at least this many members after the first
+/// mover are **provably static** (DESIGN §7.3 "large static suffix";
+/// smaller static remainders re-rasterize little, and suffix members
+/// that are themselves moving re-rasterize regardless of order, so they
+/// never count toward the gate).
 pub const MLP209_STATIC_SUFFIX_GATE: Threshold = Threshold {
     name: "static-suffix-gate",
     quantity: "N_moving_suffix",
@@ -76,6 +78,13 @@ pub struct FrontLoadedStaticSuffix;
 struct ExactSuffix {
     first_index: i64,
     suffix_len: i64,
+    /// Members strictly after `first_index` that are provably static
+    /// (no animation target, no foreground promotion, no family
+    /// updater): only these are wasted re-raster work attributable to
+    /// the front-loaded mover — suffix members that are themselves
+    /// moving re-rasterize regardless of order (DESIGN §7.3 `MLP209`
+    /// "large static suffix").
+    static_members: i64,
     reason: Option<MovingReason>,
     sentence: String,
 }
@@ -104,9 +113,42 @@ fn exact_suffix_at(scene: &SceneLifecycle, play: &PlayFact) -> Option<ExactSuffi
         .iter()
         .find(|evidence| i64::try_from(evidence.index) == Ok(first_index))
         .map(|evidence| evidence.reason);
+    // Provably static members of the suffix: everything after the first
+    // mover minus the members covered by any (certain or possible)
+    // moving evidence. Coverage extends through the family closure of
+    // each moving member — an updater on a group mutates its entire
+    // family per frame (`Mobject.update` recurses), so no descendant of
+    // a mover is provably static, and a possibly-moving member is
+    // conservatively not counted as static either.
+    let mut covered: BTreeSet<&ObjectId> = BTreeSet::new();
+    for evidence in &suffix.members_evidence {
+        let mut queue = vec![&evidence.id];
+        while let Some(current) = queue.pop() {
+            if !covered.insert(current) {
+                continue;
+            }
+            if let Some(facts) = inputs.members.get(current) {
+                queue.extend(facts.children.iter());
+            }
+        }
+    }
+    let members = order.members()?;
+    let moving_after = i64::try_from(
+        members
+            .iter()
+            .enumerate()
+            .filter(|(index, member)| {
+                i64::try_from(*index).is_ok_and(|index| index > first_index)
+                    && covered.contains(&member.id)
+            })
+            .count(),
+    )
+    .ok()?;
+    let static_members = suffix_len - moving_after;
     Some(ExactSuffix {
         first_index,
         suffix_len,
+        static_members,
         reason,
         sentence,
     })
@@ -134,8 +176,8 @@ impl Rule for FrontLoadedStaticSuffix {
                 let Some(exact) = exact_suffix_at(scene, play) else {
                     continue;
                 };
-                let suffix_len = Num::int(exact.suffix_len);
-                if !MLP209_STATIC_SUFFIX_GATE.confirmed_by(&suffix_len) {
+                let static_members = Num::int(exact.static_members);
+                if !MLP209_STATIC_SUFFIX_GATE.confirmed_by(&static_members) {
                     continue;
                 }
                 let mover = match exact.reason {
@@ -150,14 +192,18 @@ impl Rule for FrontLoadedStaticSuffix {
                 evidence.insert("scene".to_owned(), json!(scene.qualified_name));
                 evidence.insert(
                     "threshold".to_owned(),
-                    MLP209_STATIC_SUFFIX_GATE.evidence(&suffix_len),
+                    MLP209_STATIC_SUFFIX_GATE.evidence(&static_members),
                 );
                 evidence.insert(
                     "citation".to_owned(),
                     json!(MLP209_STATIC_SUFFIX_GATE.citation()),
                 );
                 evidence.insert("first_moving_index".to_owned(), json!(exact.first_index));
-                evidence.insert("static_suffix_members".to_owned(), json!(exact.suffix_len));
+                evidence.insert(
+                    "static_suffix_members".to_owned(),
+                    json!(exact.static_members),
+                );
+                evidence.insert("moving_suffix_members".to_owned(), json!(exact.suffix_len));
                 evidence.insert("frames".to_owned(), num_bounds_json(&frames));
                 evidence.insert(
                     "camera_moving".to_owned(),

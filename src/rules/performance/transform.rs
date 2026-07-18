@@ -8,10 +8,13 @@
 //! `MLP207` needs the DESIGN §7.3 numeric gate
 //! ([`transform_begin_gate_met`]): a confirmed source family of at least
 //! 32 or a confirmed curve insertion of at least 256, both measured at
-//! the play site. `MLP208` is the Text / TeX specialization: the kind
-//! test fires it (Text-family cardinalities are content-dependent and
-//! deliberately unknown, so numeric evidence may be absent — it is never
-//! fabricated), and it supersedes `MLP207` on the same animation.
+//! the play site. `MLP208` is the *large* Text / TeX specialization
+//! (DESIGN §7.3 catalog row): the kind test selects it, and the size
+//! gate is met either by the structural numbers (when they are real) or
+//! by a lower bound counted from the literal constructor content —
+//! glyph families are content-dependent, so a small title transform
+//! stays silent and no number is ever fabricated. `MLP208` supersedes
+//! `MLP207` on the same animation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,6 +26,7 @@ use crate::cost::thresholds::{
     TRANSFORM_CURVE_INSERTION_GATE, TRANSFORM_FAMILY_GATE, transform_begin_gate_met,
 };
 use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::frontend::index::{LiteralFact, QualifiedCall};
 use crate::rules::base::{Rule, RuleContext};
 use crate::semantic::interpreter::{PlayFact, PlayedAnimation, SceneLifecycle};
 use crate::semantic::values::{KindSet, Num, ObjectId, Presence, Truth};
@@ -52,6 +56,26 @@ const TEXT_TEX_CLASSES: [&str; 5] = [
     "manim.mobject.text.text_mobject.MarkupText",
     "manim.mobject.text.text_mobject.Text",
 ];
+
+/// The TeX-compiled subset of [`TEXT_TEX_CLASSES`]: their literal content
+/// is TeX source, so syntax characters and control sequences must not be
+/// counted as rendered glyphs.
+const TEX_CLASSES: [&str; 3] = [
+    "manim.mobject.text.tex_mobject.MathTex",
+    "manim.mobject.text.tex_mobject.SingleStringMathTex",
+    "manim.mobject.text.tex_mobject.Tex",
+];
+
+/// The Pango-markup member of [`TEXT_TEX_CLASSES`]: tags and entities in
+/// its literal content do not render one glyph per character.
+const MARKUP_TEXT: &str = "manim.mobject.text.text_mobject.MarkupText";
+
+/// `MLP208` content gate (DESIGN §7.3 `MLP207`/`MLP208` gate prose:
+/// "start from `N_family >= 32`"): the literal constructor content must
+/// prove at least this many rendered content characters before the
+/// specialization fires — a short title transform is idiomatic and
+/// cheap, not the catalog's "large Text / `MathTex` family".
+pub const MLP208_CONTENT_GATE: usize = 32;
 
 /// One provable Transform-family play argument: the single live source,
 /// the tracked replacement target, and the play it belongs to.
@@ -151,6 +175,132 @@ fn transform_sizes(context: &RuleContext<'_>, fact: &TransformFact<'_>) -> (Num,
             sizes.sizes_at(fact.source, Some(fact.play.site)).family
         });
     (family, delta)
+}
+
+/// The qualified call whose whole expression is `object`'s allocation
+/// site — the constructor call that produced it, when the frontend saw
+/// one there.
+fn constructor_call<'l>(
+    context: &'l RuleContext<'_>,
+    object: &ObjectId,
+) -> Option<&'l QualifiedCall> {
+    context
+        .qualified_calls()
+        .calls_in_file(object.site.file)
+        .find(|call| {
+            u32::from(call.call_range.start()) == object.site.start
+                && u32::from(call.call_range.end()) == object.site.end
+        })
+}
+
+/// Content characters of a literal TeX source string that provably
+/// render: everything except whitespace, TeX syntax characters
+/// (`{ } $ & # ^ _ ~`), comments (`%` to end of line), and control
+/// sequences (`\word` and `\<symbol>` count zero — a conservative lower
+/// bound, since e.g. `\alpha` renders one glyph).
+fn tex_content_chars(value: &str) -> usize {
+    let mut count = 0;
+    let mut chars = value.chars().peekable();
+    while let Some(current) = chars.next() {
+        match current {
+            '\\' => {
+                if chars.peek().is_some_and(char::is_ascii_alphabetic) {
+                    while chars.peek().is_some_and(char::is_ascii_alphabetic) {
+                        chars.next();
+                    }
+                } else {
+                    chars.next();
+                }
+            }
+            '%' => {
+                for skipped in chars.by_ref() {
+                    if skipped == '\n' {
+                        break;
+                    }
+                }
+            }
+            '{' | '}' | '$' | '&' | '#' | '^' | '_' | '~' => {}
+            current if current.is_whitespace() => {}
+            _ => count += 1,
+        }
+    }
+    count
+}
+
+/// Content characters of a literal Pango text string: non-whitespace
+/// characters, with markup tags (`<...>`) skipped and each entity
+/// (`&...;`) counted as one character when `markup` is set.
+fn text_content_chars(value: &str, markup: bool) -> usize {
+    let mut count = 0;
+    let mut chars = value.chars().peekable();
+    while let Some(current) = chars.next() {
+        if markup && current == '<' {
+            for skipped in chars.by_ref() {
+                if skipped == '>' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if markup && current == '&' {
+            while let Some(&next) = chars.peek() {
+                if next == ';' || next.is_whitespace() {
+                    chars.next();
+                    break;
+                }
+                chars.next();
+            }
+            count += 1;
+            continue;
+        }
+        if !current.is_whitespace() {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// A proven lower bound on `object`'s rendered content characters,
+/// counted from the literal positional string arguments of its
+/// constructor call. `None` when the object is not a definite Text / TeX
+/// kind or no literal content is visible — never a guess. Non-literal
+/// arguments contribute nothing, so the bound only under-counts.
+fn content_chars_lower_bound(
+    context: &RuleContext<'_>,
+    scene: &SceneLifecycle,
+    object: &ObjectId,
+) -> Option<usize> {
+    let kinds = known_kinds(scene, object)?;
+    if !kinds
+        .iter()
+        .all(|kind| TEXT_TEX_CLASSES.contains(&kind.as_str()))
+    {
+        return None;
+    }
+    let call = constructor_call(context, object)?;
+    let mut minimum: Option<usize> = None;
+    // Every kind candidate must prove the bound: the weakest candidate's
+    // count is the sound lower bound.
+    for kind in kinds {
+        let counter: fn(&str) -> usize = if TEX_CLASSES.contains(&kind.as_str()) {
+            tex_content_chars
+        } else if kind == MARKUP_TEXT {
+            |value: &str| text_content_chars(value, true)
+        } else {
+            |value: &str| text_content_chars(value, false)
+        };
+        let mut total = 0;
+        for index in 0..call.positional_count {
+            let Some(argument) = call.positional(index) else {
+                continue;
+            };
+            if let Some(LiteralFact::Str { value, .. }) = &argument.literal {
+                total += counter(value);
+            }
+        }
+        minimum = Some(minimum.map_or(total, |current| current.min(total)));
+    }
+    minimum.filter(|&total| total > 0)
 }
 
 /// The diagnostic anchor: the animation argument expression.
@@ -289,7 +439,7 @@ impl Rule for MismatchedTransformBegin {
 /// Metadata for [`TextFamilyTransform`].
 pub const MLP208: RuleMetadata = RuleMetadata {
     id: "MLP208",
-    summary: "Transform of a Text/MathTex family (copy + align + per-glyph interpolation)",
+    summary: "Transform of a large Text/MathTex family (copy + align + per-glyph interpolation)",
     default_enabled: true,
     default_severity: Severity::Info,
     minimum_confidence: Confidence::High,
@@ -334,8 +484,32 @@ impl Rule for TextFamilyTransform {
             } else {
                 family
             };
+            // DESIGN §7.3 catalog row: the specialization is for a
+            // *large* Text / MathTex family. The gate is met by the
+            // structural numbers when they are real, or by a proven
+            // lower bound on the literal constructor content of either
+            // side; a short title transform stays silent.
+            let content_chars = [fact.source, fact.target]
+                .into_iter()
+                .filter_map(|object| content_chars_lower_bound(context, fact.scene, object))
+                .max();
+            let content_gate_met = content_chars.is_some_and(|chars| chars >= MLP208_CONTENT_GATE);
+            if !content_gate_met && !transform_begin_gate_met(&family, &delta) {
+                continue;
+            }
             let file = context.sources().file(fact.animation.site.file);
-            let evidence = transform_evidence(&fact, &family, &delta, false);
+            let mut evidence = transform_evidence(&fact, &family, &delta, false);
+            if let Some(chars) = content_chars {
+                evidence.insert(
+                    "content_gate".to_owned(),
+                    serde_json::json!({
+                        "quantity": "literal content characters (lower bound)",
+                        "minimum": MLP208_CONTENT_GATE,
+                        "proven": chars,
+                        "confirmed": chars >= MLP208_CONTENT_GATE,
+                    }),
+                );
+            }
             diagnostics.push(build_diagnostic(
                 &MLP208,
                 context,

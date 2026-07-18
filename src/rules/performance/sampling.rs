@@ -1,11 +1,12 @@
 //! `MLP221`: a literal `t_range` / `x_range` step proves an excessive
 //! sample count for `ParametricFunction` / `Axes.plot` (DESIGN §7.3).
 //!
-//! Resolution: `ParametricFunction` and `Axes.plot` are not curated in
-//! the `upstream_0_20` knowledge profile yet, so a candidate is accepted
-//! on two bases only (never a name-string guess):
+//! Resolution: a candidate is accepted on two bases only (never a
+//! name-string guess):
 //!
-//! - the knowledge profile resolves it (future-curated path), or
+//! - the knowledge profile resolves it — `ParametricFunction` and
+//!   `Axes.plot` are curated in `upstream_0_20`, so star-import aliases
+//!   (`from manim import *`) resolve through the profile's exports — or
 //! - the frontend's import resolution produced exactly the canonical
 //!   module path (`from manim.mobject.graphing.functions import
 //!   ParametricFunction`, or a method call on a tracked instance of the

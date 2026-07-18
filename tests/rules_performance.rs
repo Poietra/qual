@@ -254,10 +254,14 @@ fn mlp202_hot_family_copy_golden() {
     // `valid.py` (a per-frame copy of a single Square: family 1, gate
     // shut; a cold `group.copy()` in construct) and `branch.py` (a group
     // grown in a loop: the family widens to an open-above interval that
-    // never confirms the gate) stay silent.
+    // never confirms the gate) stay silent. `invalid.py`'s discarded
+    // `m.copy()` updater body is additionally a provable no-op, so
+    // `MLP215` fires on the registration alongside the two `MLP202`
+    // per-call rows — distinct defects at distinct spans.
     assert_golden(
         "MLP202",
         &[
+            "invalid.py:8:9 MLP215 warning high",
             "invalid.py:8:37 MLP202 warning high",
             "invalid.py:9:37 MLP202 warning high",
         ],
@@ -267,8 +271,10 @@ fn mlp202_hot_family_copy_golden() {
 #[test]
 fn mlp203_hot_family_walk_golden() {
     // `valid.py` (a single `next_to` on a small Dot and a `get_family`
-    // on a lone Square — the DESIGN §7.3 near-misses) and `branch.py`
-    // (loop-grown family: open-above interval) stay silent.
+    // on a lone Square — the DESIGN §7.3 near-misses; the square's
+    // updater body feeds the walk into `move_to` so no other rule sees
+    // a no-op) and `branch.py` (loop-grown family: open-above interval)
+    // stay silent.
     assert_golden("MLP203", &["invalid.py:7:37 MLP203 info high"]);
 }
 
@@ -283,9 +289,13 @@ fn mlp207_transform_begin_gate_golden() {
 
 #[test]
 fn mlp208_text_family_transform_golden() {
-    // `valid.py` (Square → Circle transform: no Text kind) and
-    // `branch.py` (an unresolvable helper value: kind unknown, never
-    // guessed) stay silent.
+    // `valid.py` (Square → Circle transform: no Text kind; a
+    // `Text("Short title")` transform whose literal content stays below
+    // the 32-character gate — a small title transform is idiomatic, not
+    // the catalog's "large Text / MathTex family") and `branch.py` (an
+    // unresolvable helper value: kind unknown, never guessed) stay
+    // silent. `invalid.py` proves 45 content characters from the
+    // literal.
     assert_golden("MLP208", &["invalid.py:9:19 MLP208 info high"]);
 }
 
@@ -382,6 +392,26 @@ fn mlp208_evidence_omits_unprovable_numbers() {
         !diagnostic.evidence.contains_key("family_size"),
         "the structural family count of a Text source is not meaningful \
          glyph evidence and must be omitted"
+    );
+    // The size gate that admitted the diagnostic is cited: the literal
+    // constructor content proves a lower bound of rendered characters.
+    let content_gate = diagnostic
+        .evidence
+        .get("content_gate")
+        .expect("the content gate evidence is present");
+    assert_eq!(
+        content_gate
+            .get("proven")
+            .and_then(serde_json::Value::as_u64),
+        Some(45),
+        "the literal proves 45 content characters"
+    );
+    assert_eq!(
+        content_gate
+            .get("confirmed")
+            .and_then(serde_json::Value::as_bool),
+        Some(true),
+        "the content gate is confirmed"
     );
 }
 
