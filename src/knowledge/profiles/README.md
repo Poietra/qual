@@ -19,17 +19,83 @@ embedded into the binary at compile time and loaded via
   0 contradictions, 0 warnings.
 - `local_0_20_1_4d25c031.json` — profile name **`local_0_20_1_4d25c031`**:
   the local-fork overlay on `base_profile = upstream_0_20`. It carries what
-  the fork's working tree adds on top of the base commit — currently the
-  three fork-only `manim.constants` names (`CAIRO_ANTIALIAS_MODES`,
-  `VIDEO_ENCODERS`, `X264_PRESETS`) and their star exports, which were
-  moved out of the upstream profile because the clean base tree disproves
-  them. Its own `source_digest` covers the fork working tree it describes
+  the fork's working tree adds on top of the base commit:
+  - the three fork-only `manim.constants` names (`CAIRO_ANTIALIAS_MODES`,
+    `VIDEO_ENCODERS`, `X264_PRESETS`) and their star exports, which were
+    moved out of the upstream profile because the clean base tree disproves
+    them;
+  - the fork-only parallel-TeX API symbols
+    (`manim.mobject.text.tex_mobject.MathTex.precompile`,
+    `manim.utils.tex_file_writing.tex_to_svg_file_async` — the latter is in
+    `tex_file_writing.__all__` but *not* star-exported from
+    `manim/__init__.py`, so it carries no export entry);
+  - the curated `fork_capabilities` block (see below).
+
+  Its own `source_digest` covers the fork working tree it describes
   (as of 2026-07-19). Overlay semantics: an overlay names its base by
   `base_profile` (`name` **and** `source_digest` must match exactly),
   replaces whole symbol entries by qualified key, deletes base symbols via
-  `deleted_symbols` and base exports via `deleted_exports`. There is no
-  recursive deep merge, and overlay chains (an overlay whose base is itself
-  an overlay) are rejected.
+  `deleted_symbols` and base exports via `deleted_exports`, and — if it
+  declares one — replaces the base's `fork_capabilities` block wholesale.
+  There is no recursive deep merge, and overlay chains (an overlay whose
+  base is itself an overlay) are rejected.
+
+## Fork fast-path capabilities
+
+The overlay's top-level `fork_capabilities` block (model:
+`ForkCapabilities`, accessor `KnowledgeProfile::fork_capabilities()` plus
+per-capability accessors) is the curated description of the fork's
+lint-relevant fast paths (DESIGN §7.3). The upstream profile has **no**
+such block, which keeps every fork-gated interpretation (MLP214, MLP217's
+shared-cache gate, MLP225, the `cairo_fork_workers` /
+`cairo_static_layers` fast-path semantics) inert under `upstream_0_20`.
+
+- `tex_parallel_compile` — the submit-all/collect Future API
+  (`tex_file_writing.py`: process-global `ThreadPoolExecutor`, same-key
+  future coalescing; `tex_mobject.py MathTex.precompile`). Its
+  `entry_points` are validated to be curated symbols of the resolved
+  profile, so precompile advice can never cite an API the selected profile
+  does not have. `in_flight_blocks_cairo_fork` records that live TeX
+  futures force the fork pipeline into serial fallback
+  (`cairo_renderer.py _try_start_cairo_fork_job` →
+  `_shutdown_tex_compilation_pool_for_fork`).
+- `cairo_fork_gate` — the fork-per-play pipeline: `min_workers` (0..1 is
+  *unrequested*, never a reported loss), `monotonic_disable: true` (the
+  first written play that opens the parent encoder permanently closes the
+  renderer to forking — `_begin_parent_cairo_animation`), the exact-type
+  `animation_allowlist` / `composition_allowlist`
+  (`_cairo_fork_animation_type_is_supported`), identity-checked
+  `trusted_rate_functions`, and the structured `blockers` list read from
+  `_cairo_fork_pipeline_is_requested` / `_cairo_fork_pre_begin_is_eligible`
+  / `_cairo_fork_post_begin_is_eligible`.
+- `cairo_static_layers` — layer-plan retention (`save_static_frame_data`,
+  `_build_cairo_static_layer_plan`,
+  `_cairo_static_layer_inputs_are_trusted`): `min_play_frames: 3`,
+  trailing static runs retained above moving objects (MLP209 severity
+  input), blockers as curated.
+- `cairo_bulk_interpolation` — the packed interpolation fast path
+  (`_try_arm_cairo_bulk_interpolation_recipes`): thresholds 12 frames / 4
+  members / 192 member×frame amortization, Transform-or-`.animate`-only
+  allowlist, updater-bearing families and custom rate/path functions gate
+  it out.
+- `svg_cache` — MLP217's gate: the process-global `SVG_HASH_TO_MOB_MAP`
+  (`svg_mobject.py`), its key components, unbounded growth, and
+  copy-on-hit. The map also exists upstream, but only a profile that
+  *declares* the semantics enables the rule.
+- `continuous_movie_stream` — MLP210's OutputState input: uncached Cairo
+  plays merge into one encoder stream only under
+  `scene_file_writer.py _continuous_movie_stream_is_safe` conditions.
+- `config_keys` — the fork's new `default.cfg` options, for config display
+  (local-only keys are inert, not rejected, under profiles lacking them).
+
+Blocker vocabulary is the shared `ForkBlocker` enum (snake_case in JSON,
+`ForkBlocker::as_str` matches the wire form). Every capability carries a
+`note` citing the fork source it was read from; calibration numbers quoted
+there are machine-specific evidence (`docs/research/perf-evidence.md`),
+never portable truth. These facts are reviewer-curated — the generator
+neither emits nor drift-checks `fork_capabilities`; the drift gate still
+verifies the overlay's *symbols* (including the two TeX API entries)
+against the fork working tree.
 
 ## Source digest
 

@@ -2,10 +2,211 @@
   "schema_version": 1,
   "name": "local_0_20_1_4d25c031",
   "manim_version": ">=0.20,<0.21",
-  "source_digest": "sha256:6c7379d3c3f93825b205d4fa9da1115067ef934657fa8eebec1a30e89aac3237",
+  "source_digest": "sha256:30a8382249879a44d0fd9a31da8e0267bcc3b0dddcf441190d9c0ea32487b427",
   "base_profile": {
     "name": "upstream_0_20",
     "source_digest": "sha256:b8c6a680098fac9d666ff52779252ab6783e5a54e3dc8a456feb86b3724752f3"
+  },
+  "fork_capabilities": {
+    "tex_parallel_compile": {
+      "entry_points": [
+        "manim.mobject.text.tex_mobject.MathTex.precompile",
+        "manim.utils.tex_file_writing.tex_to_svg_file_async"
+      ],
+      "same_key_coalesced": true,
+      "cache_hit_short_circuits": true,
+      "in_flight_blocks_cairo_fork": true,
+      "note": "tex_file_writing.py: module-global ThreadPoolExecutor (_get_tex_compilation_pool, max_workers = cpu count) with a Future registry keyed by the absolute hash-named SVG path (_tex_compilation_futures). The synchronous tex_to_svg_file joins a same-key in-flight job, so submit-all then construct-synchronously is the intended pattern. tex_mobject.py MathTex.precompile submits per-formula jobs whose cache paths exactly match later MathTex(...) constructions; graph.py Graph.__init__ already precompiles default vertex labels this way. Fork boundary: _try_start_cairo_fork_job calls _shutdown_tex_compilation_pool_for_fork, which refuses while futures are in flight, forcing serial fallback for that play. Measured on this fork: 16 distinct cold formulas 120.7 s sequential vs 11.7 s submit-all/collect; 7 cold Graph labels 24.662 -> 4.760 s (docs/research/perf-evidence.md)."
+    },
+    "cairo_fork_gate": {
+      "config_key": "cairo_fork_workers",
+      "min_workers": 2,
+      "linux_only": true,
+      "monotonic_disable": true,
+      "animation_allowlist": [
+        "manim.animation.animation.Animation",
+        "manim.animation.animation.Wait",
+        "manim.animation.creation.Create",
+        "manim.animation.creation.Uncreate",
+        "manim.animation.creation.Write",
+        "manim.animation.fading.FadeIn",
+        "manim.animation.fading.FadeOut",
+        "manim.animation.indication.Indicate",
+        "manim.animation.indication.ShowPassingFlash",
+        "manim.animation.transform.ReplacementTransform",
+        "manim.animation.transform.Transform",
+        "manim.animation.transform._MethodAnimation"
+      ],
+      "composition_allowlist": [
+        "manim.animation.composition.AnimationGroup",
+        "manim.animation.composition.LaggedStart",
+        "manim.animation.composition.LaggedStartMap",
+        "manim.animation.indication.Circumscribe"
+      ],
+      "trusted_rate_functions": [
+        "manim.utils.rate_functions.linear",
+        "manim.utils.rate_functions.smooth"
+      ],
+      "blockers": [
+        "parent_encoder_opened",
+        "transparent_output",
+        "non_mp4_output",
+        "non_libx264_encoder",
+        "dry_run",
+        "save_last_frame",
+        "save_sections",
+        "log_to_file",
+        "sound_added",
+        "scene_updaters",
+        "foreground_mobjects",
+        "meshes",
+        "always_update_mobjects",
+        "stop_condition",
+        "interactive_mode",
+        "subclassed_renderer_or_camera",
+        "custom_scene_attribute_hooks",
+        "monkeypatched_internals",
+        "untrusted_mobject_hooks",
+        "unsupported_animation_type",
+        "untrusted_animation_lifecycle",
+        "custom_rate_func",
+        "non_straight_path_func",
+        "in_flight_tex_workers",
+        "extra_live_threads"
+      ],
+      "note": "cairo_renderer.py: _cairo_fork_pipeline_is_requested (int workers >= 2, os.fork present, sys.platform == linux, parent partial-movie stream never opened), _cairo_fork_pre_begin_is_eligible / _cairo_fork_post_begin_is_eligible (exact CairoRenderer + Camera, plain .mp4 with libx264, writer without sounds or open streams, scene without foreground/scene updaters/meshes/always_update_mobjects/stop_condition, trusted mobject families, per-animation lifecycle audit), _cairo_fork_animation_type_is_supported (exact-type allowlist; composition containers audited recursively), _cairo_fork_transform_scope / _cairo_fork_creation_scope (rate_func accepted by identity, path_func must be transform.py _RENDER_PLAN_STRAIGHT_PATH; Write and Indicate accept their own exact defaults, creation.py _CAIRO_FORK_TRUSTED_WRITE_RATE_FUNC = linear and indication.py _CAIRO_FORK_TRUSTED_INDICATE_RATE_FUNC = there_and_back), and _try_start_cairo_fork_job (joins the idle TeX pool, requires main thread with threading.active_count() == 1). Monotonic disable: _begin_parent_cairo_animation sets _cairo_fork_permanently_disabled the first time a written play opens the parent encoder, so later eligible plays cannot fork; cached (skipped) plays do not open it. workers 0..1 means unrequested, not blocked. cairo_fork_workers bounds in-flight forked plays (_prepare_cairo_fork_slot). Measured at 1080p: Bayes 7.55 -> 3.95 s, Algorithm 12.13 -> 7.50 s (docs/research/perf-evidence.md)."
+    },
+    "cairo_static_layers": {
+      "config_key": "cairo_static_layers",
+      "min_play_frames": 3,
+      "retains_trailing_static_runs": true,
+      "blockers": [
+        "frozen_static_wait",
+        "scene_updaters",
+        "foreground_mobjects",
+        "meshes",
+        "always_update_mobjects",
+        "stop_condition",
+        "non_opaque_background",
+        "subclassed_renderer_or_camera",
+        "custom_scene_attribute_hooks",
+        "monkeypatched_internals",
+        "untrusted_mobject_hooks",
+        "unsupported_animation_type",
+        "custom_rate_func",
+        "non_straight_path_func"
+      ],
+      "note": "cairo_renderer.py: save_static_frame_data builds a z-ordered layer plan when cairo_static_layers is set and the play spans >= 3 frames (the experimental cairo_compositor variant needs >= 8); _build_cairo_static_layer_plan plus _cairo_static_layer_inputs_are_trusted gate it (exact CairoRenderer/Camera, standard writer handoff methods, opaque RGBA background without background_image, every animation scope recognized via _cairo_animation_scope, trusted mobject families). Static runs above moving objects are cached as transparent surfaces and composited per frame, so a dynamic object early in the display order no longer forces the static suffix to re-raster (MLP209 severity input). A frozen static Wait deliberately keeps the legacy single-frame path. Opt-in trade-off per default.cfg: tiny antialias rounding differences at static/dynamic layer boundaries."
+    },
+    "cairo_bulk_interpolation": {
+      "min_frames": 12,
+      "min_family_count": 4,
+      "min_amortization": 192,
+      "animation_allowlist": [
+        "manim.animation.transform.Transform",
+        "manim.animation.transform._MethodAnimation"
+      ],
+      "trusted_rate_functions": [
+        "manim.utils.rate_functions.linear",
+        "manim.utils.rate_functions.smooth"
+      ],
+      "blockers": [
+        "updater_bearing_family",
+        "unsupported_animation_type",
+        "custom_rate_func",
+        "non_straight_path_func",
+        "nonzero_lag_ratio",
+        "reversed_rate_function",
+        "overlapping_animation_families",
+        "scene_updaters",
+        "foreground_mobjects",
+        "meshes",
+        "always_update_mobjects",
+        "stop_condition",
+        "non_opaque_background",
+        "subclassed_renderer_or_camera",
+        "custom_scene_attribute_hooks",
+        "monkeypatched_internals",
+        "untrusted_mobject_hooks"
+      ],
+      "note": "cairo_renderer.py: _try_arm_cairo_bulk_interpolation_recipes arms packed per-play point/style interpolation after the first canonical frame; constants _CAIRO_BULK_MIN_FRAMES = 12, _CAIRO_BULK_MIN_FAMILY_COUNT = 4, _CAIRO_BULK_MIN_AMORTIZATION = 192 (effective member floor is max(4, ceil(192 / (frames - 2)))). Every animation of the play must be exactly Transform or _MethodAnimation (the .animate builder) with lag_ratio 0, reverse_rate_function False, rate/path funcs accepted by identity (animation.py _RENDER_PLAN_TRUSTED_RATE_FUNCTIONS = (linear, smooth); transform.py _RENDER_PLAN_STRAIGHT_PATH), disjoint live families, and no updaters anywhere in the scene's mobject families; the static-layer input gate must also pass. Gated-out plays keep canonical frames-by-family-by-channels interpolation cost. Measured: 300 members / 60 frames interpolation 130.658 -> 33.004 ms/play, steady state 2.0761 -> 0.1890 ms/frame (docs/research/perf-evidence.md)."
+    },
+    "svg_cache": {
+      "process_global": true,
+      "keyed_by": [
+        "class_name",
+        "svg_default",
+        "path_string_config",
+        "file_name",
+        "config.renderer"
+      ],
+      "unbounded": true,
+      "copies_on_hit": true,
+      "note": "svg_mobject.py: module-global SVG_HASH_TO_MOB_MAP keyed by hash_obj(SVGMobject.hash_seed) = (class name, svg_default, path_string_config, file_name, config.renderer). SVGMobject.init_svg_mobject(use_svg_cache=True) stores a deep copy on miss and serves hits as deep copies, so per-construction cost never reaches zero; entries are never evicted, so frame-varying keys in hot callbacks grow the map O(F) for the life of the process (MLP217). The map also exists upstream; this overlay declares the semantics so profile-gated rules can rely on it."
+    },
+    "continuous_movie_stream": {
+      "merges_partial_movie_files": true,
+      "requires_disable_caching": true,
+      "blockers": [
+        "caching_enabled",
+        "save_sections",
+        "transparent_output",
+        "non_mp4_output",
+        "sound_added",
+        "dry_run",
+        "subclassed_renderer_or_camera",
+        "monkeypatched_internals"
+      ],
+      "note": "scene_file_writer.py: _continuous_movie_stream_is_safe merges uncached Cairo plays into one encoder stream — per-play partial-movie boundaries disappear — only for an exact SceneFileWriter over an exact CairoRenderer with disable_caching = True, no sections, sounds or transparency, plain .mp4, and standard writer methods. MLP210's per-play partial-stream cost term applies only when OutputState actually shows per-play streams."
+    },
+    "config_keys": [
+      {
+        "name": "cairo_fork_workers",
+        "default": "0",
+        "note": "default.cfg: Linux-only fork-per-play Cairo pipeline; 0 disables, enabled values must be >= 2."
+      },
+      {
+        "name": "cairo_static_layers",
+        "default": "False",
+        "note": "default.cfg: opt-in faster Cairo compositing; can introduce tiny antialias rounding differences at layer boundaries."
+      },
+      {
+        "name": "cairo_compositor",
+        "default": "False",
+        "note": "default.cfg: experimental moving-layer compositor reusing a reference raster for narrowly audited translations; requires >= 8 frames per play."
+      },
+      {
+        "name": "cairo_compositor_fades",
+        "default": "False",
+        "note": "default.cfg: group-alpha compositing for audited FadeIn/FadeOut translations; intermediate frames are not pixel-identical to per-object fades."
+      },
+      {
+        "name": "cairo_antialias",
+        "default": "default",
+        "note": "default.cfg: one of constants.py CAIRO_ANTIALIAS_MODES (default | fast | none); fast/none trade edge quality for faster rasterization."
+      },
+      {
+        "name": "video_encoder",
+        "default": "libx264",
+        "note": "default.cfg: one of constants.py VIDEO_ENCODERS; auto probes hardware encoders with a real two-frame encode and falls back to libx264. Any value other than libx264 (auto included) blocks the Cairo fork pipeline."
+      },
+      {
+        "name": "x264_preset",
+        "default": "medium",
+        "note": "default.cfg: one of constants.py X264_PRESETS, ordered fastest to slowest."
+      },
+      {
+        "name": "opengl_pbo_readback",
+        "default": "False",
+        "note": "default.cfg: experimental movie-only asynchronous OpenGL readback; submission order is verified at runtime with synchronous fallback."
+      },
+      {
+        "name": "opengl_pbo_depth",
+        "default": "3",
+        "note": "default.cfg: delayed readback buffer count; enabled values must be >= 2."
+      }
+    ],
+    "note": "Curated by hand from the fork working tree at /home/hosi/manim (base commit 4d25c031 plus uncommitted optimizations); every fact cites the gate function or config file it was read from and is reviewer-verified, not generator-extracted. Fast-path interpretation is local-fork-overlay only: upstream_0_20 lacks this block entirely, keeping MLP214/MLP225 and cairo_fork_workers / cairo_static_layers fast-path semantics inert there (DESIGN 7.3). Calibration numbers quoted in notes are machine-specific evidence (docs/research/perf-evidence.md), never portable truth."
   },
   "symbols": {
     "manim.constants.CAIRO_ANTIALIAS_MODES": {
@@ -19,6 +220,25 @@
     "manim.constants.X264_PRESETS": {
       "kind": "constant",
       "note": "Fork-only: libx264 preset names; absent from upstream 4d25c031."
+    },
+    "manim.mobject.text.tex_mobject.MathTex.precompile": {
+      "kind": "method",
+      "returns_self": false,
+      "signature": {
+        "params": [{ "name": "expressions", "required": true }]
+      },
+      "note": "Fork-only classmethod (tex_mobject.py MathTex.precompile): submits several independent formulas for parallel TeX compilation and returns list[Future[Path]] immediately; keyword options mirror the constructor so each cache path exactly matches a later MathTex(...) construction, which joins the same in-flight job."
+    },
+    "manim.utils.tex_file_writing.tex_to_svg_file_async": {
+      "kind": "function",
+      "signature": {
+        "params": [
+          { "name": "expression", "required": true },
+          { "name": "environment" },
+          { "name": "tex_template" }
+        ]
+      },
+      "note": "Fork-only (tex_file_writing.py tex_to_svg_file_async, in tex_file_writing.__all__ but not star-exported from manim/__init__.py): non-blocking TeX compile plus dvisvgm conversion returning Future[Path]; same-key jobs coalesce process-wide and an existing SVG yields an already-resolved future."
     }
   },
   "exports": {

@@ -22,8 +22,10 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 pub use model::{
-    AcceptedTarget, BaseProfileRef, KnowledgeError, KnowledgeProfile, ParamFact, ProfileDocument,
-    RendererCompat, SceneMembershipEffect, SignatureFacts, SymbolEffects, SymbolEntry, SymbolKind,
+    AcceptedTarget, BaseProfileRef, CairoBulkInterpolation, CairoForkGate, CairoStaticLayers,
+    ContinuousMovieStream, ForkBlocker, ForkCapabilities, ForkConfigKey, KnowledgeError,
+    KnowledgeProfile, ParamFact, ProfileDocument, RendererCompat, SceneMembershipEffect,
+    SignatureFacts, SvgCacheFacts, SymbolEffects, SymbolEntry, SymbolKind, TexParallelCompile,
     apply_overlay,
 };
 

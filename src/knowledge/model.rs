@@ -285,6 +285,338 @@ pub struct SymbolEntry {
     pub note: Option<String>,
 }
 
+/// One condition that gates a fork fast path back onto the canonical
+/// (serial / legacy) render path.
+///
+/// The vocabulary is shared by every [`ForkCapabilities`] blocker list; each
+/// capability lists only the subset its gate actually checks. Values are
+/// curated from the fork source (the gate functions cited in each
+/// capability's `note`), never invented from rule prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkBlocker {
+    /// The parent partial-movie encoder has already opened (writes leave
+    /// native encoder state that makes a later `os.fork` unsafe).
+    ParentEncoderOpened,
+    /// `config.transparent` output.
+    TransparentOutput,
+    /// Output format is not plain `.mp4`.
+    NonMp4Output,
+    /// `video_encoder` is not exactly `libx264` (including `auto`).
+    NonLibx264Encoder,
+    /// `config.dry_run`.
+    DryRun,
+    /// `config.save_last_frame`.
+    SaveLastFrame,
+    /// `config.save_sections`.
+    SaveSections,
+    /// `config.log_to_file`.
+    LogToFile,
+    /// The file writer has sounds registered (`Scene.add_sound`).
+    SoundAdded,
+    /// Scene-level updaters are registered (`Scene.add_updater`).
+    SceneUpdaters,
+    /// Foreground mobjects are registered.
+    ForegroundMobjects,
+    /// OpenGL meshes are attached to the Scene.
+    Meshes,
+    /// `Scene.always_update_mobjects` is set.
+    AlwaysUpdateMobjects,
+    /// The play has a `stop_condition` callback.
+    StopCondition,
+    /// Interactive / preview mode is active.
+    InteractiveMode,
+    /// The renderer or camera is a subclass, not the exact Cairo classes.
+    SubclassedRendererOrCamera,
+    /// The Scene type overrides `__getattribute__` / `__setattr__`.
+    CustomSceneAttributeHooks,
+    /// Audited renderer / writer / scene / camera methods, module functions
+    /// or signal handlers were monkeypatched after import.
+    MonkeypatchedInternals,
+    /// A family member's type overrides audited Mobject/VMobject hooks.
+    UntrustedMobjectHooks,
+    /// An animation type outside the curated allowlist.
+    UnsupportedAnimationType,
+    /// An allowlisted animation instance with an overridden lifecycle
+    /// (`begin` / `finish` / `clean_up_from_scene` / `_setup_scene`, a
+    /// custom `_on_finish`, or non-standard lifecycle attributes).
+    UntrustedAnimationLifecycle,
+    /// A rate function other than the audited defaults.
+    CustomRateFunc,
+    /// A `path_func` other than the straight path.
+    NonStraightPathFunc,
+    /// In-flight TeX compilation futures at the fork boundary.
+    InFlightTexWorkers,
+    /// Any live thread besides the main thread at the fork boundary.
+    ExtraLiveThreads,
+    /// A frozen static `Wait` play (already rendered optimally; a layer
+    /// plan would only warm updater state).
+    FrozenStaticWait,
+    /// Camera background image set or background opacity below 1.0.
+    NonOpaqueBackground,
+    /// Any updater anywhere in the Scene's mobject families.
+    UpdaterBearingFamily,
+    /// An animation with `lag_ratio != 0`.
+    NonzeroLagRatio,
+    /// An animation with `reverse_rate_function` set.
+    ReversedRateFunction,
+    /// Two animations of one play share live family members.
+    OverlappingAnimationFamilies,
+    /// Animation caching is enabled (`disable_caching` is not set).
+    CachingEnabled,
+}
+
+impl ForkBlocker {
+    /// Stable `snake_case` name, identical to the JSON encoding (for cost
+    /// reports and diagnostics).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ParentEncoderOpened => "parent_encoder_opened",
+            Self::TransparentOutput => "transparent_output",
+            Self::NonMp4Output => "non_mp4_output",
+            Self::NonLibx264Encoder => "non_libx264_encoder",
+            Self::DryRun => "dry_run",
+            Self::SaveLastFrame => "save_last_frame",
+            Self::SaveSections => "save_sections",
+            Self::LogToFile => "log_to_file",
+            Self::SoundAdded => "sound_added",
+            Self::SceneUpdaters => "scene_updaters",
+            Self::ForegroundMobjects => "foreground_mobjects",
+            Self::Meshes => "meshes",
+            Self::AlwaysUpdateMobjects => "always_update_mobjects",
+            Self::StopCondition => "stop_condition",
+            Self::InteractiveMode => "interactive_mode",
+            Self::SubclassedRendererOrCamera => "subclassed_renderer_or_camera",
+            Self::CustomSceneAttributeHooks => "custom_scene_attribute_hooks",
+            Self::MonkeypatchedInternals => "monkeypatched_internals",
+            Self::UntrustedMobjectHooks => "untrusted_mobject_hooks",
+            Self::UnsupportedAnimationType => "unsupported_animation_type",
+            Self::UntrustedAnimationLifecycle => "untrusted_animation_lifecycle",
+            Self::CustomRateFunc => "custom_rate_func",
+            Self::NonStraightPathFunc => "non_straight_path_func",
+            Self::InFlightTexWorkers => "in_flight_tex_workers",
+            Self::ExtraLiveThreads => "extra_live_threads",
+            Self::FrozenStaticWait => "frozen_static_wait",
+            Self::NonOpaqueBackground => "non_opaque_background",
+            Self::UpdaterBearingFamily => "updater_bearing_family",
+            Self::NonzeroLagRatio => "nonzero_lag_ratio",
+            Self::ReversedRateFunction => "reversed_rate_function",
+            Self::OverlappingAnimationFamilies => "overlapping_animation_families",
+            Self::CachingEnabled => "caching_enabled",
+        }
+    }
+}
+
+/// Parallel TeX compilation capability (`MLP214`).
+///
+/// `Some(true)` fields are positive curated facts; `None` means "not
+/// curated", never "false" (DESIGN §15 invariant 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TexParallelCompile {
+    /// Qualified IDs of the submit-side API. Every entry must be a curated
+    /// symbol of the resolved profile (validated), so precompile advice can
+    /// never name an API the selected profile does not have.
+    pub entry_points: Vec<String>,
+    /// Submissions for the same compile key join one in-flight job, and a
+    /// later synchronous construction joins it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_key_coalesced: Option<bool>,
+    /// An already-cached SVG resolves immediately without a compile job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_short_circuits: Option<bool>,
+    /// In-flight TeX futures force the Cairo fork pipeline into serial
+    /// fallback for that play (the idle pool is joined at fork boundaries).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_flight_blocks_cairo_fork: Option<bool>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Cairo fork-per-play pipeline gate (`MLP225` cost reports).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CairoForkGate {
+    /// Manim config option requesting the pipeline (`snake_case`, as in
+    /// `default.cfg`).
+    pub config_key: String,
+    /// Smallest enabled value; below it the pipeline is *unrequested*, not
+    /// blocked (workers 0 must never be reported as a fork loss).
+    pub min_workers: u32,
+    /// The pipeline exists only where `os.fork` exists (Linux).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux_only: Option<bool>,
+    /// Renderer-wide monotonic disabling: once a written play opens the
+    /// parent encoder, every later play — eligible or not — renders
+    /// serially. Per-play eligibility must not be modeled as independent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monotonic_disable: Option<bool>,
+    /// Exact animation types with a built-in fork lifecycle model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animation_allowlist: Vec<String>,
+    /// Composition containers whose children are audited recursively.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composition_allowlist: Vec<String>,
+    /// Rate functions accepted by identity for the general animation scope
+    /// (some allowlisted animations additionally accept their own exact
+    /// default, see `note`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_rate_functions: Vec<String>,
+    /// Conditions that force serial fallback for a requested pipeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<ForkBlocker>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Cairo static-layer retention (`MLP209` severity, `MLP225`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CairoStaticLayers {
+    /// Manim config option enabling the layer plan.
+    pub config_key: String,
+    /// Plays shorter than this many frames stay on the legacy path (the
+    /// base and transparent-run rasters cannot amortize).
+    pub min_play_frames: u32,
+    /// Static runs *after* (above) moving objects are retained as cached
+    /// transparent layers in a z-ordered run plan — a dynamic object early
+    /// in the display order no longer forces the static suffix to re-raster
+    /// every frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retains_trailing_static_runs: Option<bool>,
+    /// Conditions that fall back to the legacy static-image path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<ForkBlocker>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Cairo packed (bulk) interpolation fast path (`MLP225`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CairoBulkInterpolation {
+    /// Minimum frames in the play's time progression.
+    pub min_frames: u32,
+    /// Minimum point-bearing family members per play.
+    pub min_family_count: u32,
+    /// Required `members × remaining frames` product before recipe
+    /// construction amortizes (the effective member floor is
+    /// `max(min_family_count, ceil(min_amortization / (frames - 2)))`).
+    pub min_amortization: u32,
+    /// Exact animation types the packed recipe can drive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animation_allowlist: Vec<String>,
+    /// Rate functions accepted by identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_rate_functions: Vec<String>,
+    /// Conditions that keep the play on canonical per-member interpolation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<ForkBlocker>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Process-global SVG mobject cache semantics (`MLP217`'s gate: the rule is
+/// enabled only where the profile declares this shared-cache behavior).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SvgCacheFacts {
+    /// One module-global map shared by every SVG-backed mobject in the
+    /// process (`Text`, `MathTex`, `SVGMobject`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_global: Option<bool>,
+    /// Components of the cache key, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyed_by: Vec<String>,
+    /// Entries are never evicted: frame-varying keys in hot callbacks grow
+    /// the cache for the life of the process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unbounded: Option<bool>,
+    /// A cache hit still deep-copies the stored mobject (and insertion
+    /// stores a deep copy), so per-construction cost never reaches zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copies_on_hit: Option<bool>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Continuous partial-movie stream (`MLP210`'s `OutputState` gate: per-play
+/// partial stream boundaries disappear when the writer merges plays).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuousMovieStream {
+    /// Uncached Cairo plays are merged into one encoder stream, removing
+    /// per-play partial-stream open/close boundaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merges_partial_movie_files: Option<bool>,
+    /// The merge only activates with `disable_caching = True`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_disable_caching: Option<bool>,
+    /// Conditions that keep per-play partial movie files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<ForkBlocker>,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One fork-added Manim config option (`snake_case` `default.cfg` name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkConfigKey {
+    /// Option name as it appears in the fork's `default.cfg`.
+    pub name: String,
+    /// Shipped default value, verbatim.
+    pub default: String,
+    /// Source citation and reviewer notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Curated fork fast-path capabilities (DESIGN §7.3).
+///
+/// Present only on the local fork overlay; the upstream profile lacks the
+/// field entirely, which keeps every fork-gated rule interpretation inert
+/// under `upstream_0_20` (fork-gated advice must never name APIs or config
+/// semantics the selected profile does not declare). Each sub-capability is
+/// optional; in an overlay the whole block replaces the base's block — there
+/// is no per-capability merge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkCapabilities {
+    /// Submit-all/collect TeX compilation (`MLP214`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tex_parallel_compile: Option<TexParallelCompile>,
+    /// Fork-per-play Cairo pipeline gate (`MLP225`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cairo_fork_gate: Option<CairoForkGate>,
+    /// Static-layer retention (`MLP209` / `MLP225`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cairo_static_layers: Option<CairoStaticLayers>,
+    /// Packed interpolation fast path (`MLP225`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cairo_bulk_interpolation: Option<CairoBulkInterpolation>,
+    /// Process-global SVG cache semantics (`MLP217`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_cache: Option<SvgCacheFacts>,
+    /// Continuous partial-movie stream (`MLP210` `OutputState`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_movie_stream: Option<ContinuousMovieStream>,
+    /// Fork-added Manim config options (config display support: local-only
+    /// keys are inert, not rejected, under profiles lacking them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_keys: Vec<ForkConfigKey>,
+    /// Source citation and reviewer notes for the whole block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// Reference from an overlay to its base profile.
 ///
 /// Both fields must match the shipped base exactly; a digest mismatch is a
@@ -314,6 +646,10 @@ pub struct ProfileDocument {
     /// Present only on overlay profiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_profile: Option<BaseProfileRef>,
+    /// Curated fork fast-path capabilities. In an overlay, a present block
+    /// replaces the base's block wholesale (no per-capability merge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_capabilities: Option<ForkCapabilities>,
     /// Curated symbols keyed by canonical qualified ID. In an overlay,
     /// each entry replaces the base entry with the same key wholesale.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -413,10 +749,12 @@ impl ProfileDocument {
             manim_version: self.manim_version,
             source_digest: self.source_digest,
             base_profile: None,
+            fork_capabilities: self.fork_capabilities,
             symbols: self.symbols,
             exports: self.exports,
         };
         resolved.validate_exports()?;
+        resolved.validate_fork_capabilities()?;
         Ok(resolved)
     }
 }
@@ -450,6 +788,9 @@ pub struct KnowledgeProfile {
     pub source_digest: String,
     /// Name of the base profile if this was resolved from an overlay.
     pub base_profile: Option<String>,
+    /// Curated fork fast-path capabilities (`None` on upstream profiles:
+    /// fork-gated rule interpretation stays inert there).
+    pub fork_capabilities: Option<ForkCapabilities>,
     /// Curated symbols keyed by canonical qualified ID.
     pub symbols: BTreeMap<String, SymbolEntry>,
     /// Star-import name → canonical symbol ID.
@@ -472,6 +813,52 @@ impl KnowledgeProfile {
         Some((id.as_str(), entry))
     }
 
+    /// Curated fork fast-path capabilities, if this profile declares any.
+    ///
+    /// `None` on upstream profiles: every fork-gated rule interpretation
+    /// (MLP214 / MLP217 gating / MLP225, `cairo_fork_workers` /
+    /// `cairo_static_layers` fast-path semantics) must stay inert then.
+    #[must_use]
+    pub fn fork_capabilities(&self) -> Option<&ForkCapabilities> {
+        self.fork_capabilities.as_ref()
+    }
+
+    /// Parallel TeX compilation capability (`MLP214`), if declared.
+    #[must_use]
+    pub fn tex_parallel_compile(&self) -> Option<&TexParallelCompile> {
+        self.fork_capabilities()?.tex_parallel_compile.as_ref()
+    }
+
+    /// Cairo fork-per-play gate (`MLP225` cost reports), if declared.
+    #[must_use]
+    pub fn cairo_fork_gate(&self) -> Option<&CairoForkGate> {
+        self.fork_capabilities()?.cairo_fork_gate.as_ref()
+    }
+
+    /// Cairo static-layer retention facts, if declared.
+    #[must_use]
+    pub fn cairo_static_layers(&self) -> Option<&CairoStaticLayers> {
+        self.fork_capabilities()?.cairo_static_layers.as_ref()
+    }
+
+    /// Cairo packed interpolation fast-path facts, if declared.
+    #[must_use]
+    pub fn cairo_bulk_interpolation(&self) -> Option<&CairoBulkInterpolation> {
+        self.fork_capabilities()?.cairo_bulk_interpolation.as_ref()
+    }
+
+    /// Process-global SVG cache semantics (`MLP217`'s gate), if declared.
+    #[must_use]
+    pub fn svg_cache(&self) -> Option<&SvgCacheFacts> {
+        self.fork_capabilities()?.svg_cache.as_ref()
+    }
+
+    /// Continuous partial-movie stream facts (`MLP210`), if declared.
+    #[must_use]
+    pub fn continuous_movie_stream(&self) -> Option<&ContinuousMovieStream> {
+        self.fork_capabilities()?.continuous_movie_stream.as_ref()
+    }
+
     /// Checks that every export points at a curated symbol.
     fn validate_exports(&self) -> Result<(), KnowledgeError> {
         for (name, id) in &self.exports {
@@ -480,6 +867,39 @@ impl KnowledgeProfile {
                     profile: self.name.clone(),
                     message: format!("export `{name}` points at unknown symbol `{id}`"),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks the internal consistency of a declared capability block.
+    ///
+    /// A `tex_parallel_compile` declaration must name at least one entry
+    /// point, and every entry point must be a curated symbol of the resolved
+    /// profile — precompile advice may only ever cite APIs the selected
+    /// profile actually has (DESIGN §7.3).
+    fn validate_fork_capabilities(&self) -> Result<(), KnowledgeError> {
+        let Some(capabilities) = &self.fork_capabilities else {
+            return Ok(());
+        };
+        if let Some(tex) = &capabilities.tex_parallel_compile {
+            if tex.entry_points.is_empty() {
+                return Err(KnowledgeError::Invalid {
+                    profile: self.name.clone(),
+                    message: "`fork_capabilities.tex_parallel_compile` declares no entry_points"
+                        .to_owned(),
+                });
+            }
+            for entry_point in &tex.entry_points {
+                if !self.symbols.contains_key(entry_point) {
+                    return Err(KnowledgeError::Invalid {
+                        profile: self.name.clone(),
+                        message: format!(
+                            "`fork_capabilities.tex_parallel_compile` entry point \
+                             `{entry_point}` is not a curated symbol"
+                        ),
+                    });
+                }
             }
         }
         Ok(())
@@ -497,7 +917,10 @@ impl KnowledgeProfile {
 /// - each `deleted_symbols` / `deleted_exports` key must exist in the base
 ///   and is removed from the result;
 /// - exports merge per name (overlay wins), and every surviving export
-///   must point at a surviving symbol.
+///   must point at a surviving symbol;
+/// - a present overlay `fork_capabilities` block replaces the base's block
+///   wholesale (an absent block inherits the base's, which is `None` for
+///   the upstream profile).
 pub fn apply_overlay(
     base: &KnowledgeProfile,
     overlay: &ProfileDocument,
@@ -555,9 +978,14 @@ pub fn apply_overlay(
         manim_version: overlay.manim_version.clone(),
         source_digest: overlay.source_digest.clone(),
         base_profile: Some(base.name.clone()),
+        fork_capabilities: overlay
+            .fork_capabilities
+            .clone()
+            .or_else(|| base.fork_capabilities.clone()),
         symbols,
         exports,
     };
     resolved.validate_exports()?;
+    resolved.validate_fork_capabilities()?;
     Ok(resolved)
 }

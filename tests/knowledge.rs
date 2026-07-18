@@ -3,8 +3,8 @@
 //! star-import exports bridge.
 
 use manim_lint::knowledge::{
-    self, AcceptedTarget, KnowledgeError, ProfileDocument, SceneMembershipEffect, SymbolKind,
-    apply_overlay,
+    self, AcceptedTarget, ForkBlocker, KnowledgeError, ProfileDocument, SceneMembershipEffect,
+    SymbolKind, apply_overlay,
 };
 
 const UPSTREAM: &str = "upstream_0_20";
@@ -512,6 +512,274 @@ fn fixed_in_frame_removal_is_renderer_divergent() {
         .expect("curated");
     let effects = entry.effects.as_ref().expect("effects");
     assert_eq!(effects.renderer_divergent_membership, Some(true));
+}
+
+// --- fork fast-path capabilities (DESIGN §7.3) ------------------------------
+
+#[test]
+fn upstream_profile_declares_no_fork_capabilities() {
+    // Fork-gated rule interpretation (MLP214 / MLP217 gating / MLP225 and
+    // the cairo_fork_workers / cairo_static_layers fast-path semantics) must
+    // stay inert under upstream_0_20: the upstream profile must not declare
+    // any fork capability.
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    assert!(profile.fork_capabilities().is_none());
+    assert!(profile.tex_parallel_compile().is_none());
+    assert!(profile.cairo_fork_gate().is_none());
+    assert!(profile.cairo_static_layers().is_none());
+    assert!(profile.cairo_bulk_interpolation().is_none());
+    assert!(profile.svg_cache().is_none());
+    assert!(profile.continuous_movie_stream().is_none());
+}
+
+#[test]
+fn local_overlay_declares_tex_parallel_compile() {
+    let profile = knowledge::load(LOCAL_OVERLAY).expect("load overlay");
+    let tex = profile
+        .tex_parallel_compile()
+        .expect("tex_parallel_compile declared");
+    assert_eq!(
+        tex.entry_points,
+        vec![
+            "manim.mobject.text.tex_mobject.MathTex.precompile".to_owned(),
+            "manim.utils.tex_file_writing.tex_to_svg_file_async".to_owned(),
+        ]
+    );
+    assert_eq!(tex.same_key_coalesced, Some(true));
+    assert_eq!(tex.cache_hit_short_circuits, Some(true));
+    assert_eq!(tex.in_flight_blocks_cairo_fork, Some(true));
+
+    // Never suggest APIs that do not exist in the selected profile: every
+    // entry point is a curated symbol (also enforced by validation).
+    for entry_point in &tex.entry_points {
+        assert!(profile.symbol(entry_point).is_some(), "{entry_point}");
+    }
+    // Both live below `manim.*` module paths, not on the star surface.
+    assert!(profile.resolve_export("tex_to_svg_file_async").is_none());
+    assert!(profile.resolve_export("precompile").is_none());
+
+    let precompile = profile
+        .symbol("manim.mobject.text.tex_mobject.MathTex.precompile")
+        .expect("curated");
+    assert_eq!(precompile.kind, SymbolKind::Method);
+    assert_eq!(precompile.returns_self, Some(false));
+    let async_compile = profile
+        .symbol("manim.utils.tex_file_writing.tex_to_svg_file_async")
+        .expect("curated");
+    assert_eq!(async_compile.kind, SymbolKind::Function);
+}
+
+#[test]
+fn local_overlay_declares_cairo_fork_gate_with_monotonic_disable() {
+    let profile = knowledge::load(LOCAL_OVERLAY).expect("load overlay");
+    let gate = profile.cairo_fork_gate().expect("cairo_fork_gate declared");
+    assert_eq!(gate.config_key, "cairo_fork_workers");
+    // workers 0..1 is "unrequested", not a blocker (DESIGN §7.3).
+    assert_eq!(gate.min_workers, 2);
+    assert_eq!(gate.linux_only, Some(true));
+    // Once the first written play opens the parent encoder, later eligible
+    // plays cannot fork: OutputState must model renderer-wide monotonic
+    // disabling, never per-play independence.
+    assert_eq!(gate.monotonic_disable, Some(true));
+    for blocker in [
+        ForkBlocker::ParentEncoderOpened,
+        ForkBlocker::SceneUpdaters,
+        ForkBlocker::ForegroundMobjects,
+        ForkBlocker::SoundAdded,
+        ForkBlocker::SaveSections,
+        ForkBlocker::TransparentOutput,
+        ForkBlocker::UnsupportedAnimationType,
+        ForkBlocker::CustomRateFunc,
+        ForkBlocker::NonStraightPathFunc,
+        ForkBlocker::InFlightTexWorkers,
+        ForkBlocker::NonLibx264Encoder,
+        ForkBlocker::Meshes,
+    ] {
+        assert!(
+            gate.blockers.contains(&blocker),
+            "missing fork blocker {}",
+            blocker.as_str()
+        );
+    }
+    // The allowlist is exact-type versioned knowledge, not name matching.
+    for id in [
+        "manim.animation.animation.Wait",
+        "manim.animation.transform.Transform",
+        "manim.animation.transform._MethodAnimation",
+        "manim.animation.fading.FadeOut",
+    ] {
+        assert!(
+            gate.animation_allowlist.contains(&id.to_owned()),
+            "missing allowlisted animation {id}"
+        );
+    }
+    assert!(
+        gate.composition_allowlist
+            .contains(&"manim.animation.composition.AnimationGroup".to_owned())
+    );
+}
+
+#[test]
+fn local_overlay_declares_static_layer_and_packed_interpolation_gates() {
+    let profile = knowledge::load(LOCAL_OVERLAY).expect("load overlay");
+
+    let layers = profile
+        .cairo_static_layers()
+        .expect("cairo_static_layers declared");
+    assert_eq!(layers.config_key, "cairo_static_layers");
+    assert_eq!(layers.min_play_frames, 3);
+    assert_eq!(layers.retains_trailing_static_runs, Some(true));
+    assert!(layers.blockers.contains(&ForkBlocker::SceneUpdaters));
+    assert!(layers.blockers.contains(&ForkBlocker::NonOpaqueBackground));
+
+    let packed = profile
+        .cairo_bulk_interpolation()
+        .expect("cairo_bulk_interpolation declared");
+    // _CAIRO_BULK_MIN_FRAMES / _CAIRO_BULK_MIN_FAMILY_COUNT /
+    // _CAIRO_BULK_MIN_AMORTIZATION in the fork's cairo_renderer.py.
+    assert_eq!(packed.min_frames, 12);
+    assert_eq!(packed.min_family_count, 4);
+    assert_eq!(packed.min_amortization, 192);
+    assert_eq!(
+        packed.animation_allowlist,
+        vec![
+            "manim.animation.transform.Transform".to_owned(),
+            "manim.animation.transform._MethodAnimation".to_owned(),
+        ]
+    );
+    for blocker in [
+        ForkBlocker::UpdaterBearingFamily,
+        ForkBlocker::UnsupportedAnimationType,
+        ForkBlocker::CustomRateFunc,
+        ForkBlocker::NonStraightPathFunc,
+        ForkBlocker::NonzeroLagRatio,
+    ] {
+        assert!(
+            packed.blockers.contains(&blocker),
+            "missing packed-path blocker {}",
+            blocker.as_str()
+        );
+    }
+}
+
+#[test]
+fn local_overlay_declares_svg_cache_and_continuous_stream_semantics() {
+    let profile = knowledge::load(LOCAL_OVERLAY).expect("load overlay");
+
+    // MLP217's gate: the profile must declare the process-global cache.
+    let svg_cache = profile.svg_cache().expect("svg_cache declared");
+    assert_eq!(svg_cache.process_global, Some(true));
+    assert_eq!(svg_cache.unbounded, Some(true));
+    assert_eq!(svg_cache.copies_on_hit, Some(true));
+    assert_eq!(
+        svg_cache.keyed_by,
+        vec![
+            "class_name".to_owned(),
+            "svg_default".to_owned(),
+            "path_string_config".to_owned(),
+            "file_name".to_owned(),
+            "config.renderer".to_owned(),
+        ]
+    );
+
+    // MLP210's OutputState gate: per-play partial stream boundaries vanish
+    // only under the continuous stream's own conditions.
+    let stream = profile
+        .continuous_movie_stream()
+        .expect("continuous_movie_stream declared");
+    assert_eq!(stream.merges_partial_movie_files, Some(true));
+    assert_eq!(stream.requires_disable_caching, Some(true));
+    assert!(stream.blockers.contains(&ForkBlocker::CachingEnabled));
+    assert!(stream.blockers.contains(&ForkBlocker::SoundAdded));
+
+    // The fork's new config surface is declared for config display.
+    let capabilities = profile.fork_capabilities().expect("declared");
+    let names: Vec<&str> = capabilities
+        .config_keys
+        .iter()
+        .map(|key| key.name.as_str())
+        .collect();
+    for name in [
+        "cairo_fork_workers",
+        "cairo_static_layers",
+        "cairo_antialias",
+        "video_encoder",
+        "x264_preset",
+    ] {
+        assert!(names.contains(&name), "missing config key {name}");
+    }
+}
+
+#[test]
+fn fork_blocker_names_match_their_json_encoding() {
+    // Cost reports render `ForkBlocker::as_str`; it must stay identical to
+    // the serde snake_case wire form the profiles are written in.
+    for blocker in [
+        ForkBlocker::ParentEncoderOpened,
+        ForkBlocker::NonLibx264Encoder,
+        ForkBlocker::SceneUpdaters,
+        ForkBlocker::UntrustedAnimationLifecycle,
+        ForkBlocker::InFlightTexWorkers,
+        ForkBlocker::FrozenStaticWait,
+        ForkBlocker::NonzeroLagRatio,
+        ForkBlocker::OverlappingAnimationFamilies,
+        ForkBlocker::CachingEnabled,
+    ] {
+        let encoded = serde_json::to_value(blocker).expect("serialize");
+        assert_eq!(encoded, serde_json::Value::from(blocker.as_str()));
+        let decoded: ForkBlocker = serde_json::from_value(encoded).expect("round-trip");
+        assert_eq!(decoded, blocker);
+    }
+}
+
+#[test]
+fn tex_capability_entry_points_must_be_curated_symbols() {
+    // Regression: a declared parallel-TeX capability whose entry point is
+    // not a curated symbol would let MLP214 advise an API the profile
+    // cannot prove exists — validation rejects it.
+    let base = knowledge::load(UPSTREAM).expect("load base");
+    let json = overlay_json(
+        &base.source_digest,
+        r#""fork_capabilities": {
+      "tex_parallel_compile": {
+        "entry_points": ["manim.ghost.Ghost.precompile"]
+      }
+    }"#,
+    );
+    let overlay = ProfileDocument::from_json("overlay", &json).expect("parses");
+    let error = apply_overlay(&base, &overlay).expect_err("unknown entry point must fail");
+    match error {
+        KnowledgeError::Invalid { message, .. } => {
+            assert!(
+                message.contains("manim.ghost.Ghost.precompile"),
+                "{message}"
+            );
+        }
+        other => panic!("expected Invalid, got: {other:?}"),
+    }
+
+    let json = overlay_json(
+        &base.source_digest,
+        r#""fork_capabilities": {
+      "tex_parallel_compile": {
+        "entry_points": []
+      }
+    }"#,
+    );
+    let overlay = ProfileDocument::from_json("overlay", &json).expect("parses");
+    let error = apply_overlay(&base, &overlay).expect_err("empty entry_points must fail");
+    assert!(matches!(error, KnowledgeError::Invalid { .. }), "{error:?}");
+}
+
+#[test]
+fn overlay_without_capabilities_inherits_the_base_block() {
+    // An absent overlay block inherits the base's (None for upstream); a
+    // present block replaces the base's wholesale.
+    let base = knowledge::load(UPSTREAM).expect("load base");
+    let json = overlay_json(&base.source_digest, r#""symbols": {}"#);
+    let overlay = ProfileDocument::from_json("overlay", &json).expect("parses");
+    let resolved = apply_overlay(&base, &overlay).expect("resolves");
+    assert!(resolved.fork_capabilities().is_none());
 }
 
 // --- overlay semantics -----------------------------------------------------
