@@ -127,6 +127,15 @@ pub struct MobjectState {
     pub stroke_opacity: Num,
     /// Whether the object is in the scene's foreground list.
     pub foreground: Truth,
+    /// The object's `z_index` (Cairo display-order sort key, DESIGN §3.4).
+    ///
+    /// `Exact` only when proven: a curated constructor with the Manim
+    /// default (`Mobject.__init__` declares `z_index: float = 0`), a
+    /// literal `z_index=` constructor kwarg, or a literal
+    /// `set_z_index(...)` call. Any unknown mutation, non-literal write,
+    /// or summarized helper mutation widens it — never a guessed `0`
+    /// (DESIGN §15).
+    pub z_index: Num,
     /// Whether the object is registered fixed-orientation (3D).
     pub fixed_orientation: Truth,
     /// Whether the object is registered fixed-in-frame (3D).
@@ -175,6 +184,7 @@ impl MobjectState {
             fill_opacity: Num::Unknown,
             stroke_opacity: Num::Unknown,
             foreground: Truth::No,
+            z_index: Num::Unknown,
             fixed_orientation: Truth::No,
             fixed_in_frame: Truth::No,
             updaters: BTreeSet::new(),
@@ -209,6 +219,7 @@ impl MobjectState {
             fill_opacity: self.fill_opacity.join(&other.fill_opacity),
             stroke_opacity: self.stroke_opacity.join(&other.stroke_opacity),
             foreground: self.foreground.join(other.foreground),
+            z_index: self.z_index.join(&other.z_index),
             fixed_orientation: self.fixed_orientation.join(other.fixed_orientation),
             fixed_in_frame: self.fixed_in_frame.join(other.fixed_in_frame),
             updaters: self.updaters.union(&other.updaters).cloned().collect(),
@@ -238,6 +249,7 @@ impl MobjectState {
         widened.kind = self.kind.widen(&next.kind);
         widened.fill_opacity = self.fill_opacity.widen(&next.fill_opacity);
         widened.stroke_opacity = self.stroke_opacity.widen(&next.stroke_opacity);
+        widened.z_index = self.z_index.widen(&next.z_index);
         widened.family_size = self.family_size.widen(&next.family_size);
         widened.point_count = self.point_count.widen(&next.point_count);
         widened.curve_count = self.curve_count.widen(&next.curve_count);

@@ -354,18 +354,54 @@ fn re_add_moves_member_to_end_of_display_order() {
     let play = &sc.plays[0];
     assert_eq!(play.kind, PlayKind::Play);
 
-    // Without z_index facts the order is Unknown, with the z reason.
-    match display_order_at_play(sc, play) {
+    // Curated constructors prove the Mobject default `z_index == 0`, so
+    // the raw adapter order is Known for a plain scene — and reflects the
+    // §3.4 re-add-to-end effect.
+    let inputs = inputs_at_play(sc, play).expect("inputs");
+    assert_eq!(inputs.roots, vec![b.clone(), a.clone()]);
+    assert_eq!(inputs.members[&a].z_index, Num::int(0));
+    assert_eq!(inputs.members[&b].z_index, Num::int(0));
+    let order = display_order_at_play(sc, play);
+    assert!(is_order_known(&order));
+    assert_eq!(ids(&order), vec![b, a]);
+}
+
+#[test]
+fn set_z_index_literal_reorders_display_order() {
+    let (sources, _facts, lifecycle) = analyze(&["z_scenes.py"]);
+    let sc = scene(&lifecycle, "z_scenes.ZReorder");
+    let a = alloc_id(sc, &sources, "Square()");
+    let b = alloc_id(sc, &sources, "Circle()");
+    let play = &sc.plays[0];
+    assert_eq!(play.kind, PlayKind::Wait);
+
+    let inputs = inputs_at_play(sc, play).expect("inputs");
+    assert_eq!(inputs.roots, vec![a.clone(), b.clone()]);
+    assert_eq!(inputs.members[&a].z_index, Num::int(0));
+    assert_eq!(inputs.members[&b].z_index, Num::int(-1));
+    // The stable z sort puts the z == -1 member first despite its later
+    // root position.
+    let order = display_order_at_play(sc, play);
+    assert_eq!(ids(&order), vec![b, a]);
+}
+
+#[test]
+fn non_literal_set_z_index_poisons_downstream_order_only() {
+    let (_sources, _facts, lifecycle) = analyze(&["z_scenes.py"]);
+    let sc = scene(&lifecycle, "z_scenes.ZPoison");
+    assert_eq!(sc.plays.len(), 2);
+
+    // Before the non-literal write the order is Known...
+    let before = display_order_at_play(sc, &sc.plays[0]);
+    assert!(is_order_known(&before));
+
+    // ...after it the poisoned member yields the z reason, and no
+    // quantitative claim survives (MLP209 prose).
+    match display_order_at_play(sc, &sc.plays[1]) {
         DisplayOrder::Unknown(OrderUnknownReason::ZIndexUnknown { .. }) => {}
         other => panic!("expected z-index-unknown order, got {other:?}"),
     }
-
-    // The membership order itself reflects the §3.4 re-add-to-end effect.
-    let mut inputs = inputs_at_play(sc, play).expect("inputs");
-    assert_eq!(inputs.roots, vec![b.clone(), a.clone()]);
-    fill_z(&mut inputs, 0);
-    let order = DisplayOrder::compute(&inputs);
-    assert_eq!(ids(&order), vec![b, a]);
+    assert_eq!(moving_suffix_at_play(sc, &sc.plays[1], Truth::No), None);
 }
 
 #[test]

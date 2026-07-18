@@ -1510,11 +1510,151 @@ fn seed_path_counts(object: &mut MobjectState, kind: &KindSet, fact: Option<&Qua
 
 /// Copies duplicate the original's geometry: the path-count facts carry
 /// over to `copy()` / `generate_target()` / animation starting copies.
+/// `Mobject.copy` is a deepcopy, so the `z_index` fact carries over too
+/// (mobject.py `Mobject.copy`).
 fn clone_path_facts(copy: &mut MobjectState, original: &MobjectState) {
     copy.point_count = original.point_count.clone();
     copy.curve_count = original.curve_count.clone();
     copy.subpath_count = original.subpath_count.clone();
     copy.points_per_curve = original.points_per_curve.clone();
+    copy.z_index = original.z_index.clone();
+}
+
+/// `target` plus its transitive (may-)children, alias-resolved and
+/// cycle-safe — the family `set_z_index(family=True)` writes.
+fn z_family_closure(state: &ExecState, target: &ObjectId) -> Vec<ObjectId> {
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut queue = vec![state.heap.resolve(target)];
+    let mut closure = Vec::new();
+    while let Some(current) = queue.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(object) = state.heap.object(&current) {
+            for child in &object.children {
+                queue.push(state.heap.resolve(child));
+            }
+        }
+        closure.push(current);
+    }
+    closure
+}
+
+/// Widens the tracked `z_index` of `target` and every transitive
+/// (may-)child to `Unknown`: an effect that may write `z_index` reached
+/// them (`set_z_index` writes the whole family by default), so no exact
+/// display-order claim survives (DESIGN §15).
+fn widen_z_index_family(state: &mut ExecState, target: &ObjectId) {
+    for member in z_family_closure(state, target) {
+        if let Some(object) = state.heap.object_mut(&member) {
+            object.z_index = Num::Unknown;
+        }
+    }
+}
+
+/// Applies a tracked `set_z_index(value, family=...)` write
+/// (mobject.py `Mobject.set_z_index`): the receiver takes the value
+/// exactly on all-paths calls (hull otherwise); unless `family` is a
+/// literal `False`, every transitive child joins the value in — child
+/// edges are may-relations, so the exact value is never asserted for
+/// them.
+fn apply_z_index_write(
+    state: &mut ExecState,
+    target: &ObjectId,
+    value: &Num,
+    family: Truth,
+    certainty: Presence,
+) {
+    let receiver = state.heap.resolve(target);
+    if let Some(object) = state.heap.object_mut(&receiver) {
+        object.z_index = if certainty == Presence::Present {
+            value.clone()
+        } else {
+            object.z_index.join(value)
+        };
+    }
+    if family == Truth::No {
+        return;
+    }
+    for member in z_family_closure(state, &receiver) {
+        if member == receiver {
+            continue;
+        }
+        if let Some(object) = state.heap.object_mut(&member) {
+            object.z_index = object.z_index.join(value);
+        }
+    }
+}
+
+/// A literal (possibly `-`-negated) int / float expression.
+fn literal_signed_num(expr: &ast::Expr) -> Option<Num> {
+    use crate::semantic::values::NumLit;
+    match expr {
+        ast::Expr::Constant(constant) => match &constant.value {
+            ast::Constant::Int(value) => i64::try_from(value).ok().map(Num::int),
+            ast::Constant::Float(value) => Some(Num::float(*value)),
+            _ => None,
+        },
+        ast::Expr::UnaryOp(unary) if matches!(unary.op, ast::UnaryOp::USub) => {
+            match literal_signed_num(&unary.operand)? {
+                Num::Exact(NumLit::Int(value)) => Some(Num::int(-value)),
+                Num::Exact(NumLit::Float(value)) => Some(Num::float(-value)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The `family` argument of a `set_z_index` call (mobject.py declares
+/// `family: bool = True`): the default is a definite `Yes`, a literal is
+/// exact, and anything non-literal (including a possible `**kwargs`
+/// supply) is `Maybe`.
+fn set_z_index_family_arg(call: &ast::ExprCall) -> Truth {
+    let explicit = call
+        .keywords
+        .iter()
+        .find(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|name| name.as_str() == "family")
+        })
+        .map(|keyword| &keyword.value)
+        .or_else(|| call.args.get(1));
+    match explicit {
+        Some(ast::Expr::Constant(constant)) => match &constant.value {
+            ast::Constant::Bool(value) => Truth::from(*value),
+            _ => Truth::Maybe,
+        },
+        Some(_) => Truth::Maybe,
+        // A `**kwargs` splat may still supply `family=False`; the
+        // conservative direction here is the *family* write, so `Maybe`
+        // (join, never exact) is sound either way.
+        None if call.keywords.iter().any(|keyword| keyword.arg.is_none()) => Truth::Maybe,
+        None => Truth::Yes,
+    }
+}
+
+/// Seeds the `z_index` fact of a freshly constructed curated mobject
+/// (DESIGN §3.4 / MLP209 z tracking).
+///
+/// `Mobject.__init__` declares `z_index: float = 0` (verified in
+/// mobject.py), so a curated constructor call with no `z_index` kwarg and
+/// no `**kwargs` splat *proves* `z == 0`. A literal kwarg is exact; a
+/// non-literal kwarg or a `**kwargs` splat leaves it `Unknown` — never a
+/// guessed default (DESIGN §15).
+fn seed_z_index(object: &mut MobjectState, fact: Option<&QualifiedCall>) {
+    let Some(fact) = fact else {
+        return;
+    };
+    object.z_index = if let Some(argument) = fact.keyword("z_index") {
+        literal_num(argument).unwrap_or(Num::Unknown)
+    } else if fact.has_star_star_kwargs {
+        Num::Unknown
+    } else {
+        Num::int(0)
+    };
 }
 
 /// Element count of a literal list / tuple display (each element is one
@@ -2071,7 +2211,18 @@ impl<'a> Machine<'a, '_> {
                         return;
                     }
                 }
-                self.eval_expr(&attribute.value, state);
+                let base = self.eval_expr(&attribute.value, state);
+                if attribute.attr.as_str() == "z_index" {
+                    if let AbstractValue::Object(id) = &base {
+                        // A raw `mob.z_index = ...` write bypasses
+                        // `set_z_index` (receiver only — no family
+                        // propagation); the tracked fact widens.
+                        let resolved = state.heap.resolve(id);
+                        if let Some(object) = state.heap.object_mut(&resolved) {
+                            object.z_index = Num::Unknown;
+                        }
+                    }
+                }
             }
             ast::Expr::Tuple(tuple) => {
                 for element in &tuple.elts {
@@ -2397,9 +2548,17 @@ impl<'a> Machine<'a, '_> {
                 _ => None,
             })
             .or_else(|| mutator_channels(&format!("builder.{method}")));
-        match channels {
-            Some(channels) => builder.channels.extend(channels),
-            None => builder.channels_known = Truth::Maybe,
+        if let Some(channels) = channels {
+            builder.channels.extend(channels);
+        } else {
+            builder.channels_known = Truth::Maybe;
+            // The unclassified chained method may be `set_z_index`
+            // (family write by default): when the builder is played the
+            // live target's z_index is rewritten, so the tracked fact
+            // does not survive.
+            if let Some(target) = builder.target.clone() {
+                widen_z_index_family(state, &target);
+            }
         }
         // The chained method mutates the *target copy*, not the live
         // object (DESIGN §3.2); the live target's epoch is untouched.
@@ -2887,6 +3046,12 @@ impl<'a> Machine<'a, '_> {
         site: AllocationSite,
         state: &mut ExecState,
     ) {
+        if kind == MutationKind::Unknown {
+            // An unclassified curated mutator may write anything the
+            // classified channels do not cover — including the family
+            // `z_index` — so the exact fact does not survive.
+            widen_z_index_family(state, target);
+        }
         if let Some(object) = state.heap.object_mut(target) {
             object.mutation_epoch += 1;
         }
@@ -3028,6 +3193,7 @@ impl<'a> Machine<'a, '_> {
             if let Some(object) = state.heap.object_mut(id) {
                 object.fill_opacity = Num::Unknown;
                 object.stroke_opacity = Num::Unknown;
+                object.z_index = Num::Unknown;
                 object.family_size = Num::Unknown;
                 object.point_count = Num::Unknown;
                 object.curve_count = Num::Unknown;
@@ -3263,6 +3429,7 @@ impl<'a> Machine<'a, '_> {
             let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
             if let Some(object) = state.heap.object_mut(&id) {
                 seed_path_counts(object, &kind, fact);
+                seed_z_index(object, fact);
             }
             return AbstractValue::Object(id);
         }
@@ -3296,6 +3463,7 @@ impl<'a> Machine<'a, '_> {
                 let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
                 if let Some(object) = state.heap.object_mut(&id) {
                     seed_path_counts(object, &kind, fact);
+                    seed_z_index(object, fact);
                 }
                 // Container constructors adopt their positional mobject
                 // arguments as submobjects (exact curated identities).
@@ -4018,6 +4186,24 @@ impl<'a> Machine<'a, '_> {
             );
             return AbstractValue::Object(copy);
         }
+        // `set_z_index(value, family=True)` writes the display-order sort
+        // key of the receiver — and, by default, its whole family
+        // (mobject.py `Mobject.set_z_index`; DESIGN §3.4 / MLP209).
+        if canonical == "manim.mobject.mobject.Mobject.set_z_index" {
+            let value = call
+                .args
+                .first()
+                .filter(|arg| !matches!(arg, ast::Expr::Starred(_)))
+                .and_then(literal_signed_num)
+                .unwrap_or(Num::Unknown);
+            let family = set_z_index_family_arg(call);
+            apply_z_index_write(state, id, &value, family, certainty);
+            // A z-order write is a style-channel mutation: it never moves
+            // points or restructures the family (render_order replay and
+            // count facts survive).
+            self.mutate(id, MutationKind::Style, site, state);
+            return AbstractValue::Object(id.clone());
+        }
         // Fluent mutators and getters.
         match entry.returns_self {
             Some(true) => {
@@ -4648,6 +4834,14 @@ impl<'a> Machine<'a, '_> {
                     }
                 }
             }
+            // Only a complete channel classification proves the animation
+            // left `z_index` alone (curated families never write it); a
+            // custom `interpolate` may set it on any live target.
+            if played.channels_known != Truth::Yes {
+                for target in &targets {
+                    widen_z_index_family(state, target);
+                }
+            }
         }
         if !suspended.is_empty() {
             cleanup.push(CleanupEffect::ResumeUpdaters(suspended));
@@ -5040,6 +5234,13 @@ impl<'a> Machine<'a, '_> {
                             object.curve_count = Num::Unknown;
                             object.subpath_count = Num::Unknown;
                         }
+                    }
+                    if *kind == MutationKind::Style {
+                        // A helper's Style mutate may be a `set_z_index`
+                        // (recorded under the style channel); the exact z
+                        // write does not survive summarization, so the
+                        // fact widens instead of staying stale.
+                        widen_z_index_family(state, &id);
                     }
                     self.mutate(&id, *kind, event.site, state);
                 }

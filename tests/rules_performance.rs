@@ -416,9 +416,10 @@ fn performance_rule_metadata_matches_the_design_catalog() {
             "{rule} must declare the fact layer it relies on"
         );
     }
-    // Unimplemented catalog ids of this tranche stay reserved and are
-    // never reported as checked (DESIGN §12).
-    for reserved in ["MLP217", "MLP218", "MLP221", "MLP225", "MLP227"] {
+    // Unimplemented catalog ids stay reserved and are never reported as
+    // checked (DESIGN §12). MLP218 / MLP221 / MLP227 moved to the
+    // timing / display-order tranche (`rules_performance2.rs`).
+    for reserved in ["MLP217", "MLP225"] {
         assert!(
             registry::metadata_for(reserved).is_none(),
             "{reserved} must stay unimplemented"

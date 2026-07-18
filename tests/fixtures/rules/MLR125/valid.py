@@ -10,8 +10,10 @@ class Good(Scene):
         # A drawable leaf is fine.
         self.add(Square())
         # Updater host: an invisible per-frame driver is a known pattern.
+        # (The body has a real effect; a `None` body would be MLP215's
+        # no-op-updater defect.)
         driver = Mobject()
-        driver.add_updater(lambda mob, dt: None)
+        driver.add_updater(lambda mob, dt: mob.rotate(dt))
         self.add(driver)
         # Group has its own class; only the bare base Mobject is judged.
         self.add(Group())

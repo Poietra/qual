@@ -928,3 +928,66 @@ fn fixed_registrations_and_camera_kind() {
         CameraKind::Standard
     );
 }
+
+// ---------------------------------------------------------------------------
+// z_index tracking (DESIGN §3.4 / MLP209 groundwork).
+// ---------------------------------------------------------------------------
+
+/// The final-heap `z_index` fact of the object allocated at `text`.
+fn z_of(scene: &SceneLifecycle, sources: &SourceManager, text: &str) -> Num {
+    let id = alloc_id(scene, sources, text);
+    let resolved = scene.final_heap.resolve(&id);
+    scene
+        .final_heap
+        .object(&resolved)
+        .unwrap_or_else(|| panic!("state for {text}"))
+        .z_index
+        .clone()
+}
+
+#[test]
+fn z_index_defaults_kwargs_and_literal_set() {
+    let (sources, _facts, lifecycle) = analyze(&["z_index_scenes.py"]);
+    let facts = scene(&lifecycle, "z_index_scenes.ZFacts");
+    // A curated constructor with no z_index kwarg proves the Mobject
+    // default (mobject.py `z_index: float = 0`).
+    assert_eq!(z_of(facts, &sources, "Square()"), Num::int(0));
+    // A literal kwarg is exact.
+    assert_eq!(z_of(facts, &sources, "Square(z_index=2)"), Num::int(2));
+    // A literal (negated) `set_z_index` argument is exact.
+    assert_eq!(z_of(facts, &sources, "Circle()"), Num::int(-1));
+}
+
+#[test]
+fn z_index_family_write_joins_children() {
+    let (sources, _facts, lifecycle) = analyze(&["z_index_scenes.py"]);
+    let family = scene(&lifecycle, "z_index_scenes.ZFamily");
+    // The receiver takes the literal exactly.
+    assert_eq!(z_of(family, &sources, "VGroup(a, b)"), Num::int(2));
+    // Children are may-children, so their fact is the hull — never the
+    // asserted exact value, never a stale `0`.
+    assert_eq!(
+        z_of(family, &sources, "Square()"),
+        Num::Interval {
+            lo: Some(0.0),
+            hi: Some(2.0),
+        }
+    );
+}
+
+#[test]
+fn z_index_unknown_on_unproven_writes() {
+    let (sources, _facts, lifecycle) = analyze(&["z_index_scenes.py"]);
+    let unknown = scene(&lifecycle, "z_index_scenes.ZUnknown");
+    // A non-literal `set_z_index` argument widens.
+    assert_eq!(z_of(unknown, &sources, "Square()"), Num::Unknown);
+    // A `**kwargs` constructor splat may carry z_index.
+    assert_eq!(
+        z_of(unknown, &sources, "Square(**{\"z_index\": 2})"),
+        Num::Unknown
+    );
+    // A helper summary's mutate widens instead of staying stale.
+    assert_eq!(z_of(unknown, &sources, "Circle()"), Num::Unknown);
+    // `family=False` still writes the receiver exactly.
+    assert_eq!(z_of(unknown, &sources, "Dot()"), Num::int(4));
+}

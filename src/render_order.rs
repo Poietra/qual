@@ -45,16 +45,17 @@
 //! - the play's `FinishPlay` cleanup effects, undone to reconstruct the
 //!   during-play root list from the post-play snapshot.
 //!
-//! The interpreter does not track `z_index` values yet, so the adapter
-//! sets every member's `z_index` to [`Num::Unknown`] and the resulting
-//! order is `Unknown` with a [`OrderUnknownReason::ZIndexUnknown`] reason.
-//! A caller with better facts (e.g. qualified-call `set_z_index` /
-//! constructor-kwarg analysis, or a future `MobjectState::z_index` field)
-//! overwrites `MemberFacts::z_index` on the returned inputs and calls
-//! [`DisplayOrder::compute`] again. Camera motion is likewise supplied by
-//! the caller ([`Truth::No`] for a plain `Scene` profile, `Yes` / `Maybe`
-//! for `MovingCameraScene` facts) because lifecycle facts carry no camera
-//! state yet.
+//! Each member's `z_index` comes from the interpreter's tracked
+//! `MobjectState::z_index` fact: the proven Manim default `0` of a
+//! curated constructor, a literal `z_index=` kwarg, or a literal
+//! `set_z_index(...)` write — and [`Num::Unknown`] after any write that
+//! could not be proven (the resulting order is then `Unknown` with a
+//! [`OrderUnknownReason::ZIndexUnknown`] reason). A caller with even
+//! better facts may still overwrite `MemberFacts::z_index` on the
+//! returned inputs and call [`DisplayOrder::compute`] again. Camera
+//! motion is supplied by the caller ([`Truth::No`] for a plain `Scene`
+//! profile, `Yes` / `Maybe` for `MovingCameraScene` facts) because
+//! lifecycle facts carry no camera state yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -887,10 +888,10 @@ impl EventReplay {
 
 /// Builds [`RenderOrderInputs`] for one play from the lifecycle facts.
 ///
-/// See the module docs for exactly which facts are consumed. The returned
-/// members all carry `z_index: Num::Unknown` until a caller with `z_index`
-/// facts overwrites them, so [`DisplayOrder::compute`] on the raw result
-/// is `Unknown` for any non-empty scene today.
+/// See the module docs for exactly which facts are consumed. Member
+/// `z_index` values carry the interpreter's tracked facts; a member whose
+/// `z_index` could not be proven poisons [`DisplayOrder::compute`] into
+/// `Unknown` from that member on.
 pub fn inputs_at_play(
     scene: &SceneLifecycle,
     play: &PlayFact,
@@ -980,7 +981,10 @@ fn member_facts(
     Ok(MemberFacts {
         children,
         children_order_known,
-        z_index: Num::Unknown,
+        // The interpreter's tracked `z_index`: the proven Mobject default
+        // `0`, a literal constructor kwarg / `set_z_index` write, or
+        // `Unknown` after any unproven write (`MobjectState::z_index`).
+        z_index: state.z_index.clone(),
         own_updaters,
         foreground: state.foreground,
     })
@@ -1031,10 +1035,12 @@ pub fn moving_scope_at_play(
 
 /// The Cairo effective display order at one play (DESIGN §3.4, §7.3).
 ///
-/// Today the interpreter tracks no `z_index` facts, so any non-empty scene
-/// yields [`DisplayOrder::Unknown`] with a
-/// [`OrderUnknownReason::ZIndexUnknown`] reason; use [`inputs_at_play`] +
-/// [`DisplayOrder::compute`] to inject `z_index` facts from another layer.
+/// `z_index` facts come from the interpreter (`MobjectState::z_index`):
+/// exact for proven defaults and literal writes, `Unknown` otherwise —
+/// an unproven member yields [`DisplayOrder::Unknown`] with a
+/// [`OrderUnknownReason::ZIndexUnknown`] reason. Use [`inputs_at_play`] +
+/// [`DisplayOrder::compute`] to inject better `z_index` facts if a
+/// caller has them.
 #[must_use]
 pub fn display_order_at_play(scene: &SceneLifecycle, play: &PlayFact) -> DisplayOrder {
     match inputs_at_play(scene, play) {
