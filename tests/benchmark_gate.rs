@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use manim_lint::application::check;
+use manim_lint::cache::CacheStatus;
 use manim_lint::cli::CheckArgs;
 use manim_lint::reporting::OutputFormat;
 
@@ -267,34 +268,51 @@ fn machine_fingerprint() -> Option<(String, String)> {
     Some((cpu, os))
 }
 
-fn run_check_over_fixture() -> usize {
+fn run_check_over_fixture(root: &Path) -> (usize, CacheStatus) {
     let args = CheckArgs {
-        paths: vec![fixture_root()],
+        paths: vec![root.to_path_buf()],
         format: OutputFormat::Json,
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline over benchmark fixture");
-    report.diagnostics.len()
+    (report.diagnostics.len(), report.cache_status)
 }
 
-/// DESIGN §11.4 benchmark gate. `cold` is the first in-process run with no
-/// `.manim-lint-cache` (none is ever written — the on-disk cache is not
-/// implemented yet, so cold and warm differ only by OS filesystem cache
-/// and allocator warm-up, as recorded in `benchmarks/reference-machine.json`).
+fn isolated_fixture() -> tempfile::TempDir {
+    let project = tempfile::tempdir().expect("temporary benchmark project");
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n")
+        .expect("benchmark pyproject");
+    for (name, content) in generated_files() {
+        std::fs::write(project.path().join(name), content).expect("benchmark source file");
+    }
+    project
+}
+
+/// DESIGN §11.4 benchmark gate. `cold` starts with no cache database; `warm`
+/// is the immediately following identical check and must use its `SQLite` entry.
 #[test]
 #[ignore = "wall-clock benchmark; run in --release on a quiet machine"]
 fn benchmark_cold_and_warm_within_reference_budget() {
     // Fail fast if the input drifted: timings over a different corpus
     // would be meaningless.
     benchmark_fixture_matches_generator();
+    let project = isolated_fixture();
+    let cache_database = project.path().join(".manim-lint-cache/cache-v1.sqlite3");
+    assert!(
+        !cache_database.exists(),
+        "cold run must start without a cache"
+    );
 
     let cold_start = Instant::now();
-    let diagnostics_cold = run_check_over_fixture();
+    let (diagnostics_cold, cold_status) = run_check_over_fixture(project.path());
     let cold = cold_start.elapsed().as_secs_f64();
+    assert_eq!(cold_status, CacheStatus::Miss);
+    assert!(cache_database.is_file(), "cold run must populate the cache");
 
     let warm_start = Instant::now();
-    let diagnostics_warm = run_check_over_fixture();
+    let (diagnostics_warm, warm_status) = run_check_over_fixture(project.path());
     let warm = warm_start.elapsed().as_secs_f64();
+    assert_eq!(warm_status, CacheStatus::Hit);
 
     assert_eq!(
         diagnostics_cold, diagnostics_warm,
@@ -344,11 +362,6 @@ fn benchmark_cold_and_warm_within_reference_budget() {
         cold <= cold_budget,
         "cold 10k-LOC check took {cold:.3} s, budget {cold_budget} s"
     );
-    // The warm budget is defined over a warmed on-disk cache (DESIGN §11.4
-    // via §9); until that cache exists there is no cached second run to
-    // measure, and pretending a full re-analysis is "warm" would enforce a
-    // gate whose precondition is absent. `enforced.warm_seconds` in
-    // benchmarks/reference-machine.json flips this on when the cache lands.
     if reference["enforced"]["warm_seconds"] == true {
         assert!(
             warm <= warm_budget,
@@ -356,8 +369,8 @@ fn benchmark_cold_and_warm_within_reference_budget() {
         );
     } else {
         println!(
-            "warm budget ({warm_budget} s) not enforced: no on-disk cache \
-             exists yet (see benchmarks/reference-machine.json `enforced`)"
+            "warm budget ({warm_budget} s) is disabled in \
+             benchmarks/reference-machine.json"
         );
     }
     if let Some(mib) = rss {

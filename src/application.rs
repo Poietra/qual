@@ -3,15 +3,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use rayon::prelude::*;
 
+use crate::cache::{AnalysisCache, CacheStatus, DependencyManifest};
 use crate::cli::{CheckArgs, Command, ExitStatus};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::cost;
 use crate::diagnostic::Diagnostic;
+use crate::frontend::index::LiteralFact;
 use crate::frontend::{self, ManimSurface};
 use crate::knowledge::{self, KnowledgeProfile, SymbolKind};
 use crate::reporting::coverage::{self, CoverageFormat, CoverageReport};
@@ -100,6 +103,10 @@ pub struct CheckReport {
     pub fixes: Option<FixReport>,
     /// Analysis-coverage report when `--analysis-summary` was given.
     pub coverage: Option<CoverageReport>,
+    /// Whether this run hit, populated, or bypassed the analysis cache.
+    pub cache_status: CacheStatus,
+    /// Recoverable cache problems reported without aborting analysis.
+    pub cache_warnings: Vec<String>,
 }
 
 /// Runs `manim-lint check` and renders its output.
@@ -119,6 +126,9 @@ pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
     // it never changes stdout or the exit code (DESIGN §8.1 determinism).
     if let Some(coverage) = &report.coverage {
         stderr.push_str(&coverage::render_text(coverage));
+    }
+    for warning in &report.cache_warnings {
+        let _ = writeln!(stderr, "manim-lint: warning: {warning}");
     }
     Ok(Execution {
         stdout: report.output,
@@ -147,12 +157,52 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     validate_declared_manim_version(&config, &profile)?;
 
     let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+    let source_snapshot = read_source_snapshot(&files);
+    let cache_eligible =
+        cache_eligible(args) && source_snapshot.iter().all(|(_, bytes)| bytes.is_some());
+    let mut analysis_cache = if cache_eligible {
+        AnalysisCache::open(&project_root)
+    } else {
+        AnalysisCache::disabled()
+    };
+    let cache_key = if cache_eligible {
+        let readable: Vec<(&Path, &[u8])> = source_snapshot
+            .iter()
+            .filter_map(|(path, bytes)| bytes.as_deref().map(|bytes| (path.as_path(), bytes)))
+            .collect();
+        match crate::cache::build_key(&project_root, &config, &profile, &readable) {
+            Ok(key) => Some(key),
+            Err(error) => {
+                analysis_cache.disable_with_warning(format!(
+                    "analysis cache key could not be built: {error}"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(diagnostics) = cache_key
+        .as_ref()
+        .and_then(|key| analysis_cache.lookup(key))
+    {
+        return Ok(cached_check_report(
+            args,
+            config,
+            diagnostics,
+            &mut analysis_cache,
+        ));
+    }
+
     let mut sources = SourceManager::new(project_root.clone());
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut suppression_indexes = BTreeMap::new();
 
-    for path in &files {
-        let id = sources.load_file(path);
+    for (path, bytes) in &source_snapshot {
+        let id = match bytes {
+            Some(bytes) => sources.load_bytes(path, bytes),
+            None => sources.load_file(path),
+        };
         let file = sources.file(id);
         if let Some(diagnostic) = file.parse_diagnostic() {
             let mut diagnostic = diagnostic.clone();
@@ -185,6 +235,20 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     // needs the lifecycle interpreter even when no selected rule does.
     needs.lifecycle |= args.analysis_summary;
     let facts = compute_facts(&sources, &config, &profile, needs);
+    let cache_dependencies = cache_key
+        .as_ref()
+        .map(|_| collect_cache_dependency_paths(&sources, &config, &profile, &facts.calls));
+    let cache_dependencies_before = cache_dependencies.as_ref().and_then(|paths| {
+        match DependencyManifest::capture(paths) {
+            Ok(dependencies) => Some(dependencies),
+            Err(error) => {
+                analysis_cache.disable_with_warning(format!(
+                    "analysis cache entry was not stored because dependencies could not be stamped: {error}"
+                ));
+                None
+            }
+        }
+    });
     let coverage_report = args.analysis_summary.then(|| {
         coverage::collect(
             &sources,
@@ -200,9 +264,9 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         .with_frontend(facts.index, facts.calls)
         .with_lifecycle(facts.lifecycle)
         .with_cost(facts.cost);
-    for rule in rules {
-        diagnostics.extend(rule.run(&context));
-    }
+    let rule_diagnostics: Vec<Vec<Diagnostic>> =
+        rules.par_iter().map(|rule| rule.run(&context)).collect();
+    diagnostics.extend(rule_diagnostics.into_iter().flatten());
 
     // Supersession runs BEFORE suppression filtering, deliberately: the
     // specificity dedup (DESIGN §7.3) is part of diagnostic *production* —
@@ -234,6 +298,21 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     });
 
     diagnostics.sort_by(Diagnostic::compare_stable);
+
+    if let (Some(key), Some(paths), Some(before)) =
+        (&cache_key, &cache_dependencies, &cache_dependencies_before)
+    {
+        match DependencyManifest::capture(paths) {
+            Ok(after) if after == *before => analysis_cache.store(key, &diagnostics, &after),
+            Ok(_) => analysis_cache.disable_with_warning(
+                "analysis cache entry was not stored because an asset dependency changed during analysis"
+                    .to_owned(),
+            ),
+            Err(error) => analysis_cache.disable_with_warning(format!(
+                "analysis cache entry was not stored because dependencies could not be stamped: {error}"
+            )),
+        }
+    }
 
     // Baseline fingerprints attribute each diagnostic to its enclosing
     // discovered Scene class (DESIGN §8.3: rule ID + relative path +
@@ -302,7 +381,203 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
         config,
         fixes: fix_report,
         coverage: coverage_report,
+        cache_status: analysis_cache.status(),
+        cache_warnings: analysis_cache.take_warnings(),
     })
+}
+
+/// Finalizes the subset of `check` operations that can be satisfied from a
+/// cached diagnostic set. Cache eligibility excludes coverage, baseline, and
+/// fixes because those operations need live source/index state.
+fn cached_check_report(
+    args: &CheckArgs,
+    config: ResolvedConfig,
+    diagnostics: Vec<Diagnostic>,
+    analysis_cache: &mut AnalysisCache,
+) -> CheckReport {
+    let profiles = config.active_profile_names();
+    let render_context = RenderContext {
+        tool_version: crate::VERSION,
+        project_root: ".",
+        profiles: &profiles,
+    };
+    let output = reporting::render(args.format, &diagnostics, &render_context);
+    let exit = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.reaches(config.fail_level))
+    {
+        ExitStatus::Failure
+    } else {
+        ExitStatus::Success
+    };
+    CheckReport {
+        diagnostics,
+        output,
+        exit,
+        config,
+        fixes: None,
+        coverage: None,
+        cache_status: analysis_cache.status(),
+        cache_warnings: analysis_cache.take_warnings(),
+    }
+}
+
+/// Reads source bytes once so the cache key and the cold analyzer consume the
+/// exact same snapshot. An unreadable file remains a normal per-file MLC000;
+/// that run simply bypasses caching because its read error is environment
+/// state rather than stable source content.
+fn read_source_snapshot(files: &[PathBuf]) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    files
+        .iter()
+        .map(|path| (path.clone(), std::fs::read(path).ok()))
+        .collect()
+}
+
+/// Operations that need source/index state after diagnostics are produced do
+/// a full analysis in cache v1. Normal checks, every output format, and
+/// `--statistics` remain cacheable.
+fn cache_eligible(args: &CheckArgs) -> bool {
+    !args.no_cache
+        && !args.fix
+        && args.baseline.is_none()
+        && args.write_baseline.is_none()
+        && !args.analysis_summary
+}
+
+const CACHE_SVG_MOBJECT: &str = "manim.mobject.svg.svg_mobject.SVGMobject";
+const CACHE_IMAGE_MOBJECT: &str = "manim.mobject.types.image_mobject.ImageMobject";
+const CACHE_SVG_EXTENSIONS: &[&str] = &[".svg"];
+const CACHE_RASTER_EXTENSIONS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".ico"];
+
+/// Collects every filesystem path whose state can change the asset rules
+/// without changing Python source. Exact candidates cover existence/content;
+/// case-insensitive component walks add the directory listings consulted by
+/// MLR104/MLD305. The resulting manifest is validated before every hit.
+fn collect_cache_dependency_paths(
+    sources: &SourceManager,
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+    calls: &frontend::index::QualifiedCallFacts,
+) -> BTreeSet<PathBuf> {
+    let mut dependencies = BTreeSet::new();
+    for call in &calls.calls {
+        let known: Vec<&str> = call
+            .candidates
+            .iter()
+            .filter(|candidate| profile.symbol(candidate).is_some())
+            .map(String::as_str)
+            .collect();
+        let [constructor] = known.as_slice() else {
+            continue;
+        };
+        let (parameter, extensions) = match *constructor {
+            CACHE_SVG_MOBJECT => ("file_name", CACHE_SVG_EXTENSIONS),
+            CACHE_IMAGE_MOBJECT => ("filename_or_array", CACHE_RASTER_EXTENSIONS),
+            _ => continue,
+        };
+        let Some(argument) = call.keyword(parameter).or_else(|| call.positional(0)) else {
+            continue;
+        };
+        let Some(LiteralFact::Str { value, prefix, .. }) = &argument.literal else {
+            continue;
+        };
+        if prefix.bytes || value.is_empty() || value.starts_with('~') {
+            continue;
+        }
+        let foreign_path = value.contains('\\') || cache_has_drive_prefix(value);
+        let literal_path = Path::new(value);
+        for render_profile in &config.active_profiles {
+            let working_dir = sources
+                .project_root()
+                .join(&render_profile.working_directory);
+            add_path_to_existing_ancestor(&mut dependencies, &working_dir);
+            if foreign_path {
+                continue;
+            }
+            let assets_base = working_dir.join(&render_profile.assets_dir);
+            add_path_to_existing_ancestor(&mut dependencies, &assets_base);
+            let mut candidates = vec![working_dir.join(value), assets_base.join(value)];
+            candidates.extend(
+                extensions
+                    .iter()
+                    .map(|extension| assets_base.join(format!("{value}{extension}"))),
+            );
+            for candidate in candidates {
+                add_path_to_existing_ancestor(&mut dependencies, &candidate);
+            }
+            if !literal_path.is_absolute() {
+                add_case_walk(&mut dependencies, &working_dir, value);
+                add_case_walk(&mut dependencies, &assets_base, value);
+                for extension in extensions {
+                    add_case_walk(
+                        &mut dependencies,
+                        &assets_base,
+                        &format!("{value}{extension}"),
+                    );
+                }
+                if let Some(source_dir) = sources.file(call.file).path().parent() {
+                    add_path_to_existing_ancestor(&mut dependencies, &source_dir.join(value));
+                }
+            }
+        }
+    }
+    dependencies
+}
+
+/// Adds a path, each missing exact ancestor, and the first existing ancestor.
+/// This makes creation/deletion invalidate a cached missing-path verdict.
+fn add_path_to_existing_ancestor(paths: &mut BTreeSet<PathBuf>, path: &Path) {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        paths.insert(candidate.to_path_buf());
+        if candidate.exists() {
+            break;
+        }
+        current = candidate.parent();
+    }
+}
+
+/// Mirrors the asset rules' component-wise case scan while recording every
+/// directory whose entries influenced the result, including a partially
+/// matched differently-cased prefix.
+fn add_case_walk(paths: &mut BTreeSet<PathBuf>, base: &Path, relative: &str) {
+    let mut current = base.to_path_buf();
+    paths.insert(current.clone());
+    for component in Path::new(relative).components() {
+        let Component::Normal(part) = component else {
+            return;
+        };
+        let exact = current.join(part);
+        paths.insert(exact.clone());
+        if exact.exists() {
+            current = exact;
+            continue;
+        }
+        let Some(part) = part.to_str() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            return;
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        let Some(matched) = names
+            .into_iter()
+            .find(|name| name.to_lowercase() == part.to_lowercase())
+        else {
+            return;
+        };
+        current = current.join(matched);
+        paths.insert(current.clone());
+    }
+}
+
+fn cache_has_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// Runs `manim-lint coverage [PATH...] [--format text|json]`: the
@@ -910,7 +1185,6 @@ fn validate_flag_combinations(args: &CheckArgs) -> Result<(), ApplicationError> 
             "--unsafe-fixes requires --fix".to_owned(),
         ));
     }
-    // --no-cache is an accepted no-op: no cache exists yet.
     Ok(())
 }
 

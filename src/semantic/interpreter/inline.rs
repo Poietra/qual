@@ -235,7 +235,7 @@ impl<'a> Machine<'a, '_> {
         if !self.emit {
             return;
         }
-        self.ctx.record_inline_fallback(FallbackFact {
+        self.sink.inline_fallbacks.push(FallbackFact {
             site: self.site(call.range()),
             callee: qualified.to_owned(),
             reason,
@@ -538,7 +538,7 @@ impl<'a> Machine<'a, '_> {
                 call_path,
             });
             if self.scene_run {
-                self.ctx.mark_summary_play(group);
+                self.sink.summary_play_groups.insert(group);
             }
         }
     }

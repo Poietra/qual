@@ -782,7 +782,7 @@ fn validate_digest(profile: &str, field: &str, digest: &str) -> Result<(), Knowl
 }
 
 /// A resolved, validated knowledge profile ready for the analyzer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KnowledgeProfile {
     /// Schema version of the source document(s).
     pub schema_version: u32,

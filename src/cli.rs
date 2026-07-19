@@ -161,7 +161,7 @@ pub struct CheckArgs {
     /// Write the current diagnostics to this baseline file.
     #[arg(long)]
     pub write_baseline: Option<PathBuf>,
-    /// Disable the analysis cache (no cache exists in Phase 0).
+    /// Disable all analysis-cache reads and writes.
     #[arg(long)]
     pub no_cache: bool,
     /// Print per-rule diagnostic counts to stderr.

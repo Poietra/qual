@@ -23,8 +23,8 @@ use super::callbacks::signature_from_args;
 use super::dispatch::Ctx;
 use super::mro::super_call_method;
 use super::{
-    AnimateBuilderFact, FixedRegistrationFact, PlayFact, SceneRemovalFact, StateSnapshot,
-    TargetRequirementFact, UpdaterRegistration, UpdaterRemoval,
+    AnimateBuilderFact, FallbackFact, FixedRegistrationFact, PlayFact, SceneRemovalFact,
+    StateSnapshot, TargetRequirementFact, UpdaterRegistration, UpdaterRemoval,
 };
 
 /// Loop passes before widening kicks in at loop headers (DESIGN §5.5:
@@ -344,6 +344,10 @@ pub(super) struct TraceSink {
     pub(super) scene_removals: Vec<SceneRemovalFact>,
     pub(super) fixed_registrations: Vec<FixedRegistrationFact>,
     pub(super) returns: Vec<ReturnObservation>,
+    /// Helper calls that fell back to summaries during this scene run.
+    pub(super) inline_fallbacks: Vec<FallbackFact>,
+    /// Play groups rehydrated from summaries during this scene run.
+    pub(super) summary_play_groups: BTreeSet<u64>,
     /// A reachable CFG path falls off the end of the body without a
     /// `return` (paths ending in `raise` do not count).
     pub(super) fall_off_end: bool,

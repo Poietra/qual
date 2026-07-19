@@ -84,7 +84,7 @@ manim-lint coverage .                   # 解析が解決できなかったも�
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
 
-主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。`--select` は解析そのものも絞り込みます: 選択したルールが必要としない事実レイヤー(ライフサイクル解釈器、記号的コストモデル)の計算をスキップするため、狭い select はフル実行より高速です。報告される診断はどちらでも同一です — 選択したルールを supersede するルールは常に実行されるので、狭い select が supersede 済みの診断を復活させることはありません。
+主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。`--no-cache` はキャッシュを読み書きせず、cache directory も作らずに完全解析を強制します。`--select` は解析そのものも絞り込みます: 選択したルールが必要としない事実レイヤー(ライフサイクル解釈器、記号的コストモデル)の計算をスキップするため、狭い select はフル実行より高速です。報告される診断はどちらでも同一です — 選択したルールを supersede するルールは常に実行されるので、狭い select が supersede 済みの診断を復活させることはありません。
 
 `--format full` は各診断の下に説明と機械可読な根拠を表示します。
 
@@ -101,6 +101,28 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
     evidence.state_path: ["construct","always_redraw:9"]
     applies to profiles: production
 ```
+
+## 解析キャッシュ
+
+通常の `check` は破棄可能な SQLite cache を
+`.manim-lint-cache/cache-v1.sqlite3` に保持します。初回はproject全体を
+解析してfilter後のdiagnosticsをJSONで保存し、同一入力の二回目はfilesystem
+dependencyを検証して結果を再利用します。keyにはanalyzer build、解決済みの
+semantic config、Manim knowledge profile、対象source pathとsource bytesが
+含まれます。literal asset候補とcase-sensitiveなdirectory walkは別にstamp
+されるため、Python sourceが不変でもassetの作成・削除・rename・内容変更で
+entryは無効になります。
+
+DBはSQLite WALを使い、正しさに必要な状態ではありません。破損はwarningを
+出してDBを削除・再構築し、完全解析を継続します。`--no-cache` はcacheに
+関するfilesystem accessをすべて無効にします。cache-v1ではlive source/index
+stateを後段でも使う`--fix`、baseline、`--analysis-summary`も意図的に完全解析
+します。projectのignore fileには`.manim-lint-cache/`を追加してください。
+
+cold runは依存しないsummary component、Scene lifecycle、ruleをbounded worker
+poolで並列化します。再帰summaryのfixpointとfrontend/project indexは順序を
+保った逐次処理です。結果は安定sortされ、worker 1件と4件でJSONがbyte単位に
+同一であることをtestしています。
 
 ## 設定
 
@@ -374,7 +396,7 @@ output ................... concise | full | json | sarif | github, fixes, cost r
 - **サマリー由来の play は保守的です。** ヘルパーのインライン化が effect summary へフォールバックした場合(再帰、解決不能な呼び出し — カバレッジレポートの `helper calls summarized, not inlined` に計上)、そのヘルパーの play は `Maybe` 確度・開いた繰り返し回数のレコードとして現れます: `MLC104` のようなリテラル duration 検査はそこでも発火しますが、呼び出し元の状態に依存する判定はすべて degrade されたままです。
 - **`TracedPath` がコンストラクタで登録する updater はコスト専用です。** `TracedPath` が構築時に自身へ登録する updater はコスト目的ではモデル化されます(`MLP220` のスパン、lambda を渡した場合の hot context)が、ライフサイクル上の updater 登録ではありません: `TracedPath` 単独ではデフォルトの `wait()` はライフサイクルモデル上 dynamic にならず、バウンドメソッドの `traced_point_func` 本体は hot context として解析されません。
 - **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
-- **未実装。** SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
+- **未実装。** レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
 ## 開発
 
@@ -411,13 +433,12 @@ cargo test --test corpus_gate
 
 # ベンチマークゲート — 明示的に実行、release ビルド、静かなマシンで。
 # ピン留めされた 10k-LOC フィクスチャ(tests/corpus/benchmark_10kloc)で
-# cold ≤ 2 s / peak RSS < 300 MiB。閾値は benchmarks/reference-machine.json
+# cold ≤ 2 s / warm cache hit ≤ 0.5 s / peak RSS < 300 MiB。
+# 閾値は benchmarks/reference-machine.json
 # に一致するマシンでのみ assert され、それ以外では情報提供のみ。
-# warm ≤ 0.5 s のバジェットは記録されるが、オンディスクキャッシュが
-# 実装されるまで強制されない(同ファイルの `enforced` を参照)。
-# リファレンスマシンでの実測(2026-07-19): cold 1.769 s、
-# warm 1.506 s(キャッシュなしの完全再解析、情報提供のみ)、
-# peak RSS 219.7 MiB — すべてバジェット内。
+# gateはcoldがcache miss、warmが検証済みhitであることも証明する。
+# リファレンスマシンでの3回の中央値(2026-07-19): cold 0.438 s、
+# warm 0.009 s、peak RSS 238.7 MiB — すべてバジェット内。
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # knowledge ドリフトゲート — 兄弟の Manim チェックアウトが必要。CI では

@@ -12,9 +12,10 @@ use crate::source::SourceManager;
 
 /// A single diagnostic rule.
 ///
-/// Implementations must be deterministic: identical inputs produce an
-/// identical diagnostic list (order included).
-pub trait Rule {
+/// Implementations run concurrently with other enabled rules and must be
+/// deterministic: identical inputs produce an identical diagnostic list
+/// (order included), without mutating shared analysis state.
+pub trait Rule: Sync {
     /// Static metadata (ID, severity, phase, capabilities).
     fn metadata(&self) -> &'static RuleMetadata;
 

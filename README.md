@@ -133,7 +133,8 @@ Useful `check` options: `--select` / `--ignore`, `--min-confidence`,
 `--resolution WIDTHxHEIGHT`, `--statistics`, `--analysis-summary` (the
 coverage report below, printed to stderr after the diagnostics; stdout
 and the exit code are untouched), and the baseline/fix options
-described below. `--select` also narrows the analysis itself: fact layers
+described below. `--no-cache` forces a full analysis without reading,
+writing, or creating cache state. `--select` also narrows the analysis itself: fact layers
 no selected rule needs (the lifecycle interpreter, the symbolic cost
 model) are skipped, so a narrow select is faster than a full run. The
 reported diagnostics are identical either way — rules superseding a
@@ -156,6 +157,31 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
     evidence.state_path: ["construct","always_redraw:9"]
     applies to profiles: production
 ```
+
+## Analysis cache
+
+Normal `check` runs keep a disposable SQLite cache at
+`.manim-lint-cache/cache-v1.sqlite3`. The first run analyzes the complete
+project and stores the filtered diagnostic set as JSON; an identical second
+run validates its filesystem dependencies and reuses that result. The key
+covers the analyzer build, resolved semantic configuration, Manim knowledge
+profile, selected source paths, and source bytes. Literal asset candidates
+and case-sensitive directory walks are stamped separately, so creating,
+deleting, renaming, or changing an asset invalidates the entry even when the
+Python source did not change.
+
+The database uses SQLite WAL and is never required for correctness. A corrupt
+database is reported as a warning, deleted, and rebuilt while the full
+analysis continues. `--no-cache` disables all cache filesystem activity.
+Cache v1 also deliberately runs a full analysis for `--fix`, baselines, and
+`--analysis-summary`, because those operations need live source or index
+state after diagnostics have been produced. Add `.manim-lint-cache/` to a
+project's ignore file; this repository's own `.gitignore` already does so.
+
+Cold runs parallelize independent summary components, Scene lifecycle runs,
+and rules using a bounded worker pool. Recursive summary fixpoints and the
+frontend/project index remain ordered and sequential. Output is collected and
+stably sorted, with a test proving byte-identical JSON at one and four workers.
 
 ## Configuration
 
@@ -577,9 +603,8 @@ deterministic and byte-stable for the same input.
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
   ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
   states each rule's exact scope.
-- **Not yet implemented.** The SQLite result cache (`--no-cache` is an
-  accepted no-op); threshold calibration against rendered baselines; a
-  nightly render-comparison CI.
+- **Not yet implemented.** Threshold calibration against rendered baselines;
+  a nightly render-comparison CI.
 
 ## Development
 
@@ -622,13 +647,12 @@ Three additional gates guard releases:
 cargo test --test corpus_gate
 
 # Benchmark gate — explicit, release build, quiet machine.
-# Cold ≤ 2 s / peak RSS < 300 MiB over the pinned 10k-LOC fixture
+# Cold ≤ 2 s / warm cache hit ≤ 0.5 s / peak RSS < 300 MiB over the pinned 10k-LOC fixture
 # (tests/corpus/benchmark_10kloc); thresholds assert only on the machine
 # matching benchmarks/reference-machine.json, informational elsewhere.
-# The warm ≤ 0.5 s budget is recorded but not enforced until the on-disk
-# cache exists (see `enforced` in that file). A run on the reference
-# machine (2026-07-19): cold 1.769 s, warm 1.506 s (uncached full
-# re-analysis, informational), peak RSS 219.7 MiB — all within budget.
+# The gate also proves cold is a cache miss and warm is a validated hit.
+# Three-run median on the reference machine (2026-07-19): cold 0.438 s,
+# warm 0.009 s, peak RSS 238.7 MiB — all within budget.
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # Knowledge drift gate — needs the sibling Manim checkout; in CI it runs
