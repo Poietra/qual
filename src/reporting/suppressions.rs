@@ -303,10 +303,9 @@ enum DirectiveKind {
 fn parse_directive(rest: &str) -> Option<(DirectiveKind, Vec<String>)> {
     let (kind, after) = if let Some(after) = rest.strip_prefix("file-ignore") {
         (DirectiveKind::FileIgnore, after)
-    } else if let Some(after) = rest.strip_prefix("ignore") {
-        (DirectiveKind::Ignore, after)
     } else {
-        return None;
+        let after = rest.strip_prefix("ignore")?;
+        (DirectiveKind::Ignore, after)
     };
     let after = after.trim_start();
     let inner = after.strip_prefix('[')?;

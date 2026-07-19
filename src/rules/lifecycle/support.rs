@@ -212,14 +212,8 @@ pub(super) fn classify_class(
             }
         }
         (false, false, true) => ClassKind::Animation,
-        (false, false, false) => {
-            if conclusive {
-                ClassKind::KnownOther
-            } else {
-                return None;
-            }
-        }
-        // Mixed roles: never a confirmed fact.
+        (false, false, false) if conclusive => ClassKind::KnownOther,
+        // Unresolved or mixed roles: never a confirmed fact.
         _ => return None,
     };
     Some(ClassFact { kind, conclusive })
