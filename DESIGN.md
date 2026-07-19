@@ -1054,7 +1054,7 @@ tool/schema/build version
 
 cache-v1 は whole-project invalidation を選ぶため、解析対象 module の import summary は独立 entry にせず、その module source bytes が同じ project key に入る。将来 module parse / index を並列化するときは module exports、import edges、class hierarchy fragment、method summaries と imported summary hash を entry に追加し、diagnostic の意味を変えずに incremental cache へ拡張する。
 
-lookup 時は source key に加えて dependency manifest を再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と cold analysis で同じ snapshot を使う。SQLite WAL を使い、DB または保存 JSON の破損時は stderr に警告してDBを削除・再構築する。その他の cache I/O failure はその実行だけ cache を無効にし、full analysis を続ける。cache は正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
+lookup 時は source key に加えて dependency manifest を再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と cold analysis で同じ snapshot を使う。SQLite WAL を使い、同じ project への並行 cold writer を許容する。entry は lookup / store ごとの単調な access sequence で recent 16 project snapshots に制限し、store 後に古いものを削除する。DB または保存 JSON の破損時は stderr に警告してDBを削除・再構築する。その他の cache I/O failure はその実行だけ cache を無効にし、full analysis を続ける。cache は正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
 
 ## 10. repository layout
 

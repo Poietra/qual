@@ -22,8 +22,9 @@ use crate::knowledge::KnowledgeProfile;
 
 const CACHE_DIRECTORY: &str = ".manim-lint-cache";
 const CACHE_DATABASE: &str = "cache-v1.sqlite3";
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 2;
 const CACHE_MAGIC: &[u8] = b"manim-lint/project-analysis-cache";
+const MAX_CACHE_ENTRIES: usize = 16;
 
 /// Whether a check used, populated, or deliberately bypassed the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +239,11 @@ impl AnalysisCache {
             return Ok(None);
         }
         let diagnostics = serde_json::from_str(&diagnostics_json)?;
+        let last_access = next_access(connection)?;
+        connection.execute(
+            "UPDATE analysis_entries SET last_access = ?2 WHERE cache_key = ?1",
+            params![key.0.as_slice(), last_access],
+        )?;
         Ok(Some(diagnostics))
     }
 
@@ -252,13 +258,30 @@ impl AnalysisCache {
         };
         let diagnostics_json = serde_json::to_string(diagnostics)?;
         let dependencies_json = serde_json::to_string(dependencies)?;
+        let last_access = next_access(connection)?;
         connection.execute(
-            "INSERT INTO analysis_entries(cache_key, diagnostics_json, dependencies_json)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO analysis_entries(
+                 cache_key, diagnostics_json, dependencies_json, last_access
+             ) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(cache_key) DO UPDATE SET
                  diagnostics_json = excluded.diagnostics_json,
-                 dependencies_json = excluded.dependencies_json",
-            params![key.0.as_slice(), diagnostics_json, dependencies_json],
+                 dependencies_json = excluded.dependencies_json,
+                 last_access = excluded.last_access",
+            params![
+                key.0.as_slice(),
+                diagnostics_json,
+                dependencies_json,
+                last_access
+            ],
+        )?;
+        connection.execute(
+            "DELETE FROM analysis_entries
+             WHERE cache_key IN (
+                 SELECT cache_key FROM analysis_entries
+                 ORDER BY last_access DESC, cache_key DESC
+                 LIMIT -1 OFFSET ?1
+             )",
+            params![i64::try_from(MAX_CACHE_ENTRIES).expect("cache entry bound fits i64")],
         )?;
         Ok(())
     }
@@ -350,17 +373,40 @@ fn open_connection(path: &Path) -> Result<Connection, CacheError> {
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version != CACHE_SCHEMA_VERSION {
-        connection.execute_batch("DROP TABLE IF EXISTS analysis_entries;")?;
+        connection.execute_batch(
+            "DROP TABLE IF EXISTS analysis_entries;
+             DROP TABLE IF EXISTS cache_metadata;",
+        )?;
     }
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS analysis_entries (
              cache_key BLOB PRIMARY KEY NOT NULL,
              diagnostics_json TEXT NOT NULL,
-             dependencies_json TEXT NOT NULL
-         ) WITHOUT ROWID;",
+             dependencies_json TEXT NOT NULL,
+             last_access INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS cache_metadata (
+             singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
+             access_counter INTEGER NOT NULL
+         );
+         INSERT OR IGNORE INTO cache_metadata(singleton, access_counter)
+         VALUES (1, 0);",
     )?;
     connection.pragma_update(None, "user_version", CACHE_SCHEMA_VERSION)?;
     Ok(connection)
+}
+
+fn next_access(connection: &Connection) -> Result<i64, CacheError> {
+    connection
+        .query_row(
+            "UPDATE cache_metadata
+             SET access_counter = access_counter + 1
+             WHERE singleton = 1
+             RETURNING access_counter",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(CacheError::from)
 }
 
 fn remove_database_files(path: &Path) -> Result<(), CacheError> {

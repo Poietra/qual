@@ -170,7 +170,9 @@ and case-sensitive directory walks are stamped separately, so creating,
 deleting, renaming, or changing an asset invalidates the entry even when the
 Python source did not change.
 
-The database uses SQLite WAL and is never required for correctness. A corrupt
+The database uses SQLite WAL, supports concurrent cold writers, and retains
+the 16 most recently used project snapshots so stale configurations cannot
+grow it without bound. It is never required for correctness. A corrupt
 database is reported as a warning, deleted, and rebuilt while the full
 analysis continues. `--no-cache` disables all cache filesystem activity.
 Cache v1 also deliberately runs a full analysis for `--fix`, baselines, and
@@ -651,8 +653,8 @@ cargo test --test corpus_gate
 # (tests/corpus/benchmark_10kloc); thresholds assert only on the machine
 # matching benchmarks/reference-machine.json, informational elsewhere.
 # The gate also proves cold is a cache miss and warm is a validated hit.
-# Three-run median on the reference machine (2026-07-19): cold 0.438 s,
-# warm 0.009 s, peak RSS 238.7 MiB — all within budget.
+# Three-run median on the reference machine (2026-07-19): cold 0.409 s,
+# warm 0.006 s, peak RSS 238.8 MiB — all within budget.
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # Knowledge drift gate — needs the sibling Manim checkout; in CI it runs

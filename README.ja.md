@@ -113,11 +113,13 @@ semantic config、Manim knowledge profile、対象source pathとsource bytesが
 されるため、Python sourceが不変でもassetの作成・削除・rename・内容変更で
 entryは無効になります。
 
-DBはSQLite WALを使い、正しさに必要な状態ではありません。破損はwarningを
-出してDBを削除・再構築し、完全解析を継続します。`--no-cache` はcacheに
-関するfilesystem accessをすべて無効にします。cache-v1ではlive source/index
-stateを後段でも使う`--fix`、baseline、`--analysis-summary`も意図的に完全解析
-します。projectのignore fileには`.manim-lint-cache/`を追加してください。
+DBはSQLite WALを使って並行cold writerを許容し、古い設定で際限なく増えない
+よう直近に使った16個のproject snapshotだけを保持します。正しさに必要な状態
+ではありません。破損はwarningを出してDBを削除・再構築し、完全解析を継続
+します。`--no-cache` はcacheに関するfilesystem accessをすべて無効にします。
+cache-v1ではlive source/index stateを後段でも使う`--fix`、baseline、
+`--analysis-summary`も意図的に完全解析します。projectのignore fileには
+`.manim-lint-cache/`を追加してください。
 
 cold runは依存しないsummary component、Scene lifecycle、ruleをbounded worker
 poolで並列化します。再帰summaryのfixpointとfrontend/project indexは順序を
@@ -437,8 +439,8 @@ cargo test --test corpus_gate
 # 閾値は benchmarks/reference-machine.json
 # に一致するマシンでのみ assert され、それ以外では情報提供のみ。
 # gateはcoldがcache miss、warmが検証済みhitであることも証明する。
-# リファレンスマシンでの3回の中央値(2026-07-19): cold 0.438 s、
-# warm 0.009 s、peak RSS 238.7 MiB — すべてバジェット内。
+# リファレンスマシンでの3回の中央値(2026-07-19): cold 0.409 s、
+# warm 0.006 s、peak RSS 238.8 MiB — すべてバジェット内。
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # knowledge ドリフトゲート — 兄弟の Manim チェックアウトが必要。CI では

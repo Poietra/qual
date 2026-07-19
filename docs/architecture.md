@@ -195,6 +195,8 @@ fingerprint emitted by `build.rs`, schema/tool version, resolved semantic
 configuration, serialized knowledge profile, sorted source paths, and the
 exact source bytes fed to `SourceManager`. Asset files, missing candidates,
 and case-scan directory listings are re-stamped before a hit is accepted.
+WAL permits concurrent cold writers, while a monotonic access sequence and
+store-time pruning retain the 16 most recently used project snapshots.
 Corruption rebuilds with a warning; any other cache failure disables caching
 for that run and leaves full analysis available.
 

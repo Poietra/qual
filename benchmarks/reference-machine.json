@@ -27,9 +27,9 @@
     "fixture": "tests/corpus/benchmark_10kloc (20 files, 10810 physical lines)",
     "samples": 3,
     "aggregation": "median of three consecutive benchmark processes",
-    "cold_seconds": 0.438,
-    "warm_seconds": 0.009,
-    "peak_rss_mib": 238.7
+    "cold_seconds": 0.409,
+    "warm_seconds": 0.006,
+    "peak_rss_mib": 238.8
   },
   "conditions": "Median of three consecutive invocations on the reference machine using the default Rayon worker pool. In each process the deterministic 20-file fixture is written to an isolated temporary project before timing, so its source contents are already in the OS page cache. Cold is the first in-process check() with .manim-lint-cache absent and asserts CacheStatus::Miss plus database creation. Warm is the immediately following identical check() and asserts CacheStatus::Hit. Peak RSS is VmHWM of the test process, covering both runs."
 }

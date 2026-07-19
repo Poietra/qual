@@ -1,6 +1,7 @@
 //! Persistent analysis-cache contract tests (DESIGN §9).
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier};
 
 use manim_lint::application::check;
 use manim_lint::cache::CacheStatus;
@@ -166,4 +167,77 @@ fn incompatible_schema_version_is_reinitialized() {
     assert_eq!(migrated.cache_status, CacheStatus::Miss);
     assert!(migrated.cache_warnings.is_empty());
     assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+}
+
+#[test]
+fn old_entries_are_pruned_to_the_bounded_working_set() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path(), "value = 0\n");
+    let args = args_for(project.path());
+
+    for revision in 0..16 {
+        std::fs::write(
+            project.path().join("scene.py"),
+            format!("value = {revision}\n"),
+        )
+        .unwrap();
+        assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+    }
+
+    std::fs::write(project.path().join("scene.py"), "value = 0\n").unwrap();
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+    std::fs::write(project.path().join("scene.py"), "value = 16\n").unwrap();
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+
+    let connection = rusqlite::Connection::open(database(project.path())).unwrap();
+    let entries: i64 = connection
+        .query_row("SELECT COUNT(*) FROM analysis_entries", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(entries, 16);
+    drop(connection);
+
+    std::fs::write(project.path().join("scene.py"), "value = 0\n").unwrap();
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+    std::fs::write(project.path().join("scene.py"), "value = 1\n").unwrap();
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+}
+
+#[test]
+fn concurrent_cold_writers_share_the_wal_database() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path(), "value = 1\n");
+    let root = project.path().to_path_buf();
+    let barrier = Arc::new(Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let root = root.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let args = args_for(&root);
+                barrier.wait();
+                check(&args).unwrap()
+            })
+        })
+        .collect();
+    let reports: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.cache_warnings.is_empty())
+    );
+    assert!(
+        reports
+            .windows(2)
+            .all(|pair| pair[0].output == pair[1].output)
+    );
+    assert_eq!(
+        check(&args_for(&root)).unwrap().cache_status,
+        CacheStatus::Hit
+    );
 }
