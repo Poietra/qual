@@ -47,7 +47,7 @@ pub use crate::frontend::statements::{BindingFacts, StatementFacts};
 /// Phase-2 rule should read).
 pub use crate::semantic::interpreter::LifecycleFacts;
 
-/// Capability-pack fact types for the reserved rules (see the
+/// Capability-pack fact types for stateful rules (see the
 /// [`LifecycleFacts`] query map): per-callable return facts (MLC123),
 /// updater-body dataflow (MLC112 / MLP218), own-path state (MLR116),
 /// per-statement ownership intervals (MLC111), fixed-object registration

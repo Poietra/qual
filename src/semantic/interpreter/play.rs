@@ -20,7 +20,7 @@ use crate::semantic::values::{
 
 use super::dispatch::{Ctx, ResolvedAnimEffects};
 use super::exec::{AbstractValue, ExecState, Machine, OpKind, literal_bool, literal_num};
-use super::heap_ops::{clone_path_facts, widen_z_index_family};
+use super::heap_ops::{clone_path_facts, widen_style_facts, widen_z_index_family};
 use super::{PlayFact, PlayKind, PlayedAnimation, TargetRequirement, TargetRequirementFact};
 
 /// Write channels of a curated animation class, with a completeness
@@ -641,6 +641,23 @@ impl<'a> Machine<'a, '_> {
             if played.channels_known != Truth::Yes {
                 for target in &targets {
                     widen_z_index_family(state, target);
+                }
+            }
+            // Exact final style values are not evaluated from arbitrary
+            // animations/builders. Preserve constructor/setter facts only
+            // when the complete channel set proves style and opacity are
+            // untouched; otherwise widen instead of leaving stale values
+            // for a later renderer-cost rule.
+            if played.channels_known != Truth::Yes
+                || animation_state
+                    .write_channels
+                    .contains(&WriteChannel::Style)
+                || animation_state
+                    .write_channels
+                    .contains(&WriteChannel::Opacity)
+            {
+                for target in &targets {
+                    widen_style_facts(state, target);
                 }
             }
         }

@@ -412,6 +412,83 @@ fn mlp211_hot_large_allocation_golden() {
 }
 
 #[test]
+fn mlp212_long_translucent_full_screen_animation_golden() {
+    // Only an exact FullScreenRectangle, stable literal opacity in (0, 1),
+    // a certain direct target animation, and a proven duration >= 5 s
+    // pass. Short, opaque, opacity-changing, smaller, unknown, and
+    // branch-only near misses stay silent.
+    assert_golden(
+        "MLP212",
+        &[
+            "alias.py:8:19 MLP212 info medium",
+            "invalid.py:8:19 MLP212 info medium",
+            "invalid.py:14:19 MLP212 info medium",
+        ],
+    );
+}
+
+#[test]
+fn mlp213_calibrated_cairo_surface_mismatch_golden() {
+    // Literal 32x32 / 40x40 Surfaces cross the versioned 1,024-face
+    // calibration gate and are certain play targets. Smaller, unknown,
+    // unused, and branch-only Surfaces stay silent.
+    assert_golden(
+        "MLP213",
+        &[
+            "alias.py:6:19 MLP213 info medium",
+            "invalid.py:6:19 MLP213 info medium",
+        ],
+    );
+}
+
+#[test]
+fn mlp223_transparent_positive_width_stroke_golden() {
+    // Exact zero stroke opacity, exact positive width, a non-empty path,
+    // certain per-frame capture, and absence of every future opacity/style
+    // write are all required. The valid fixture exercises each refusal.
+    assert_golden(
+        "MLP223",
+        &[
+            "alias.py:7:9 MLP223 info high",
+            "invalid.py:7:9 MLP223 info high",
+            "invalid.py:13:9 MLP223 info high",
+        ],
+    );
+}
+
+#[test]
+fn cairo_only_cost_rules_stay_silent_under_opengl() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("pyproject.toml"),
+        "[tool.manim-lint]\n\
+         select = [\"MLP213\", \"MLP223\"]\n\
+         min-confidence = \"medium\"\n\
+         default-profile = \"opengl\"\n\
+         \n\
+         [[tool.manim-lint.profile]]\n\
+         name = \"opengl\"\n\
+         renderer = \"opengl\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("scene.py"),
+        "\
+from manim import *
+
+
+class Demo(ThreeDScene):
+    def construct(self):
+        surface = Surface(lambda u, v: (u, v, 0), resolution=(32, 32))
+        circle = Circle(stroke_opacity=0, stroke_width=8)
+        self.play(surface.animate.shift(RIGHT), circle.animate.shift(UP))
+",
+    )
+    .unwrap();
+    assert_eq!(observed(project.path()), Vec::<String>::new());
+}
+
+#[test]
 fn mlp216_stable_geometry_redraw_golden() {
     // `valid.py` (`Circle(num_components=14)`: a banned kwarg voids the
     // curated topology proof; a `VGroup(...)` factory constructs no
@@ -516,17 +593,20 @@ fn mlp208_evidence_omits_unprovable_numbers() {
 
 #[test]
 fn performance_rule_metadata_matches_the_design_catalog() {
-    let expected: [(&str, Severity, Confidence, &[&str]); 6] = [
+    let expected: [(&str, Severity, Confidence, &[&str]); 9] = [
         ("MLP201", Severity::Warning, Confidence::High, &[]),
         ("MLP204", Severity::Warning, Confidence::High, &[]),
         ("MLP205", Severity::Warning, Confidence::High, &[]),
         ("MLP206", Severity::Warning, Confidence::Certain, &[]),
+        ("MLP212", Severity::Info, Confidence::Medium, &[]),
+        ("MLP213", Severity::Info, Confidence::Medium, &[]),
         (
             "MLP220",
             Severity::Warning,
             Confidence::High,
             &["MLP204", "MLP211"],
         ),
+        ("MLP223", Severity::Info, Confidence::High, &[]),
         ("MLP226", Severity::Warning, Confidence::High, &["MLP201"]),
     ];
     for (rule, severity, confidence, supersedes) in expected {
@@ -545,21 +625,6 @@ fn performance_rule_metadata_matches_the_design_catalog() {
             "{rule} must declare the fact layer it relies on"
         );
     }
-    // Unimplemented catalog ids stay reserved and are never reported as
-    // checked (DESIGN §12). MLP218 / MLP221 / MLP227 moved to the
-    // timing / display-order tranche (`rules_performance2.rs`);
-    // MLP214 / MLP217 to the fork-overlay tranche
-    // (`rules_performance_fork.rs`); MLP225 to the local-fork-overlay
-    // cost-report tranche (`fork_paths.rs`).
-    let reserved = "MLP212";
-    assert!(
-        registry::metadata_for(reserved).is_none(),
-        "{reserved} must stay unimplemented"
-    );
-    assert!(
-        registry::is_reserved_rule_id(reserved),
-        "{reserved} keeps its reserved id"
-    );
 }
 
 #[test]

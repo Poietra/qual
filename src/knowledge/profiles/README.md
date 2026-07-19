@@ -168,6 +168,13 @@ working tree at `/home/hosi/manim`.
   `CoordinateSystem`) so chain resolution can reach future
   `CoordinateSystem` helpers; `ParametricFunction` is curated with its
   constructor signature for `MLP221`.
+- **Renderer-cost identities.** `ScreenRectangle` and
+  `FullScreenRectangle` are curated through their exact frame-module base
+  chain so `MLP212` can combine the inherited default 16:9 geometry with a
+  matching render profile instead of guessing from a class name. `Surface`
+  remains the Cairo-capable class; its note links the
+  1,024-face `MLP213` boundary to `docs/research/perf-evidence.md` rather
+  than embedding machine timing in rule logic.
 - **`font_size` mutation is constructor-only in `MLR115` on purpose.** The
   Text/TeX families expose no font-size *method*: the runtime mutator is
   the `font_size` **property setter** (`text_mobject.py Text.font_size`,

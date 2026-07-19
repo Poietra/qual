@@ -8,15 +8,13 @@
 //! (`z_index` display order, updater-body dataflow, ownership intervals,
 //! `always_update_mobjects` tracking): `MLP209`, `MLP210`, `MLP215`,
 //! `MLP218`, `MLP219`, `MLP221`, `MLP222`, `MLP227`.
+//! Renderer/pixel-cost tranche: `MLP212`, `MLP213`, `MLP223`.
 //! Fork-overlay tranche over the curated `fork_capabilities` block of the
 //! local knowledge profile (inert under `upstream_0_20`, whose accessors
 //! return `None`): `MLP214`, `MLP217`, and the opt-in cost-report-only
 //! `MLP225` (`default_enabled: false`; `--select MLP225` is the explicit
 //! opt-in).
 //!
-//! Deliberately unimplemented catalog ids (a reserved rule never
-//! fake-fires, DESIGN §12): `MLP212`, `MLP213`, `MLP223`.
-
 mod allocation;
 mod display_order;
 pub(crate) mod fork_paths;
@@ -25,6 +23,7 @@ mod hot_construction;
 mod hot_receiver;
 mod loop_plays;
 mod redraw_geometry;
+mod renderer_cost;
 mod sampling;
 mod scene_mutation;
 pub(crate) mod support;
@@ -56,6 +55,8 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(display_order::FrontLoadedStaticSuffix),
         Box::new(loop_plays::FixedCountLoopPlays),
         Box::new(allocation::HotLargeAllocation),
+        Box::new(renderer_cost::LongTranslucentFullScreenAnimation),
+        Box::new(renderer_cost::CairoSurfaceMismatch),
         Box::new(tex_precompile::SerialTexCompileKeys),
         Box::new(updater_waste::NoOpUpdaterCost),
         Box::new(redraw_geometry::StableGeometryRedraw),
@@ -65,6 +66,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(traced_path::UnboundedTracedPath),
         Box::new(sampling::ExcessiveSampleCount),
         Box::new(display_order::ImageInMovingSuffix),
+        Box::new(renderer_cost::TransparentStrokeCapture),
         Box::new(hot_receiver::HotPointFromProportion),
         Box::new(fork_paths::ForkFastPathLoss),
         Box::new(hot_construction::FrameVaryingResourceKey),

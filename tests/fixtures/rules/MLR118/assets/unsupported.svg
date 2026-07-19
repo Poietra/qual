@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="blur"/>
+    <mask id="fade"/>
+    <clipPath id="crop"><path d="M0 0L1 0L1 1Z"/></clipPath>
+  </defs>
+  <text x="0" y="0">label</text>
+  <image href="badge.png"/>
+  <use href="#missing"/>
+</svg>

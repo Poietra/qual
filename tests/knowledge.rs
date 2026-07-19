@@ -191,6 +191,28 @@ fn opengl_only_meshes_carry_the_renderer_requirement_fact() {
 }
 
 #[test]
+fn full_screen_rectangle_coverage_chain_is_curated() {
+    let profile = knowledge::load(UPSTREAM).expect("load");
+    let (id, full_screen) = profile
+        .resolve_export("FullScreenRectangle")
+        .expect("FullScreenRectangle exported");
+    assert_eq!(id, "manim.mobject.frame.FullScreenRectangle");
+    assert_eq!(full_screen.kind, SymbolKind::Vmobject);
+    assert_eq!(
+        full_screen.bases,
+        vec!["manim.mobject.frame.ScreenRectangle".to_owned()]
+    );
+    let (_, screen) = profile
+        .resolve_export("ScreenRectangle")
+        .expect("ScreenRectangle exported");
+    assert_eq!(screen.kind, SymbolKind::Vmobject);
+    assert_eq!(
+        screen.bases,
+        vec!["manim.mobject.geometry.polygram.Rectangle".to_owned()]
+    );
+}
+
+#[test]
 fn replacement_transform_declares_replacement() {
     let profile = knowledge::load(UPSTREAM).expect("load");
     let (_, entry) = profile
@@ -215,6 +237,40 @@ fn register_font_is_exported_as_a_function() {
         .expect("register_font is exported");
     assert_eq!(id, "manim.mobject.text.text_mobject.register_font");
     assert_eq!(entry.kind, SymbolKind::Function);
+}
+
+#[test]
+fn override_animate_and_graph_overrides_are_curated() {
+    let profile = manim_lint::knowledge::load("upstream_0_20").unwrap();
+    let (id, helper) = profile
+        .resolve_export("override_animate")
+        .expect("override_animate star export");
+    assert_eq!(id, "manim.mobject.mobject.override_animate");
+    assert_eq!(helper.kind, manim_lint::knowledge::SymbolKind::Function);
+
+    let graph = profile
+        .resolve_export("Graph")
+        .expect("Graph star export")
+        .1;
+    assert_eq!(graph.kind, manim_lint::knowledge::SymbolKind::Vmobject);
+    for method in [
+        "add_vertices",
+        "remove_vertices",
+        "add_edges",
+        "remove_edges",
+    ] {
+        let entry = profile
+            .symbol(&format!("manim.mobject.graph.GenericGraph.{method}"))
+            .unwrap_or_else(|| panic!("missing Graph override method {method}"));
+        assert_eq!(
+            entry
+                .effects
+                .as_ref()
+                .and_then(|effects| effects.animate_override),
+            Some(true),
+            "{method} override fact",
+        );
+    }
 }
 
 #[test]

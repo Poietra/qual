@@ -478,28 +478,19 @@ Or upload SARIF so findings appear in the GitHub code-scanning UI:
 
 ## Rule catalog
 
-92 rule IDs are reserved across the four families; **83 are implemented and
-9 are reserved**:
+The catalog contains 92 rule IDs across four families; **all 92 are
+implemented**:
 
 | Family | Implemented | Reserved |
 | --- | --- | --- |
-| MLC lifecycle / correctness | 28 | 3 |
-| MLR rendering | 24 | 3 |
-| MLP performance | 24 | 3 |
+| MLC lifecycle / correctness | 31 | 0 |
+| MLR rendering | 27 | 0 |
+| MLP performance | 27 | 0 |
 | MLD determinism / portability | 7 | 0 |
 
 One implemented rule is opt-in: `MLP225` has `default_enabled: false` and
 never joins a normal `check` run; only an exact `--select MLP225` under the
 local fork profile evaluates it.
-
-A reserved ID **never fires**: `manim-lint rules` lists it honestly as
-`reserved`, and `check` does not register it. Each reserved rule is blocked
-on a named capability the fact layers do not provide yet — for example
-post-Transform identity facts (`MLC116`), cross-registration updater
-read-after-write ordering facts (`MLR109`), SVG asset content facts
-(`MLR118`), an alias-safe cross-object `z_index` stacking proof (`MLR122`),
-pixel-coverage facts (`MLP212`), calibrated workload profiles (`MLP213`),
-and opacity-immutability facts (`MLP223`).
 
 The full index with per-rule status, severity, and confidence is in
 [docs/rules/README.md](docs/rules/README.md); each implemented rule has a
@@ -586,9 +577,9 @@ deterministic and byte-stable for the same input.
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
   ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
   states each rule's exact scope.
-- **Not yet implemented.** The 9 reserved rules (see above); the SQLite
-  result cache (`--no-cache` is an accepted no-op); threshold calibration
-  against rendered baselines; a nightly render-comparison CI.
+- **Not yet implemented.** The SQLite result cache (`--no-cache` is an
+  accepted no-op); threshold calibration against rendered baselines; a
+  nightly render-comparison CI.
 
 ## Development
 

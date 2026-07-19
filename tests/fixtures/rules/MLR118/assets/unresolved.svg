@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <path id="known" d="M0 0L1 1"/>
+  <use href="#absent"/>
+</svg>

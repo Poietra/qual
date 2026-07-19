@@ -379,6 +379,18 @@ fn mlc113_safe_fix_moves_kwargs_and_is_idempotent() {
 }
 
 #[test]
+fn mlc114_override_animation_chain_golden() {
+    assert_golden(
+        "MLC114",
+        &[
+            "alias.py:16:48 MLC114 error high",
+            "invalid.py:17:48 MLC114 error high",
+            "invalid.py:18:46 MLC114 error high",
+        ],
+    );
+}
+
+#[test]
 fn mlc115_removed_child_reappears_golden() {
     assert_golden(
         "MLC115",
@@ -391,6 +403,17 @@ fn mlc115_removed_child_reappears_golden() {
 }
 
 #[test]
+fn mlc116_post_transform_target_confusion_golden() {
+    assert_golden(
+        "MLC116",
+        &[
+            "alias.py:10:19 MLC116 info medium",
+            "invalid.py:10:19 MLC116 info medium",
+        ],
+    );
+}
+
+#[test]
 fn mlc117_stale_or_overwritten_builder_golden() {
     assert_golden(
         "MLC117",
@@ -398,6 +421,17 @@ fn mlc117_stale_or_overwritten_builder_golden() {
             "alias.py:8:16 MLC117 warning high",
             "invalid.py:8:16 MLC117 warning high",
             "invalid.py:17:17 MLC117 warning high",
+        ],
+    );
+}
+
+#[test]
+fn mlc118_updater_suspend_resume_divergence_golden() {
+    assert_golden(
+        "MLC118",
+        &[
+            "alias.py:9:19 MLC118 info medium",
+            "invalid.py:9:19 MLC118 info medium",
         ],
     );
 }
@@ -541,7 +575,7 @@ fn mlc129_play_lag_ratio_stagger_golden() {
 
 #[test]
 fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
-    let expected: [(&str, Severity, Confidence, &[&str]); 16] = [
+    let expected: [(&str, Severity, Confidence, &[&str]); 19] = [
         ("MLC107", Severity::Error, Confidence::High, &["lifecycle"]),
         (
             "MLC108",
@@ -568,18 +602,21 @@ fn phase2_lifecycle_rule_metadata_matches_the_design_catalog() {
             Confidence::Certain,
             &["qualified-calls", "lifecycle"],
         ),
+        ("MLC114", Severity::Error, Confidence::High, &["lifecycle"]),
         (
             "MLC115",
             Severity::Warning,
             Confidence::High,
             &["lifecycle"],
         ),
+        ("MLC116", Severity::Info, Confidence::Medium, &["lifecycle"]),
         (
             "MLC117",
             Severity::Warning,
             Confidence::High,
             &["lifecycle"],
         ),
+        ("MLC118", Severity::Info, Confidence::Medium, &["lifecycle"]),
         (
             "MLC119",
             Severity::Error,

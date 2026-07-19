@@ -69,14 +69,7 @@ pub fn resolve_literal(
         return AssetResolution::Unverifiable;
     }
     let assets_base = working_dir.join(assets_dir);
-
-    // Candidates in Manim's exact order. `Path::join` with an absolute
-    // `literal` replaces the base, matching Python's `Path` semantics.
-    let mut candidates: Vec<PathBuf> = vec![working_dir.join(literal)];
-    candidates.push(assets_base.join(literal));
-    for extension in extensions {
-        candidates.push(assets_base.join(format!("{literal}{extension}")));
-    }
+    let candidates = literal_candidates(working_dir, assets_dir, literal, extensions);
 
     for candidate in &candidates {
         if candidate.exists() {
@@ -99,6 +92,47 @@ pub fn resolve_literal(
         .map(|candidate| display_path(project_root, candidate))
         .collect();
     AssetResolution::NotFound { tried }
+}
+
+/// Returns the exact on-disk candidate Manim will open, in runtime search
+/// order. Unlike [`resolve_literal`], this is only for consumers that need
+/// to inspect a successfully resolved asset (`MLR118`); case-only matches,
+/// foreign path syntax, and unverifiable working directories stay unknown.
+#[must_use]
+pub fn resolved_literal_path(
+    working_dir: &Path,
+    assets_dir: &str,
+    literal: &str,
+    extensions: &[&str],
+) -> Option<PathBuf> {
+    if literal.starts_with('~')
+        || literal.contains('\\')
+        || has_drive_prefix(literal)
+        || !working_dir.is_dir()
+    {
+        return None;
+    }
+    literal_candidates(working_dir, assets_dir, literal, extensions)
+        .into_iter()
+        .find(|candidate| candidate.exists())
+}
+
+fn literal_candidates(
+    working_dir: &Path,
+    assets_dir: &str,
+    literal: &str,
+    extensions: &[&str],
+) -> Vec<PathBuf> {
+    let assets_base = working_dir.join(assets_dir);
+    // `Path::join` with an absolute `literal` replaces the base, matching
+    // Python's `Path` semantics.
+    let mut candidates = vec![working_dir.join(literal), assets_base.join(literal)];
+    candidates.extend(
+        extensions
+            .iter()
+            .map(|extension| assets_base.join(format!("{literal}{extension}"))),
+    );
+    candidates
 }
 
 /// Whether the file also exists next to the analyzed source file. Manim
@@ -189,6 +223,10 @@ mod tests {
         assert_eq!(
             resolve_literal(root, root, ".", "logo.svg", SVG_EXTENSIONS),
             AssetResolution::Found
+        );
+        assert_eq!(
+            resolved_literal_path(root, ".", "logo", SVG_EXTENSIONS),
+            Some(root.join("./logo.svg"))
         );
         // Extension appended in the assets_dir step.
         assert_eq!(

@@ -137,6 +137,12 @@ pub enum SceneMembershipEffect {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SymbolEffects {
+    /// A mobject method has an ``@override_animate`` implementation, so
+    /// `_AnimationBuilder` must build that custom Animation instead of a
+    /// normal `_MethodAnimation`. Chaining any other method with it raises
+    /// `NotImplementedError` (mobject.py `_AnimationBuilder.__getattr__`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animate_override: Option<bool>,
     /// Animation adds its target to the Scene during play setup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub introducer: Option<bool>,

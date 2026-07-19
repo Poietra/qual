@@ -729,6 +729,13 @@ impl<'a> Machine<'a, '_> {
                         // fact widens instead of staying stale.
                         widen_z_index_family(state, &id);
                     }
+                    if matches!(kind, MutationKind::Style | MutationKind::Opacity) {
+                        if let Some(object) = state.heap.object_mut(&id) {
+                            object.fill_opacity = Num::Unknown;
+                            object.stroke_opacity = Num::Unknown;
+                            object.stroke_width = Num::Unknown;
+                        }
+                    }
                     self.mutate(&id, *kind, event.site, state);
                 }
             }

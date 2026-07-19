@@ -539,6 +539,15 @@
       "kind": "constant",
       "note": "Unit vector (0, 0, 1) as a rotation axis."
     },
+    "manim.mobject.frame.FullScreenRectangle": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.frame.ScreenRectangle"],
+      "note": "Sets its height to config.frame_height after ScreenRectangle construction; with the inherited default 16:9 aspect ratio it proves full-frame geometry for matching render profiles (mobject/frame.py, MLP212)."
+    },
+    "manim.mobject.frame.ScreenRectangle": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.geometry.polygram.Rectangle"]
+    },
     "manim.mobject.geometry.arc.Arc": {
       "kind": "vmobject",
       "bases": ["manim.mobject.geometry.arc.TipableVMobject"]
@@ -579,6 +588,43 @@
     "manim.mobject.geometry.polygram.Square": {
       "kind": "vmobject",
       "bases": ["manim.mobject.geometry.polygram.Rectangle"]
+    },
+    "manim.mobject.graph.GenericGraph": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.types.vectorized_mobject.VMobject"],
+      "note": "Base class for Graph; its vertex/edge mutation methods declare custom @override_animate implementations (mobject/graph.py GenericGraph)."
+    },
+    "manim.mobject.graph.GenericGraph.add_edges": {
+      "kind": "method",
+      "effects": {
+        "animate_override": true
+      },
+      "note": "@override_animate(add_edges) builds the graph-specific edge creation animation; _AnimationBuilder forbids chaining it with another method (mobject/graph.py)."
+    },
+    "manim.mobject.graph.GenericGraph.add_vertices": {
+      "kind": "method",
+      "effects": {
+        "animate_override": true
+      },
+      "note": "@override_animate(add_vertices) builds the graph-specific vertex creation animation; _AnimationBuilder forbids chaining it with another method (mobject/graph.py)."
+    },
+    "manim.mobject.graph.GenericGraph.remove_edges": {
+      "kind": "method",
+      "effects": {
+        "animate_override": true
+      },
+      "note": "@override_animate(remove_edges) builds the graph-specific edge removal animation; _AnimationBuilder forbids chaining it with another method (mobject/graph.py)."
+    },
+    "manim.mobject.graph.GenericGraph.remove_vertices": {
+      "kind": "method",
+      "effects": {
+        "animate_override": true
+      },
+      "note": "@override_animate(remove_vertices) builds the graph-specific vertex removal animation; _AnimationBuilder forbids chaining it with another method (mobject/graph.py)."
+    },
+    "manim.mobject.graph.Graph": {
+      "kind": "vmobject",
+      "bases": ["manim.mobject.graph.GenericGraph"]
     },
     "manim.mobject.graphing.coordinate_systems.Axes": {
       "kind": "vmobject",
@@ -762,6 +808,10 @@
       "kind": "method",
       "returns_self": true
     },
+    "manim.mobject.mobject.override_animate": {
+      "kind": "function",
+      "note": "Decorator attaching a custom Animation factory to a mobject method; _AnimationBuilder raises NotImplementedError when an overridden method participates in a method chain (mobject.py override_animate/_AnimationBuilder.__getattr__)."
+    },
     "manim.mobject.opengl.opengl_surface.OpenGLSurface": {
       "kind": "mobject",
       "bases": ["manim.mobject.opengl.opengl_mobject.OpenGLMobject"],
@@ -836,7 +886,7 @@
     "manim.mobject.three_d.three_dimensions.Surface": {
       "kind": "vmobject",
       "bases": ["manim.mobject.types.vectorized_mobject.VGroup"],
-      "note": "Face count drives per-frame sort/projection/raster cost under Cairo (three_dimensions.py Surface, DESIGN 4.3)."
+      "note": "Face count drives per-frame sort/projection/raster cost under Cairo; the versioned calibration records 1,024-face (32x32) behavior (three_dimensions.py Surface, docs/research/perf-evidence.md, MLP213)."
     },
     "manim.mobject.types.image_mobject.AbstractImageMobject": {
       "kind": "mobject",
@@ -1599,6 +1649,7 @@
     "FadeToColor": "manim.animation.transform.FadeToColor",
     "FadeTransform": "manim.animation.transform.FadeTransform",
     "FadeTransformPieces": "manim.animation.transform.FadeTransformPieces",
+    "FullScreenRectangle": "manim.mobject.frame.FullScreenRectangle",
     "GOLD": "manim.utils.color.manim_colors.GOLD",
     "GOLD_A": "manim.utils.color.manim_colors.GOLD_A",
     "GOLD_B": "manim.utils.color.manim_colors.GOLD_B",
@@ -1625,6 +1676,7 @@
     "GREY_C": "manim.utils.color.manim_colors.GREY_C",
     "GREY_D": "manim.utils.color.manim_colors.GREY_D",
     "GREY_E": "manim.utils.color.manim_colors.GREY_E",
+    "Graph": "manim.mobject.graph.Graph",
     "Group": "manim.mobject.mobject.Group",
     "GrowFromCenter": "manim.animation.growing.GrowFromCenter",
     "GrowFromPoint": "manim.animation.growing.GrowFromPoint",
@@ -1719,6 +1771,7 @@
     "SVGMobject": "manim.mobject.svg.svg_mobject.SVGMobject",
     "ScaleInPlace": "manim.animation.transform.ScaleInPlace",
     "Scene": "manim.scene.scene.Scene",
+    "ScreenRectangle": "manim.mobject.frame.ScreenRectangle",
     "ShowPartial": "manim.animation.creation.ShowPartial",
     "ShrinkToCenter": "manim.animation.transform.ShrinkToCenter",
     "SingleStringMathTex": "manim.mobject.text.tex_mobject.SingleStringMathTex",
@@ -1770,6 +1823,7 @@
     "Y_AXIS": "manim.constants.Y_AXIS",
     "Z_AXIS": "manim.constants.Z_AXIS",
     "always_redraw": "manim.animation.updaters.mobject_update_utils.always_redraw",
+    "override_animate": "manim.mobject.mobject.override_animate",
     "average_color": "manim.utils.color.core.average_color",
     "bezier": "manim.utils.bezier.bezier",
     "bezier_remap": "manim.utils.bezier.bezier_remap",

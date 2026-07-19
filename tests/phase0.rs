@@ -308,25 +308,45 @@ fn explain_unknown_rule_is_an_error_and_known_rules_print_docs() {
     assert!(execution.stdout.contains("MLC000"));
     assert_eq!(execution.exit, ExitStatus::Success);
 
-    // Reserved rules are presented as reserved, never as checked.
+    // Newly implemented rules expose their documentation.
     let execution = application::execute(Command::Explain {
         rule: "MLC114".to_owned(),
     })
     .unwrap();
-    assert!(execution.stdout.contains("reserved"));
+    assert!(execution.stdout.contains("override-animation"));
+
+    let execution = application::execute(Command::Explain {
+        rule: "MLP213".to_owned(),
+    })
+    .unwrap();
+    assert!(execution.stdout.contains("1,024"));
+
+    // The Phase-4 completion rules expose their documentation too.
+    let execution = application::execute(Command::Explain {
+        rule: "MLR109".to_owned(),
+    })
+    .unwrap();
+    assert!(execution.stdout.contains("one-frame"));
 }
 
 #[test]
-fn rules_command_lists_reserved_ids_without_claiming_them() {
+fn rules_command_lists_every_catalog_id_as_implemented() {
     let execution = application::execute(Command::Rules).unwrap();
     assert!(execution.stdout.contains("MLC000  phase 0  implemented"));
     assert!(execution.stdout.contains("MLC101  phase 1  implemented"));
     assert!(execution.stdout.contains("MLC107  phase 2  implemented"));
-    assert!(execution.stdout.contains("MLC114  phase 2  reserved"));
-    assert!(execution.stdout.contains("MLP223  phase 3  reserved"));
+    assert!(execution.stdout.contains("MLC114  phase 2  implemented"));
+    assert!(execution.stdout.contains("MLC116  phase 2  implemented"));
+    assert!(execution.stdout.contains("MLC118  phase 2  implemented"));
+    assert!(execution.stdout.contains("MLP212  phase 3  implemented"));
+    assert!(execution.stdout.contains("MLP213  phase 3  implemented"));
+    assert!(execution.stdout.contains("MLP223  phase 3  implemented"));
     assert!(execution.stdout.contains("MLP225  phase 3  implemented"));
     assert!(execution.stdout.contains("MLD307  phase 4  implemented"));
-    assert!(execution.stdout.contains("MLR118  phase 4  reserved"));
+    assert!(execution.stdout.contains("MLR109  phase 4  implemented"));
+    assert!(execution.stdout.contains("MLR118  phase 4  implemented"));
+    assert!(execution.stdout.contains("MLR122  phase 4  implemented"));
+    assert!(!execution.stdout.contains("reserved"));
     // Every catalog family appears.
     for prefix in ["MLC", "MLR", "MLP", "MLD"] {
         assert!(execution.stdout.contains(prefix));

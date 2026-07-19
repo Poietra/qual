@@ -125,6 +125,8 @@ pub struct MobjectState {
     pub fill_opacity: Num,
     /// Stroke opacity fact.
     pub stroke_opacity: Num,
+    /// Foreground stroke width fact.
+    pub stroke_width: Num,
     /// Whether the object is in the scene's foreground list.
     pub foreground: Truth,
     /// The object's `z_index` (Cairo display-order sort key, DESIGN §3.4).
@@ -183,6 +185,7 @@ impl MobjectState {
             visibility: Visibility::Invisible,
             fill_opacity: Num::Unknown,
             stroke_opacity: Num::Unknown,
+            stroke_width: Num::Unknown,
             foreground: Truth::No,
             z_index: Num::Unknown,
             fixed_orientation: Truth::No,
@@ -218,6 +221,7 @@ impl MobjectState {
             visibility: self.visibility.join(other.visibility),
             fill_opacity: self.fill_opacity.join(&other.fill_opacity),
             stroke_opacity: self.stroke_opacity.join(&other.stroke_opacity),
+            stroke_width: self.stroke_width.join(&other.stroke_width),
             foreground: self.foreground.join(other.foreground),
             z_index: self.z_index.join(&other.z_index),
             fixed_orientation: self.fixed_orientation.join(other.fixed_orientation),
@@ -249,6 +253,7 @@ impl MobjectState {
         widened.kind = self.kind.widen(&next.kind);
         widened.fill_opacity = self.fill_opacity.widen(&next.fill_opacity);
         widened.stroke_opacity = self.stroke_opacity.widen(&next.stroke_opacity);
+        widened.stroke_width = self.stroke_width.widen(&next.stroke_width);
         widened.z_index = self.z_index.widen(&next.z_index);
         widened.family_size = self.family_size.widen(&next.family_size);
         widened.point_count = self.point_count.widen(&next.point_count);
