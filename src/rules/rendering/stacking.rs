@@ -1,5 +1,6 @@
-//! `MLR121`: `shift(OUT)` / `set_z(...)` for stacking order in a 2D Cairo
-//! scene (DESIGN §7.2, §3.4).
+//! `MLR121` / `MLR122`: 2D-coordinate stacking attempts and a
+//! `bring_to_front` re-add defeated by a lower `z_index` (DESIGN §7.2,
+//! §3.4).
 //!
 //! Verified against the sibling Manim checkout: the plain 2D `Camera`
 //! projects points by taking only the x/y columns
@@ -21,11 +22,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::json;
 
 use crate::config::model::Renderer;
-use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
 use crate::frontend::index::{ArgShape, LiteralFact, QualifiedCall, ReceiverKind};
 use crate::frontend::statements::FileBindingFacts;
 use crate::rules::base::{Rule, RuleContext};
+use crate::semantic::events::Event;
 use crate::semantic::interpreter::CameraKind;
+use crate::semantic::values::{Cardinality, Num, Presence};
 use crate::source::SourceFile;
 
 use super::{
@@ -120,6 +123,182 @@ impl Rule for ZShiftForStacking {
         }
         diagnostics
     }
+}
+
+const MLR122: RuleMetadata = RuleMetadata {
+    id: "MLR122",
+    summary: "bring_to_front is defeated by a lower z_index",
+    default_enabled: true,
+    default_severity: Severity::Warning,
+    minimum_confidence: Confidence::High,
+    implementation_phase: 4,
+    required_profiles: &[],
+    required_capabilities: &["qualified-calls", "lifecycle"],
+    supersedes: &[],
+};
+
+/// A conclusive Cairo stacking contradiction: `bring_to_front(target)`
+/// really did move an existing leaf to the end of the root list, but a
+/// second non-empty leaf still has a strictly larger exact `z_index`.
+pub(super) struct BringToFrontBelowHigherZ;
+
+impl Rule for BringToFrontBelowHigherZ {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLR122
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the proof keeps identity, root-order, leaf, and z-index gates together"
+    )]
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        let Some(profile) = context.knowledge() else {
+            return Vec::new();
+        };
+        let cairo_profiles = renderer_profile_names(context, Renderer::Cairo);
+        if cairo_profiles.is_empty() {
+            return Vec::new();
+        }
+        let mut diagnostics = Vec::new();
+        for scene in &context.lifecycle_facts().scenes {
+            if scene.constructor_state_unknown {
+                continue;
+            }
+            for call in context.qualified_calls().calls.iter().filter(|call| {
+                call.context.class_name.as_deref() == Some(scene.qualified_name.as_str())
+            }) {
+                let Some((canonical, _)) = resolved_method_for_call(profile, call) else {
+                    continue;
+                };
+                if canonical != "manim.scene.scene.Scene.bring_to_front"
+                    || call.has_star_args
+                    || call.has_star_star_kwargs
+                    || call.positional_count != 1
+                    || !call.keyword_names.is_empty()
+                {
+                    continue;
+                }
+                let site = crate::semantic::values::AllocationSite::new(call.file, call.call_range);
+                let Some(target) = scene.events.iter().find_map(|traced| {
+                    if traced.site != site || traced.certainty != Presence::Present {
+                        return None;
+                    }
+                    let Event::SceneAdd(add) = &traced.event else {
+                        return None;
+                    };
+                    (add.order_effect && add.objects.len() == 1).then(|| add.objects[0].clone())
+                }) else {
+                    continue;
+                };
+                if target.cardinality != Cardinality::Singleton {
+                    continue;
+                }
+                let Some(snapshot) = scene.state_at(call.file, site.end) else {
+                    continue;
+                };
+                let Some(scene_state) = snapshot.heap.scene(&scene.scene_id) else {
+                    continue;
+                };
+                if scene_state.roots.order_known != crate::semantic::values::Truth::Yes {
+                    continue;
+                }
+                let target = snapshot.heap.resolve(&target);
+                let Some(target_state) = snapshot.heap.object(&target) else {
+                    continue;
+                };
+                let Some(target_z) = exact_value(&target_state.z_index) else {
+                    continue;
+                };
+                if target_state.scene_root_membership != Presence::Present
+                    || !target_state.children.is_empty()
+                    || target_state
+                        .point_count
+                        .lower_bound()
+                        .is_none_or(|points| points < 1.0)
+                {
+                    continue;
+                }
+                let Some(target_index) = scene_state
+                    .roots
+                    .items
+                    .iter()
+                    .position(|root| snapshot.heap.are_aliased(root, &target))
+                else {
+                    continue;
+                };
+                let obstructing =
+                    scene_state
+                        .roots
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, other)| {
+                            if snapshot.heap.are_aliased(other, &target)
+                                || other.cardinality != Cardinality::Singleton
+                            {
+                                return None;
+                            }
+                            let other = snapshot.heap.resolve(other);
+                            let state = snapshot.heap.object(&other)?;
+                            if state.scene_root_membership != Presence::Present
+                                || !state.children.is_empty()
+                                || state
+                                    .point_count
+                                    .lower_bound()
+                                    .is_none_or(|points| points < 1.0)
+                            {
+                                return None;
+                            }
+                            let other_z = exact_value(&state.z_index)?;
+                            (other_z > target_z).then_some((other, other_z, index))
+                        });
+                let Some((other, other_z, other_index)) = obstructing else {
+                    continue;
+                };
+                let file = context.sources().file(call.file);
+                let mut evidence = BTreeMap::new();
+                evidence.insert("target_z_index".to_owned(), json!(target_z));
+                evidence.insert("higher_z_index".to_owned(), json!(other_z));
+                evidence.insert(
+                    "target_root_index_after_readd".to_owned(),
+                    json!(target_index),
+                );
+                evidence.insert(
+                    "higher_root_index_after_readd".to_owned(),
+                    json!(other_index),
+                );
+                evidence.insert("renderer".to_owned(), json!("cairo"));
+                let mut diagnostic = build_diagnostic(
+                    &MLR122,
+                    file,
+                    call.call_range,
+                    Confidence::High,
+                    format!(
+                        "`bring_to_front(...)` re-adds this mobject last, but its z_index ({target_z}) is below another mobject ({other_z}); Cairo still orders it behind — raise its z_index instead"
+                    ),
+                    "Cairo stable-sorts the flattened scene family by z_index before drawing. Re-adding an existing root only changes the tie order, so it cannot move a lower-z object in front of an object with a strictly higher z_index. Set a suitable z_index on the target (or lower the obstructing object's z_index).",
+                    evidence,
+                    cairo_profiles.clone(),
+                    None,
+                );
+                let other_file = context.sources().file(other.site.file);
+                diagnostic.related_locations.push(RelatedLocation {
+                    path: other_file.relative_path().to_owned(),
+                    span: other_file.span_of_range(super::site_range(other.site)),
+                    message: format!("this mobject keeps the higher z_index ({other_z})"),
+                });
+                diagnostics.push(diagnostic);
+            }
+        }
+        diagnostics
+    }
+}
+
+fn exact_value(value: &Num) -> Option<f64> {
+    let Num::Exact(literal) = value else {
+        return None;
+    };
+    Some(literal.as_f64())
 }
 
 /// A confirmed z-stacking attempt at one call site.

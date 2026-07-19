@@ -48,6 +48,8 @@ pub(super) struct BuilderValue {
     pub(super) call_path: Vec<AllocationSite>,
     pub(super) target: Option<ObjectId>,
     pub(super) methods: Vec<String>,
+    /// Source span of each entry in `methods`, narrowed to the method name.
+    pub(super) method_sites: Vec<AllocationSite>,
     pub(super) channels: BTreeSet<WriteChannel>,
     pub(super) channels_known: Truth,
 }
@@ -108,6 +110,21 @@ fn join_value_maps(
         joined.insert(key.clone(), value);
     }
     joined
+}
+
+fn snapshot_object_bindings(state: &ExecState) -> BTreeMap<String, ObjectId> {
+    let mut bindings = BTreeMap::new();
+    for (name, value) in &state.env {
+        if let AbstractValue::Object(id) = value {
+            bindings.insert(name.clone(), state.heap.resolve(id));
+        }
+    }
+    for (name, value) in &state.attrs {
+        if let AbstractValue::Object(id) = value {
+            bindings.insert(format!("self.{name}"), state.heap.resolve(id));
+        }
+    }
+    bindings
 }
 
 /// The full abstract state at one program point.
@@ -350,7 +367,8 @@ impl TraceSink {
     ///   execution that also definitely played (the MLC117 combination
     ///   must hold within a single execution), degrading to `Maybe`
     ///   otherwise;
-    /// - chained channels union and their completeness joins.
+    /// - chained methods/sites keep the longest syntactic prefix, and
+    ///   channels union with their completeness verdict.
     pub(super) fn sync_builders(&mut self) {
         /// `Yes` > `Maybe` > `No` (a may-fact strengthens, never resets).
         const fn strongest(a: Truth, b: Truth) -> Truth {
@@ -374,6 +392,7 @@ impl TraceSink {
                     // keep the longest observed prefix deterministically.
                     if fact.methods.len() > merged.methods.len() {
                         merged.methods.clone_from(&fact.methods);
+                        merged.method_sites.clone_from(&fact.method_sites);
                     }
                     merged.channels.extend(fact.channels.iter().copied());
                     merged.channels_known = merged.channels_known.join(fact.channels_known);
@@ -590,6 +609,7 @@ impl<'a> Machine<'a, '_> {
             },
             scope: self.body_site,
             heap: state.heap.clone(),
+            object_bindings: snapshot_object_bindings(state),
         });
     }
 
@@ -730,6 +750,7 @@ impl<'a> Machine<'a, '_> {
                         site: self.site(stmt.range()),
                         scope: self.body_site,
                         heap: state.heap.clone(),
+                        object_bindings: snapshot_object_bindings(state),
                     });
                 }
             }

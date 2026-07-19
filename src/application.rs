@@ -1232,9 +1232,13 @@ fn render_statistics(diagnostics: &[Diagnostic]) -> String {
     output
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the deterministic embedded rule-document table has one row per implemented rule"
+)]
 fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
     /// Embedded rule documentation for implemented rules.
-    const DOCS: [(&str, &str); 83] = [
+    const DOCS: [(&str, &str); 92] = [
         ("MLC000", include_str!("../docs/rules/MLC000.md")),
         ("MLC001", include_str!("../docs/rules/MLC001.md")),
         ("MLC101", include_str!("../docs/rules/MLC101.md")),
@@ -1250,8 +1254,11 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLC111", include_str!("../docs/rules/MLC111.md")),
         ("MLC112", include_str!("../docs/rules/MLC112.md")),
         ("MLC113", include_str!("../docs/rules/MLC113.md")),
+        ("MLC114", include_str!("../docs/rules/MLC114.md")),
         ("MLC115", include_str!("../docs/rules/MLC115.md")),
+        ("MLC116", include_str!("../docs/rules/MLC116.md")),
         ("MLC117", include_str!("../docs/rules/MLC117.md")),
+        ("MLC118", include_str!("../docs/rules/MLC118.md")),
         ("MLC119", include_str!("../docs/rules/MLC119.md")),
         ("MLC120", include_str!("../docs/rules/MLC120.md")),
         ("MLC121", include_str!("../docs/rules/MLC121.md")),
@@ -1271,6 +1278,7 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLR106", include_str!("../docs/rules/MLR106.md")),
         ("MLR107", include_str!("../docs/rules/MLR107.md")),
         ("MLR108", include_str!("../docs/rules/MLR108.md")),
+        ("MLR109", include_str!("../docs/rules/MLR109.md")),
         ("MLR110", include_str!("../docs/rules/MLR110.md")),
         ("MLR111", include_str!("../docs/rules/MLR111.md")),
         ("MLR112", include_str!("../docs/rules/MLR112.md")),
@@ -1279,9 +1287,11 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLR115", include_str!("../docs/rules/MLR115.md")),
         ("MLR116", include_str!("../docs/rules/MLR116.md")),
         ("MLR117", include_str!("../docs/rules/MLR117.md")),
+        ("MLR118", include_str!("../docs/rules/MLR118.md")),
         ("MLR119", include_str!("../docs/rules/MLR119.md")),
         ("MLR120", include_str!("../docs/rules/MLR120.md")),
         ("MLR121", include_str!("../docs/rules/MLR121.md")),
+        ("MLR122", include_str!("../docs/rules/MLR122.md")),
         ("MLR123", include_str!("../docs/rules/MLR123.md")),
         ("MLR124", include_str!("../docs/rules/MLR124.md")),
         ("MLR125", include_str!("../docs/rules/MLR125.md")),
@@ -1305,6 +1315,8 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLP209", include_str!("../docs/rules/MLP209.md")),
         ("MLP210", include_str!("../docs/rules/MLP210.md")),
         ("MLP211", include_str!("../docs/rules/MLP211.md")),
+        ("MLP212", include_str!("../docs/rules/MLP212.md")),
+        ("MLP213", include_str!("../docs/rules/MLP213.md")),
         ("MLP214", include_str!("../docs/rules/MLP214.md")),
         ("MLP215", include_str!("../docs/rules/MLP215.md")),
         ("MLP216", include_str!("../docs/rules/MLP216.md")),
@@ -1314,6 +1326,7 @@ fn run_explain(rule: &str) -> Result<Execution, ApplicationError> {
         ("MLP220", include_str!("../docs/rules/MLP220.md")),
         ("MLP221", include_str!("../docs/rules/MLP221.md")),
         ("MLP222", include_str!("../docs/rules/MLP222.md")),
+        ("MLP223", include_str!("../docs/rules/MLP223.md")),
         ("MLP224", include_str!("../docs/rules/MLP224.md")),
         ("MLP225", include_str!("../docs/rules/MLP225.md")),
         ("MLP226", include_str!("../docs/rules/MLP226.md")),

@@ -272,7 +272,23 @@ pub enum UpdaterHost {
 /// [`UpdaterBodyFact::calls_unknown`] `Yes` and degrades every dependent
 /// field to at most `Maybe` — a rule must never treat `Maybe` as a
 /// definite verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdaterTargetRead {
+    /// Lexical object binding read by the callback (`driver` or
+    /// `self.driver`). Rules map it to identity at the frame site.
+    pub binding: String,
+    /// Curated getter spelling (`get_center`, ...).
+    pub method: String,
+    /// Source range of the getter call.
+    pub site: AllocationSite,
+    /// Live-state channel consumed by the getter.
+    pub channel: WriteChannel,
+    /// Whether the read and the enclosing target write execute on every
+    /// callback invocation.
+    pub certainty: Truth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdaterBodyFact {
     /// The body reads the frame-delta parameter (the parameter named `dt`
     /// for mobject updaters, the first parameter for scene updaters).
@@ -284,6 +300,16 @@ pub struct UpdaterBodyFact {
     /// The body mutates the updater's mobject parameter (curated mutator
     /// call, raw attribute write, or the parameter escaping into a call).
     pub mutates_target: Truth,
+    /// Curated live-target write channels used by the callback. Absence is
+    /// meaningful only when [`UpdaterBodyFact::channels_known`] is `Yes`.
+    pub write_channels: BTreeSet<WriteChannel>,
+    /// Direct external-object getters whose result is passed as an
+    /// argument to a curated write on the updater target. This narrow
+    /// dependency fact supports `MLR109` without treating unrelated reads
+    /// in the same callback as data dependencies.
+    pub target_reads: Vec<UpdaterTargetRead>,
+    /// Whether `write_channels` completely classifies every target write.
+    pub channels_known: Truth,
     /// The body performs *only* `shift` / `rotate` / `scale` / `move_to` /
     /// `set_*` calls on the updater parameter plus pure reads. `No` when a
     /// definitely different effect exists, `Maybe` when unprovable.
@@ -301,6 +327,9 @@ impl UpdaterBodyFact {
             uses_dt: Truth::Maybe,
             reads_frame_varying: Truth::Maybe,
             mutates_target: Truth::Maybe,
+            write_channels: BTreeSet::new(),
+            target_reads: Vec::new(),
+            channels_known: Truth::Maybe,
             pure_affine_on_target: Truth::Maybe,
             calls_unknown: Truth::Maybe,
         }
@@ -367,6 +396,9 @@ pub struct AnimateBuilderFact {
     /// Methods chained on the builder, in order. Empty means a bare
     /// `mob.animate` (MLR102 candidate).
     pub methods: Vec<String>,
+    /// Source span of each entry in [`AnimateBuilderFact::methods`],
+    /// narrowed to the method attribute name. Parallel to `methods`.
+    pub method_sites: Vec<AllocationSite>,
     /// Write channels of the chained methods.
     pub channels: BTreeSet<WriteChannel>,
     /// Whether `channels` is a complete classification.
@@ -621,11 +653,18 @@ pub struct SceneLifecycle {
 ///   parent/children sets.
 /// - `MLC113`: [`SceneLifecycle::builders`] method lists plus the
 ///   qualified-call facts for kwargs position.
+/// - `MLC114`: builder method names/sites plus project/profile
+///   `@override_animate` facts; only a positive override in a multi-method
+///   chain fires.
 /// - `MLC115`: [`SceneLifecycle::scene_removals`] (surviving parents) +
 ///   later `SceneAdd` events / [`SceneLifecycle::membership_at`].
+/// - `MLC116`: normal-Transform source/target identities from
+///   [`PlayedAnimation`] plus their pre-later-play membership snapshot.
 /// - `MLC117`: [`AnimateBuilderFact::target_epoch_at_creation`] vs
 ///   [`AnimateBuilderFact::target_epoch_at_play`], and
 ///   [`AnimateBuilderFact::overwritten_by_later_builder`].
+/// - `MLC118`: active updater registrations with complete callback write
+///   channels intersected with a suspending Animation's channels.
 /// - `MLC125`: [`SceneLifecycle::updater_removals`] with
 ///   [`UpdaterRemoval::matched`] `No`.
 /// - `MLR102`: [`SceneLifecycle::builders`] with empty `methods` that
@@ -650,12 +689,24 @@ pub struct SceneLifecycle {
 ///   [`ReturnFact::returns_mobject`] `No`.
 /// - `MLR116`: [`SceneLifecycle::path_state_at`] at an `add_line_to` /
 ///   `close_path` call span; fire only on [`PathStateFact::empty`] `Yes`.
+/// - `MLR109`: direct [`UpdaterBodyFact::target_reads`] resolved through
+///   [`StateSnapshot::object_bindings`] at a dynamic wait, intersected with
+///   a later leaf root updater's complete write channels.
+/// - `MLR122`: exact post-re-add scene-root order plus per-leaf `z_index`
+///   facts under Cairo.
 /// - `MLP218`: [`UpdaterRegistration::body`] with `uses_dt == No`,
 ///   `reads_frame_varying == No`, `calls_unknown == No`, and
 ///   `pure_affine_on_target == Yes`.
 /// - `MLP221`: qualified-call literal facts
 ///   (`frontend::index::LiteralFact::Tuple` / `List` on `t_range` /
 ///   plot-step arguments).
+/// - `MLP212`: pre-play singleton `FullScreenRectangle` style state
+///   (`MobjectState::fill_opacity`) plus certain animation targets and
+///   literal duration/profile pixels.
+/// - `MLP213`: exact `Surface` allocation identity, literal constructor
+///   resolution, certain target plays, and active Cairo profiles.
+/// - `MLP223`: pre-play `stroke_opacity` / `stroke_width` / non-empty path
+///   state plus the future event/play trace proving opacity immutability.
 /// - `MLP227`: [`PlayFact::always_update_mobjects`] `Yes` with no
 ///   time-based updater / scene updater / stop condition in the interval
 ///   ([`PlayFact::dynamic_wait`] evidence) and a static

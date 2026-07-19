@@ -4,12 +4,13 @@
 //! facts: `MLC101`-`MLC106`, `MLC109`, `MLC122`, `MLC126`, `MLC127`.
 //! Phase 2 adds the state-dependent rules over the abstract-interpreter
 //! facts: `MLC107`, `MLC108`, `MLC110`, `MLC111`, `MLC112`, `MLC113`,
-//! `MLC115`, `MLC117`, `MLC119`, `MLC120`, `MLC121`, `MLC123`, `MLC124`,
-//! `MLC125`, `MLC128`, `MLC129`.
+//! `MLC114`, `MLC115`, `MLC117`, `MLC119`, `MLC120`, `MLC121`, `MLC123`,
+//! `MLC124`, `MLC125`, `MLC128`, `MLC129`.
 
 mod builder_rules;
 mod callbacks;
 mod constructors;
+mod identity;
 mod membership;
 mod ownership;
 mod play_args;
@@ -42,8 +43,11 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ownership::OrphanedUpdaterObject),
         Box::new(updaters::FrozenWaitFrameVaryingUpdater),
         Box::new(builder_rules::AnimateKwargsAfterMethod),
+        Box::new(builder_rules::UnsupportedOverrideAnimateChain),
         Box::new(structure::RemovedChildReappears),
+        Box::new(identity::PostTransformTargetConfusion),
         Box::new(builder_rules::StaleAnimateBuilder),
+        Box::new(updaters::UpdaterSuspendResumeDivergence),
         Box::new(structure::ReplaceMissingOld),
         Box::new(state_targets::MissingSavedState),
         Box::new(updaters::TimelineReentry),

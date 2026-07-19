@@ -3,6 +3,8 @@
 //! ([`SceneLifecycle::state_at`]), membership and own-path state at a
 //! program point, and per-statement ownership intervals (MLC111).
 
+use std::collections::BTreeMap;
+
 use crate::semantic::heap::AbstractHeap;
 use crate::semantic::values::{AllocationSite, Num, ObjectId, Presence, Truth};
 use crate::source::FileId;
@@ -23,6 +25,11 @@ pub struct StateSnapshot {
     pub scope: AllocationSite,
     /// The abstract heap after the statement (converged fixpoint state).
     pub heap: AbstractHeap,
+    /// Exact local / `self.<attr>` bindings to tracked mobjects at this
+    /// statement. Disagreeing branch bindings are omitted by the abstract
+    /// environment join. Callback-dependency rules use this to resolve a
+    /// lexical closure read at the frame site, never at registration time.
+    pub object_bindings: BTreeMap<String, ObjectId>,
 }
 
 /// Own-path state of one mobject at a program point (MLR116).

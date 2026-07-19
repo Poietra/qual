@@ -65,6 +65,11 @@ pub struct ClassRecord {
     pub base_ranges: Vec<TextRange>,
     /// Methods defined directly on this class, name → def byte range.
     pub methods: BTreeMap<String, TextRange>,
+    /// Target method names that have a directly declared
+    /// `@override_animate(target_method)` implementation on this class.
+    /// The decorator itself is resolved through the normal import/alias
+    /// machinery; textual name matches are never enough.
+    pub animate_overrides: BTreeSet<String>,
     /// Manim kinds reached through the resolved base chain.
     pub kinds: BTreeSet<ManimKind>,
     /// Canonical external base ids reached through the chain (project
@@ -1073,6 +1078,7 @@ impl Walker<'_> {
                 .collect();
             let base_ranges = def.bases.iter().map(Ranged::range).collect();
             let methods = direct_methods(&def.body);
+            let animate_overrides = self.direct_animate_overrides(&def.body, scopes);
             self.class_records.push(ClassRecord {
                 qualified_name: qualified.clone(),
                 name: def.name.to_string(),
@@ -1081,6 +1087,7 @@ impl Walker<'_> {
                 bases,
                 base_ranges,
                 methods,
+                animate_overrides,
                 kinds: BTreeSet::new(),
                 reached_bases: BTreeSet::new(),
                 bases_fully_resolved: false,
@@ -1160,6 +1167,49 @@ impl Walker<'_> {
             }
         }
         self.class_stack.pop();
+    }
+
+    /// Direct `@override_animate(method)` declarations in one class body.
+    ///
+    /// Only a decorator whose callee resolves conclusively to Manim's
+    /// canonical helper contributes a positive fact. Dynamic decorators,
+    /// unknown star imports, and non-name/attribute method arguments stay
+    /// absent rather than being guessed from spelling.
+    fn direct_animate_overrides(
+        &self,
+        body: &[ast::Stmt],
+        scopes: &ScopeStack<'_>,
+    ) -> BTreeSet<String> {
+        const OVERRIDE_ANIMATE: &str = "manim.mobject.mobject.override_animate";
+        let mut overrides = BTreeSet::new();
+        for statement in body {
+            let decorators = match statement {
+                ast::Stmt::FunctionDef(def) => def.decorator_list.as_slice(),
+                ast::Stmt::AsyncFunctionDef(def) => def.decorator_list.as_slice(),
+                _ => continue,
+            };
+            for decorator in decorators {
+                let ast::Expr::Call(call) = decorator else {
+                    continue;
+                };
+                let (_, candidates) = self.resolve_callee(&call.func, scopes);
+                if candidates.len() != 1 || !candidates.contains(OVERRIDE_ANIMATE) {
+                    continue;
+                }
+                let Some(target) = call.args.first() else {
+                    continue;
+                };
+                let method = match target {
+                    ast::Expr::Name(name) => Some(name.id.as_str()),
+                    ast::Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+                    _ => None,
+                };
+                if let Some(method) = method {
+                    overrides.insert(method.to_owned());
+                }
+            }
+        }
+        overrides
     }
 
     fn resolve_base(&self, base: &ast::Expr, scopes: &ScopeStack<'_>) -> BaseRef {

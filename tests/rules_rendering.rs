@@ -80,6 +80,22 @@ fn warning(rule: &'static str, needle: &'static str, occurrence: usize, offset: 
     )
 }
 
+fn warning_medium(
+    rule: &'static str,
+    needle: &'static str,
+    occurrence: usize,
+    offset: usize,
+) -> Expected {
+    Expected::new(
+        rule,
+        needle,
+        occurrence,
+        offset,
+        Severity::Warning,
+        Confidence::Medium,
+    )
+}
+
 fn info(rule: &'static str, needle: &'static str, occurrence: usize, offset: usize) -> Expected {
     Expected::new(
         rule,
@@ -1087,6 +1103,78 @@ fn mlr116_flags_path_edits_on_a_provably_empty_path_only() {
 }
 
 // ---------------------------------------------------------------------------
+// MLR109
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr109_flags_a_direct_reader_before_its_frame_varying_writer() {
+    let pyproject = "[tool.manim-lint]\nselect = [\"MLR109\"]\nmin-confidence = \"medium\"\n";
+    let (project, diagnostics) = run_fixture("MLR109", pyproject);
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[warning_medium("MLR109", "driver.get_center()", 1, 0)],
+    );
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "alias.py",
+        &[warning_medium("MLR109", "driver.get_center()", 1, 0)],
+    );
+    // Writer-first root order, composite dependencies, and recursive group
+    // order are outside the conclusive lag proof.
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let lag = find(&diagnostics, "invalid.py", "MLR109", 0);
+    assert_eq!(lag.confidence, Confidence::Medium);
+    assert!(lag.message.contains("previous frame"));
+    assert_eq!(lag.related_locations.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// MLR118
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr118_scans_only_conclusive_project_local_literal_svgs() {
+    let pyproject = dual_renderer_pyproject(&["MLR118"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR118", &pyproject, Some("all"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[
+            warning("MLR118", "\"assets/unsupported.svg\"", 1, 0),
+            warning("MLR118", "\"assets/unresolved\"", 1, 0),
+        ],
+    );
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "alias.py",
+        &[warning("MLR118", "\"assets/unsupported.svg\"", 1, 0)],
+    );
+    // Supported paths, fail-closed XML, and dynamic path selection stay
+    // silent. Inline suppression applies at the Python literal site.
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let unsupported = find(&diagnostics, "invalid.py", "MLR118", 0);
+    assert_eq!(
+        unsupported.applicable_profiles,
+        vec!["cairo".to_owned(), "opengl".to_owned()]
+    );
+    let issues = unsupported.evidence.get("issues").expect("SVG issues");
+    assert!(issues.to_string().contains("unsupported <text>"));
+    assert!(issues.to_string().contains("unsupported <image>"));
+    assert!(issues.to_string().contains("unresolved href"));
+}
+
+// ---------------------------------------------------------------------------
 // MLR119
 // ---------------------------------------------------------------------------
 
@@ -1205,6 +1293,42 @@ fn mlr121_flags_z_moves_for_stacking_in_2d_cairo_scenes() {
     assert!(
         opengl_only.is_empty(),
         "opengl-only run must be silent: {opengl_only:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MLR122
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mlr122_flags_readds_defeated_by_a_strictly_higher_z_index() {
+    let pyproject = dual_renderer_pyproject(&["MLR122"]);
+    let (project, diagnostics) = run_fixture_with_profile("MLR122", &pyproject, Some("cairo"));
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "invalid.py",
+        &[warning("MLR122", "self.bring_to_front(low)", 1, 0)],
+    );
+    assert_file_diagnostics(
+        project.path(),
+        &diagnostics,
+        "alias.py",
+        &[warning("MLR122", "self.bring_to_front(low)", 1, 0)],
+    );
+    assert_file_diagnostics(project.path(), &diagnostics, "valid.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "branch.py", &[]);
+    assert_file_diagnostics(project.path(), &diagnostics, "suppressed.py", &[]);
+
+    let readd = find(&diagnostics, "invalid.py", "MLR122", 0);
+    assert_eq!(readd.applicable_profiles, vec!["cairo".to_owned()]);
+    assert!(readd.message.contains("z_index"));
+    assert_eq!(readd.related_locations.len(), 1);
+
+    let (_project, opengl_only) = run_fixture_with_profile("MLR122", &pyproject, Some("opengl"));
+    assert!(
+        opengl_only.is_empty(),
+        "opengl-only run must stay silent: {opengl_only:?}"
     );
 }
 

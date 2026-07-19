@@ -460,7 +460,7 @@ impl Rule for FrameInvariantDynamicWait {
                 if registration.certainty != Presence::Present {
                     continue;
                 }
-                let body = registration.body;
+                let body = &registration.body;
                 // A no-op body (mutates_target == No) is MLP215's defect;
                 // this rule wants a real but frame-invariant write.
                 if body.uses_dt != Truth::No

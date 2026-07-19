@@ -11,11 +11,11 @@
 //! The rule simulates Python positional binding over the declared
 //! signature; it fires only when the simulated call provably cannot bind.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::diagnostic::{Confidence, Diagnostic, RuleMetadata, Severity};
+use crate::diagnostic::{Confidence, Diagnostic, RelatedLocation, RuleMetadata, Severity};
 use crate::frontend::index::{CallArgument, CallableSignature, ParamKind, QualifiedCall};
 use crate::rules::base::{Rule, RuleContext};
 
@@ -600,6 +600,198 @@ fn frozen_wait_diagnostic(
             }],
         });
     }
+    diagnostic
+}
+
+// ---------------------------------------------------------------------------
+// MLC118: a normal animation suspends an active overlapping updater.
+// ---------------------------------------------------------------------------
+
+/// Metadata for [`UpdaterSuspendResumeDivergence`].
+pub const MLC118: RuleMetadata = RuleMetadata {
+    id: "MLC118",
+    summary: "Normal animation suspends an active updater whose resumed write overlaps its result",
+    default_enabled: true,
+    default_severity: Severity::Info,
+    minimum_confidence: Confidence::Medium,
+    implementation_phase: 2,
+    required_profiles: &[],
+    required_capabilities: &["lifecycle"],
+    supersedes: &[],
+};
+
+/// An animation that definitely suspends a live target with a definitely
+/// active updater whose unconditional, fully-classified write overlaps the
+/// animation's write channels (DESIGN §7.1 `MLC118`).
+pub struct UpdaterSuspendResumeDivergence;
+
+impl Rule for UpdaterSuspendResumeDivergence {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLC118
+    }
+
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        use crate::semantic::state::{SuspendBehavior, WriteChannel};
+        use crate::semantic::values::{AllocationSite, Presence, Truth};
+
+        let mut seen: BTreeSet<(AllocationSite, AllocationSite)> = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for scene in &context.lifecycle_facts().scenes {
+            for play in &scene.plays {
+                if play.certainty != Presence::Present {
+                    continue;
+                }
+                let Some(snapshot) = scene.state_at(play.site.file, play.site.start) else {
+                    continue;
+                };
+                for animation in &play.animations {
+                    let Some(animation_state) = animation.state.as_ref() else {
+                        continue;
+                    };
+                    if animation.channels_known != Truth::Yes
+                        || animation_state.suspend != SuspendBehavior::SuspendsLiveTargets
+                        || animation_state.write_channels.is_empty()
+                    {
+                        continue;
+                    }
+                    for target in &animation_state.targets {
+                        let Some(target_state) = snapshot.heap.object(target) else {
+                            continue;
+                        };
+                        if target_state.updating_suspended != Truth::No {
+                            continue;
+                        }
+                        for registration in &scene.updaters {
+                            if !active_overlapping_registration(
+                                scene,
+                                registration,
+                                target,
+                                target_state,
+                                &animation_state.write_channels,
+                            ) {
+                                continue;
+                            }
+                            if !seen.insert((animation.site, registration.site)) {
+                                continue;
+                            }
+                            let overlap: BTreeSet<WriteChannel> = registration
+                                .body
+                                .write_channels
+                                .intersection(&animation_state.write_channels)
+                                .copied()
+                                .collect();
+                            diagnostics.push(suspend_resume_diagnostic(
+                                context,
+                                scene,
+                                animation,
+                                registration,
+                                &overlap,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        diagnostics
+    }
+}
+
+fn active_overlapping_registration(
+    scene: &crate::semantic::interpreter::SceneLifecycle,
+    registration: &crate::semantic::interpreter::UpdaterRegistration,
+    target: &crate::semantic::values::ObjectId,
+    target_state: &crate::semantic::state::MobjectState,
+    animation_channels: &BTreeSet<crate::semantic::state::WriteChannel>,
+) -> bool {
+    use crate::semantic::interpreter::UpdaterHost;
+    use crate::semantic::values::{Presence, Truth};
+
+    if registration.certainty != Presence::Present
+        || registration.body.mutates_target != Truth::Yes
+        || registration.body.calls_unknown != Truth::No
+        || registration.body.channels_known != Truth::Yes
+        || registration
+            .body
+            .write_channels
+            .is_disjoint(animation_channels)
+        || !matches!(
+            &registration.host,
+            UpdaterHost::Mobject(host) if host.definitely_same(target)
+        )
+        || !target_state.updaters.contains(&registration.fact)
+    {
+        return false;
+    }
+    // The heap's updater set is a may-set after branch joins. Any removal
+    // of this identity before the play makes definite liveness unprovable.
+    !scene.updater_removals.iter().any(|removal| {
+        removal.matched != Truth::No
+            && matches!(
+                &removal.host,
+                UpdaterHost::Mobject(host) if host.definitely_same(target)
+            )
+    })
+}
+
+fn suspend_resume_diagnostic(
+    context: &RuleContext<'_>,
+    scene: &crate::semantic::interpreter::SceneLifecycle,
+    animation: &crate::semantic::interpreter::PlayedAnimation,
+    registration: &crate::semantic::interpreter::UpdaterRegistration,
+    overlap: &BTreeSet<crate::semantic::state::WriteChannel>,
+) -> Diagnostic {
+    let file = context.sources().file(animation.site.file);
+    let registration_file = context.sources().file(registration.site.file);
+    let channels: Vec<&str> = overlap
+        .iter()
+        .map(|channel| super::support::channel_label(*channel))
+        .collect();
+    let mut evidence = BTreeMap::new();
+    evidence.insert(
+        "scene".to_owned(),
+        Value::String(scene.qualified_name.clone()),
+    );
+    evidence.insert(
+        "overlapping_channels".to_owned(),
+        Value::Array(
+            channels
+                .iter()
+                .map(|channel| Value::String((*channel).to_owned()))
+                .collect(),
+        ),
+    );
+    evidence.insert(
+        "suspend_behavior".to_owned(),
+        Value::String("suspends-live-targets".to_owned()),
+    );
+    evidence.insert("final_updater_pass".to_owned(), Value::Bool(true));
+    let mut diagnostic = build_diagnostic(
+        &MLC118,
+        context,
+        file,
+        super::support::site_range(&animation.site),
+        format!(
+            "This animation suspends an active updater that also writes {channels}; \
+             `finish()` resumes it and the same play immediately runs the updater \
+             once with `dt=0`, so the animation's final state is immediately \
+             followed by an overlapping write. Animate the updater's driver \
+             (often a `ValueTracker`), or make the suspension choice explicit.",
+            channels = channels.join(", "),
+        ),
+        "Normal Animation.begin() suspends the live target's updaters, finish() \
+         interpolates alpha=1 and resumes them, and Scene.play then calls \
+         update_mobjects(0) before returning. An active updater with a proven \
+         overlapping write therefore observes neither intermediate animation \
+         frames nor a stable post-animation interval (animation.py \
+         Animation.begin/finish; scene.py play_internal; DESIGN §3.2)."
+            .to_owned(),
+        evidence,
+    );
+    diagnostic.related_locations.push(RelatedLocation {
+        path: registration_file.relative_path().to_owned(),
+        span: registration_file.span_of_range(super::support::site_range(&registration.site)),
+        message: "active overlapping updater registered here".to_owned(),
+    });
     diagnostic
 }
 

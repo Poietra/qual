@@ -114,6 +114,9 @@ pub(super) fn clone_path_facts(copy: &mut MobjectState, original: &MobjectState)
     copy.curve_count = original.curve_count.clone();
     copy.subpath_count = original.subpath_count.clone();
     copy.points_per_curve = original.points_per_curve.clone();
+    copy.fill_opacity = original.fill_opacity.clone();
+    copy.stroke_opacity = original.stroke_opacity.clone();
+    copy.stroke_width = original.stroke_width.clone();
     copy.z_index = original.z_index.clone();
 }
 
@@ -254,6 +257,229 @@ pub(super) fn seed_z_index(object: &mut MobjectState, fact: Option<&QualifiedCal
     };
 }
 
+/// Seeds literal `VMobject` style scalars written by a constructor call.
+///
+/// Defaults intentionally stay `Unknown`: subclasses can replace the
+/// inherited `VMobject` defaults before returning. An explicit literal is
+/// positive source evidence and survives until a tracked style write (or
+/// an unknown mutation) widens it.
+pub(super) fn seed_style_facts(object: &mut MobjectState, fact: Option<&QualifiedCall>) {
+    let Some(fact) = fact else {
+        return;
+    };
+    let value = |name: &str| {
+        fact.keyword(name)
+            .and_then(literal_num)
+            .unwrap_or(Num::Unknown)
+    };
+    if fact.keyword("fill_opacity").is_some() {
+        object.fill_opacity = value("fill_opacity");
+    }
+    if fact.keyword("stroke_opacity").is_some() {
+        object.stroke_opacity = value("stroke_opacity");
+    }
+    if fact.keyword("stroke_width").is_some() {
+        object.stroke_width = value("stroke_width");
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StyleScalar {
+    FillOpacity,
+    StrokeOpacity,
+    StrokeWidth,
+}
+
+fn style_scalar_mut(object: &mut MobjectState, scalar: StyleScalar) -> &mut Num {
+    match scalar {
+        StyleScalar::FillOpacity => &mut object.fill_opacity,
+        StyleScalar::StrokeOpacity => &mut object.stroke_opacity,
+        StyleScalar::StrokeWidth => &mut object.stroke_width,
+    }
+}
+
+/// Applies one exact-or-unknown style scalar write to the receiver and,
+/// unless `family=False` is proven, conservatively to its known family.
+fn apply_style_scalar(
+    state: &mut ExecState,
+    target: &ObjectId,
+    scalar: StyleScalar,
+    value: &Num,
+    family: Truth,
+    certainty: Presence,
+) {
+    let receiver = state.heap.resolve(target);
+    if let Some(object) = state.heap.object_mut(&receiver) {
+        let current = style_scalar_mut(object, scalar);
+        *current = if certainty == Presence::Present {
+            value.clone()
+        } else {
+            current.join(value)
+        };
+    }
+    if family == Truth::No {
+        return;
+    }
+    for member in z_family_closure(state, &receiver) {
+        if member == receiver {
+            continue;
+        }
+        if let Some(object) = state.heap.object_mut(&member) {
+            let current = style_scalar_mut(object, scalar);
+            *current = current.join(value);
+        }
+    }
+}
+
+/// Invalidates tracked foreground opacity/width facts for a receiver and
+/// its known family after a style result cannot be evaluated exactly.
+pub(super) fn widen_style_facts(state: &mut ExecState, target: &ObjectId) {
+    for member in z_family_closure(state, target) {
+        if let Some(object) = state.heap.object_mut(&member) {
+            object.fill_opacity = Num::Unknown;
+            object.stroke_opacity = Num::Unknown;
+            object.stroke_width = Num::Unknown;
+        }
+    }
+}
+
+/// A numeric setter argument, distinguishing absence (`None`) from an
+/// explicit but non-literal value (`Some(Unknown)`).
+fn setter_num_arg(call: &ast::ExprCall, name: &str, positional: usize) -> Option<Num> {
+    if let Some(keyword) = call.keywords.iter().find(|keyword| {
+        keyword
+            .arg
+            .as_ref()
+            .is_some_and(|argument| argument.as_str() == name)
+    }) {
+        return Some(literal_signed_num(&keyword.value).unwrap_or(Num::Unknown));
+    }
+    if call
+        .args
+        .iter()
+        .take(positional + 1)
+        .any(|argument| matches!(argument, ast::Expr::Starred(_)))
+    {
+        return Some(Num::Unknown);
+    }
+    if let Some(argument) = call.args.get(positional) {
+        return Some(literal_signed_num(argument).unwrap_or(Num::Unknown));
+    }
+    call.keywords
+        .iter()
+        .any(|keyword| keyword.arg.is_none())
+        .then_some(Num::Unknown)
+}
+
+/// A boolean setter argument with a known default. Starred / dynamic
+/// values widen to `Maybe`, so descendants never receive an exact write
+/// from incomplete call-shape evidence.
+fn setter_bool_arg(call: &ast::ExprCall, name: &str, positional: usize, default: Truth) -> Truth {
+    let explicit = call
+        .keywords
+        .iter()
+        .find(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|argument| argument.as_str() == name)
+        })
+        .map(|keyword| &keyword.value);
+    let starred = call
+        .args
+        .iter()
+        .take(positional + 1)
+        .any(|argument| matches!(argument, ast::Expr::Starred(_)));
+    let positional = if starred {
+        None
+    } else {
+        call.args.get(positional)
+    };
+    match explicit.or(positional) {
+        Some(ast::Expr::Constant(constant)) => match constant.value {
+            ast::Constant::Bool(value) => Truth::from(value),
+            _ => Truth::Maybe,
+        },
+        Some(_) => Truth::Maybe,
+        None if starred || call.keywords.iter().any(|keyword| keyword.arg.is_none()) => {
+            Truth::Maybe
+        }
+        None => default,
+    }
+}
+
+/// Applies the three curated `VMobject` style setters needed by the
+/// renderer-cost facts. Returns `true` when `canonical` was handled.
+pub(super) fn apply_style_write(
+    state: &mut ExecState,
+    target: &ObjectId,
+    canonical: &str,
+    call: &ast::ExprCall,
+    certainty: Presence,
+) -> bool {
+    match canonical {
+        "manim.mobject.types.vectorized_mobject.VMobject.set_fill" => {
+            if let Some(opacity) = setter_num_arg(call, "opacity", 1) {
+                let family = setter_bool_arg(call, "family", 2, Truth::Yes);
+                apply_style_scalar(
+                    state,
+                    target,
+                    StyleScalar::FillOpacity,
+                    &opacity,
+                    family,
+                    certainty,
+                );
+            }
+        }
+        "manim.mobject.types.vectorized_mobject.VMobject.set_stroke" => {
+            let family = setter_bool_arg(call, "family", 4, Truth::Yes);
+            let background = setter_bool_arg(call, "background", 3, Truth::No);
+            if background == Truth::Yes {
+                return true;
+            }
+            if let Some(width) = setter_num_arg(call, "width", 1) {
+                let width = if background == Truth::No {
+                    width
+                } else {
+                    Num::Unknown
+                };
+                apply_style_scalar(
+                    state,
+                    target,
+                    StyleScalar::StrokeWidth,
+                    &width,
+                    family,
+                    certainty,
+                );
+            }
+            if let Some(opacity) = setter_num_arg(call, "opacity", 2) {
+                let opacity = if background == Truth::No {
+                    opacity
+                } else {
+                    Num::Unknown
+                };
+                apply_style_scalar(
+                    state,
+                    target,
+                    StyleScalar::StrokeOpacity,
+                    &opacity,
+                    family,
+                    certainty,
+                );
+            }
+        }
+        "manim.mobject.types.vectorized_mobject.VMobject.set_opacity" => {
+            let opacity = setter_num_arg(call, "opacity", 0).unwrap_or(Num::Unknown);
+            let family = setter_bool_arg(call, "family", 1, Truth::Yes);
+            for scalar in [StyleScalar::FillOpacity, StyleScalar::StrokeOpacity] {
+                apply_style_scalar(state, target, scalar, &opacity, family, certainty);
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// Element count of a literal list / tuple display (each element is one
 /// point-like for the `set_points` family). `None` for anything else,
 /// including displays with starred elements.
@@ -352,6 +578,7 @@ impl<'a> Machine<'a, '_> {
                     site,
                     target: Some(target.clone()),
                     methods: Vec::new(),
+                    method_sites: Vec::new(),
                     channels: BTreeSet::new(),
                     channels_known: Truth::Yes,
                     target_epoch_at_creation: epoch,
@@ -366,6 +593,7 @@ impl<'a> Machine<'a, '_> {
             call_path,
             target: Some(target.clone()),
             methods: Vec::new(),
+            method_sites: Vec::new(),
             channels: BTreeSet::new(),
             channels_known: Truth::Yes,
         })
@@ -390,6 +618,13 @@ impl<'a> Machine<'a, '_> {
             return AbstractValue::Builder(builder);
         }
         builder.methods.push(method.to_owned());
+        let method_end = u32::from(call.func.range().end());
+        let method_start = method_end.saturating_sub(u32::try_from(method.len()).unwrap_or(0));
+        builder.method_sites.push(AllocationSite {
+            file: self.file,
+            start: method_start,
+            end: method_end,
+        });
         // Classify the chained mutator against the target's kind.
         let channels = builder
             .target
@@ -434,6 +669,7 @@ impl<'a> Machine<'a, '_> {
             let key = (builder.site, builder.call_path.clone());
             if let Some(fact) = self.sink.builder_executions.get_mut(&key) {
                 fact.methods.clone_from(&builder.methods);
+                fact.method_sites.clone_from(&builder.method_sites);
                 fact.channels.clone_from(&builder.channels);
                 fact.channels_known = builder.channels_known;
             }
@@ -937,6 +1173,7 @@ impl<'a> Machine<'a, '_> {
             if let Some(object) = state.heap.object_mut(id) {
                 object.fill_opacity = Num::Unknown;
                 object.stroke_opacity = Num::Unknown;
+                object.stroke_width = Num::Unknown;
                 object.z_index = Num::Unknown;
                 object.family_size = Num::Unknown;
                 object.point_count = Num::Unknown;

@@ -20,8 +20,9 @@ use crate::source::FileId;
 use super::callbacks::{signature_from_args, updater_fact};
 use super::exec::{AbstractValue, ExecState, Machine, OpKind};
 use super::heap_ops::{
-    MOBJECT_ID, VMOBJECT_ID, apply_z_index_write, clone_path_facts, literal_signed_num,
-    mutator_channels, seed_path_counts, seed_z_index, set_z_index_family_arg,
+    MOBJECT_ID, VMOBJECT_ID, apply_style_write, apply_z_index_write, clone_path_facts,
+    literal_signed_num, mutator_channels, seed_path_counts, seed_style_facts, seed_z_index,
+    set_z_index_family_arg, widen_style_facts,
 };
 use super::{
     DefMap, FallbackFact, FixedAction, FixedKind, FixedRegistrationFact, TargetRequirement,
@@ -456,6 +457,7 @@ impl<'a> Machine<'a, '_> {
             let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
             if let Some(object) = state.heap.object_mut(&id) {
                 seed_path_counts(object, &kind, fact);
+                seed_style_facts(object, fact);
                 seed_z_index(object, fact);
             }
             return AbstractValue::Object(id);
@@ -490,6 +492,7 @@ impl<'a> Machine<'a, '_> {
                 let id = self.alloc_object(self.site(call.range()), kind.clone(), state);
                 if let Some(object) = state.heap.object_mut(&id) {
                     seed_path_counts(object, &kind, fact);
+                    seed_style_facts(object, fact);
                     seed_z_index(object, fact);
                 }
                 // Container constructors adopt their positional mobject
@@ -1092,10 +1095,26 @@ impl<'a> Machine<'a, '_> {
             self.mutate(id, MutationKind::Style, site, state);
             return AbstractValue::Object(id.clone());
         }
+        if apply_style_write(state, id, canonical, call, certainty) {
+            let kind = if canonical.ends_with("set_opacity") {
+                MutationKind::Opacity
+            } else {
+                MutationKind::Style
+            };
+            self.mutate(id, kind, site, state);
+            return AbstractValue::Object(id.clone());
+        }
         // Fluent mutators and getters.
         match entry.returns_self {
             Some(true) => {
-                let kind = mutator_channels(canonical).map_or(MutationKind::Unknown, |channels| {
+                let channels = mutator_channels(canonical);
+                if channels.as_ref().is_some_and(|channels| {
+                    channels.contains(&WriteChannel::Style)
+                        || channels.contains(&WriteChannel::Opacity)
+                }) {
+                    widen_style_facts(state, id);
+                }
+                let kind = channels.map_or(MutationKind::Unknown, |channels| {
                     channels
                         .iter()
                         .next()

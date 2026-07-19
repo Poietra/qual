@@ -11,11 +11,31 @@ Everything since 0.1.0: two external-review waves verified and fixed
 point-by-point, structural hardening (knowledge provenance split, release
 quality gates, frontend fact promotion, interpreter modularization),
 helper-analysis completion, analysis-coverage reporting, and the
-fork-first analysis layer. Rule catalog now **83 implemented / 9
-reserved** (was 79 / 13 at 0.1.0): `MLR123`, `MLP214`, `MLP217`, and
-`MLP225` were implemented.
+fork-first analysis layer. Rule catalog now **92 implemented / 0
+reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
+`MLR109`, `MLR118`, `MLR122`, `MLR123`, `MLP212`, `MLP213`, `MLP214`,
+`MLP217`, `MLP223`, and `MLP225` were implemented.
 
 ### Added
+
+- Phase-2 lifecycle completion: `MLC114` models project-local and curated
+  `@override_animate` methods and rejects unsupported chains; `MLC116`
+  follows normal Transform source/target membership into a later auto-add;
+  `MLC118` intersects active updater and animation write channels across
+  Manim's suspend/resume/final-updater sequence.
+
+- Phase-3 performance completion: `MLP212` combines exact full-screen
+  coverage, stable translucent style, duration, frames, and profile pixels;
+  `MLP213` gates large moving Cairo Surfaces on the versioned 1,024-face
+  calibration evidence; `MLP223` proves a transparent positive-width stroke
+  remains invisible across every later style/opacity write before reporting
+  its Cairo per-frame path cost.
+
+- Phase-4 rendering completion: `MLR109` proves a direct leaf-updater
+  dependency runs before its frame-varying writer; `MLR118` fail-closed
+  scans conclusive project-local literal SVGs for unsupported content and
+  missing local href targets; `MLR122` proves a Cairo `bring_to_front`
+  re-add is defeated by a strictly higher exact `z_index`.
 
 - **Analysis-coverage reporting** (the review's "trust feature"): a new
   `manim-lint coverage [PATH...] [--format text|json]` subcommand and a

@@ -328,18 +328,16 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 
 ## ルールカタログ
 
-4 ファミリーで 92 個のルール ID を予約しており、**83 個が実装済み、9 個が reserved** です。
+4 ファミリーに 92 個のルール ID があり、**92 個すべて実装済み**です。
 
 | ファミリー | 実装済み | reserved |
 | --- | --- | --- |
-| MLC ライフサイクル / 正しさ | 28 | 3 |
-| MLR レンダリング | 24 | 3 |
-| MLP パフォーマンス | 24 | 3 |
+| MLC ライフサイクル / 正しさ | 31 | 0 |
+| MLR レンダリング | 27 | 0 |
+| MLP パフォーマンス | 27 | 0 |
 | MLD 決定性 / 可搬性 | 7 | 0 |
 
 実装済みルールのうち 1 つはオプトインです: `MLP225` は `default_enabled: false` で、通常の `check` 実行には決して参加しません。ローカルフォークプロファイルの下で正確な `--select MLP225` を指定したときだけ評価されます。
-
-reserved の ID は **決して発火しません**。`manim-lint rules` は正直に `reserved` と表示し、`check` には登録されません。各 reserved ルールは、事実レイヤーがまだ提供しない特定の解析能力を待っています — 例えば、Transform 後の同一性事実(`MLC116`)、updater 登録間の read-after-write 順序事実(`MLR109`)、SVG アセット内容の事実(`MLR118`)、エイリアス安全なオブジェクト間 `z_index` 重なり証明(`MLR122`)、ピクセルカバレッジ事実(`MLP212`)、較正済みワークロードプロファイル(`MLP213`)、不透明度不変性の事実(`MLP223`)。
 
 ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`manim-lint explain <ID>` でも読めます。
 
@@ -376,7 +374,7 @@ output ................... concise | full | json | sarif | github, fixes, cost r
 - **サマリー由来の play は保守的です。** ヘルパーのインライン化が effect summary へフォールバックした場合(再帰、解決不能な呼び出し — カバレッジレポートの `helper calls summarized, not inlined` に計上)、そのヘルパーの play は `Maybe` 確度・開いた繰り返し回数のレコードとして現れます: `MLC104` のようなリテラル duration 検査はそこでも発火しますが、呼び出し元の状態に依存する判定はすべて degrade されたままです。
 - **`TracedPath` がコンストラクタで登録する updater はコスト専用です。** `TracedPath` が構築時に自身へ登録する updater はコスト目的ではモデル化されます(`MLP220` のスパン、lambda を渡した場合の hot context)が、ライフサイクル上の updater 登録ではありません: `TracedPath` 単独ではデフォルトの `wait()` はライフサイクルモデル上 dynamic にならず、バウンドメソッドの `traced_point_func` 本体は hot context として解析されません。
 - **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
-- **未実装。** 9 個の reserved ルール(上記)、SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
+- **未実装。** SQLite 結果キャッシュ(`--no-cache` は受理される no-op)、レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
 ## 開発
 

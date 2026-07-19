@@ -76,13 +76,35 @@ pub const LARGE_POINTS_GATE: Threshold = Threshold {
     rule_ids: &["MLP202", "MLP211"],
 };
 
+/// `MLP212` reports only a provably long full-screen translucent
+/// animation. Five seconds matches the existing long-span policy used by
+/// the path/lifetime rules while keeping short transitions idiomatic.
+pub const FULL_SCREEN_TRANSLUCENT_SECONDS_GATE: Threshold = Threshold {
+    name: "full-screen-translucent-seconds-gate",
+    quantity: "seconds",
+    minimum: 5.0,
+    rule_ids: &["MLP212"],
+};
+
+/// `MLP213`'s calibrated Cairo Surface boundary: the retained evidence
+/// measures the default 32 × 32 Surface (1,024 faces). Smaller surfaces
+/// stay below the initial advisory gate.
+pub const CAIRO_SURFACE_FACE_GATE: Threshold = Threshold {
+    name: "cairo-surface-face-gate",
+    quantity: "surface_faces",
+    minimum: 1024.0,
+    rule_ids: &["MLP213"],
+};
+
 /// Every named gate, in declaration order (for docs / introspection).
-pub const ALL_GATES: [Threshold; 5] = [
+pub const ALL_GATES: [Threshold; 7] = [
     TRANSFORM_FAMILY_GATE,
     TRANSFORM_CURVE_INSERTION_GATE,
     PER_FRAME_ALLOCATION_GATE,
     LARGE_FAMILY_GATE,
     LARGE_POINTS_GATE,
+    FULL_SCREEN_TRANSLUCENT_SECONDS_GATE,
+    CAIRO_SURFACE_FACE_GATE,
 ];
 
 impl Threshold {

@@ -1,4 +1,4 @@
-//! `.animate` builder rules: `MLC113`, `MLC117`, `MLC124`.
+//! `.animate` builder rules: `MLC113`, `MLC114`, `MLC117`, `MLC124`.
 //!
 //! An `_AnimationBuilder` runs `generate_target()` the moment `.animate`
 //! is read; animation kwargs must be passed by calling `animate` itself
@@ -165,6 +165,172 @@ fn move_kwargs_fix(
             },
         ],
     })
+}
+
+// ---------------------------------------------------------------------------
+// MLC114: an override-animation method participates in a method chain.
+// ---------------------------------------------------------------------------
+
+/// Metadata for [`UnsupportedOverrideAnimateChain`].
+pub const MLC114: RuleMetadata = RuleMetadata {
+    id: "MLC114",
+    summary: "Unsupported .animate method chain containing an override animation",
+    default_enabled: true,
+    default_severity: Severity::Error,
+    minimum_confidence: Confidence::High,
+    implementation_phase: 2,
+    required_profiles: &[],
+    required_capabilities: &["lifecycle"],
+    supersedes: &[],
+};
+
+/// A chain with at least two methods where one method is conclusively
+/// backed by `@override_animate` (DESIGN §7.1 `MLC114`). Manim rejects both
+/// directions: accessing an override after an ordinary method, and accessing
+/// any further method after the override animation has been constructed.
+pub struct UnsupportedOverrideAnimateChain;
+
+impl Rule for UnsupportedOverrideAnimateChain {
+    fn metadata(&self) -> &'static RuleMetadata {
+        &MLC114
+    }
+
+    fn run(&self, context: &RuleContext<'_>) -> Vec<Diagnostic> {
+        let Some(profile) = context.knowledge() else {
+            return Vec::new();
+        };
+        let index = context.project_index();
+        let mut seen = BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for scene in &context.lifecycle_facts().scenes {
+            for (builder_site, fact) in &scene.builders {
+                if fact.methods.len() < 2 || fact.method_sites.len() != fact.methods.len() {
+                    continue;
+                }
+                let Some(target) = fact.target.as_ref() else {
+                    continue;
+                };
+                let Some(target_state) = scene.final_heap.object(target) else {
+                    continue;
+                };
+                let KindSet::Known(kinds) = &target_state.kind else {
+                    continue;
+                };
+                let override_index = fact.methods.iter().position(|method| {
+                    !kinds.is_empty()
+                        && kinds
+                            .iter()
+                            .all(|kind| method_has_animate_override(profile, index, kind, method))
+                });
+                let Some(override_index) = override_index else {
+                    continue;
+                };
+                // If the override is encountered after an ordinary method,
+                // its own attribute access raises. If it is first, the next
+                // method access sees `overridden_animation` and raises.
+                let failure_index = if override_index == 0 {
+                    1
+                } else {
+                    override_index
+                };
+                let failure_site = fact.method_sites[failure_index];
+                if !seen.insert(failure_site) {
+                    continue;
+                }
+                diagnostics.push(override_chain_diagnostic(
+                    context,
+                    scene,
+                    builder_site,
+                    fact,
+                    override_index,
+                    failure_site,
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// Whether method lookup on one known target kind conclusively reaches a
+/// method with a positive override-animation fact. Project-local decorators
+/// and versioned external knowledge share the same candidate path.
+fn method_has_animate_override(
+    profile: &crate::knowledge::KnowledgeProfile,
+    index: &crate::frontend::index::ProjectIndex,
+    kind: &str,
+    method: &str,
+) -> bool {
+    let candidates = index.method_candidates(kind, method);
+    !candidates.is_empty()
+        && candidates.iter().all(|candidate| {
+            let project_override = candidate
+                .rsplit_once('.')
+                .and_then(|(owner, _)| index.classes.get(owner))
+                .is_some_and(|class| class.animate_overrides.contains(method));
+            project_override
+                || resolve_symbol(profile, candidate).is_some_and(|(_, entry)| {
+                    entry
+                        .effects
+                        .as_ref()
+                        .and_then(|effects| effects.animate_override)
+                        == Some(true)
+                })
+        })
+}
+
+fn override_chain_diagnostic(
+    context: &RuleContext<'_>,
+    scene: &SceneLifecycle,
+    builder_site: &AllocationSite,
+    fact: &AnimateBuilderFact,
+    override_index: usize,
+    failure_site: AllocationSite,
+) -> Diagnostic {
+    let file = context.sources().file(failure_site.file);
+    let builder_file = context.sources().file(builder_site.file);
+    let override_method = &fact.methods[override_index];
+    let other_method = &fact.methods[if override_index == 0 {
+        1
+    } else {
+        override_index - 1
+    }];
+    let mut evidence = BTreeMap::new();
+    evidence.insert(
+        "scene".to_owned(),
+        Value::String(scene.qualified_name.clone()),
+    );
+    evidence.insert(
+        "override_method".to_owned(),
+        Value::String(override_method.clone()),
+    );
+    evidence.insert(
+        "chained_methods".to_owned(),
+        Value::Array(fact.methods.iter().cloned().map(Value::String).collect()),
+    );
+    let mut diagnostic = build_diagnostic(
+        &MLC114,
+        context,
+        file,
+        site_range(&failure_site),
+        format!(
+            "Split this `.animate` chain: `{override_method}` has an \
+             `@override_animate` implementation, so combining it with \
+             `{other_method}` raises `NotImplementedError` before the play starts."
+        ),
+        "Manim's `_AnimationBuilder` stores a custom Animation as soon as an \
+         `@override_animate` method is called. It rejects an override after a \
+         normal chained method and rejects every method access after an override; \
+         overridden animations must be played as a single-method `.animate` \
+         expression (mobject.py `_AnimationBuilder.__getattr__`, DESIGN §3.2)."
+            .to_owned(),
+        evidence,
+    );
+    diagnostic.related_locations.push(RelatedLocation {
+        path: builder_file.relative_path().to_owned(),
+        span: builder_file.span_of_range(site_range(builder_site)),
+        message: "the `.animate` builder starts here".to_owned(),
+    });
+    diagnostic
 }
 
 // ---------------------------------------------------------------------------

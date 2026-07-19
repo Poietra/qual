@@ -354,16 +354,14 @@ fn may_removed(scene: &SceneLifecycle, host: Option<&ObjectId>, callback: &Callb
                         return true;
                     }
                 }
-                Event::UnknownMutation(unknown) => {
+                Event::UnknownMutation(unknown)
+                    if unknown.values.iter().any(|value| {
+                        heap.resolve(value).may_be_same(&resolved_host) != Truth::No
+                    }) =>
+                {
                     // The host escaped into an unresolved call, which may
                     // remove or suspend its updaters at runtime.
-                    if unknown
-                        .values
-                        .iter()
-                        .any(|value| heap.resolve(value).may_be_same(&resolved_host) != Truth::No)
-                    {
-                        return true;
-                    }
+                    return true;
                 }
                 _ => {}
             }

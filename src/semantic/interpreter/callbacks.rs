@@ -10,14 +10,17 @@ use rustpython_parser::ast::{self, Ranged};
 
 use crate::frontend::index::{CallableSignature, ParamKind};
 use crate::knowledge::SymbolKind;
-use crate::semantic::state::{CallbackRef, SignatureSummary, UpdaterFact};
+use crate::semantic::state::{CallbackRef, SignatureSummary, UpdaterFact, WriteChannel};
 use crate::semantic::values::{AllocationSite, ObjectId, Truth};
 use crate::source::FileId;
 
 use super::dispatch::{Ctx, PURE_BUILTINS};
 use super::exec::{ExecState, Machine, OpKind};
 use super::heap_ops::mutator_channels;
-use super::{ReturnFact, UpdaterBodyFact, UpdaterHost, UpdaterRegistration, UpdaterRemoval};
+use super::{
+    ReturnFact, UpdaterBodyFact, UpdaterHost, UpdaterRegistration, UpdaterRemoval,
+    UpdaterTargetRead,
+};
 
 // ---------------------------------------------------------------------------
 // Signature summaries (DESIGN §3.3).
@@ -349,6 +352,9 @@ struct BodyClassifier<'a, 'b> {
     uses_dt: bool,
     reads_frame_varying: Truth,
     mutates_target: Truth,
+    write_channels: BTreeSet<WriteChannel>,
+    target_reads: Vec<UpdaterTargetRead>,
+    channels_known: Truth,
     /// Evidence of an operation outside the pure-affine allowlist.
     disallowed: Truth,
     calls_unknown: Truth,
@@ -436,6 +442,7 @@ impl BodyClassifier<'_, '_> {
                 let evidence = self.evidence();
                 if root_name(target).is_some_and(|root| self.target.as_deref() == Some(root)) {
                     bump(&mut self.mutates_target, evidence);
+                    self.channels_known = Truth::Maybe;
                 }
                 bump(&mut self.disallowed, evidence);
                 self.walk_expr(target);
@@ -750,6 +757,7 @@ impl BodyClassifier<'_, '_> {
             .any(|argument| root_name(argument) == Some(target.as_str()));
         if mentions {
             bump(&mut self.mutates_target, Truth::Maybe);
+            self.channels_known = Truth::Maybe;
             bump(&mut self.disallowed, Truth::Maybe);
         }
     }
@@ -763,6 +771,10 @@ impl BodyClassifier<'_, '_> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one conservative branch per callback call category"
+    )]
     fn classify_call(&mut self, call: &ast::ExprCall) {
         let evidence = self.evidence();
         // Method call on the updater's mobject parameter.
@@ -770,8 +782,30 @@ impl BodyClassifier<'_, '_> {
             if let ast::Expr::Name(base) = attribute.value.as_ref() {
                 if self.target.as_deref() == Some(base.id.as_str()) {
                     let method = attribute.attr.as_str();
+                    let channels = mutator_channels(&format!("target.{method}"));
                     if is_affine_or_setter(method) {
                         bump(&mut self.mutates_target, evidence);
+                        if let Some(channels) = channels {
+                            if channels.contains(&WriteChannel::Points) {
+                                for argument in call
+                                    .args
+                                    .iter()
+                                    .chain(call.keywords.iter().map(|keyword| &keyword.value))
+                                {
+                                    if let Some(read) = direct_target_read(
+                                        self.file,
+                                        argument,
+                                        self.target.as_deref(),
+                                        evidence,
+                                    ) {
+                                        self.target_reads.push(read);
+                                    }
+                                }
+                            }
+                            self.write_channels.extend(channels);
+                        } else {
+                            self.channels_known = Truth::Maybe;
+                        }
                     } else if method.starts_with("get_") || method == "copy" {
                         // Curated read convention: `get_*` / `copy` do not
                         // mutate the receiver.
@@ -791,10 +825,18 @@ impl BodyClassifier<'_, '_> {
                     {
                         // A curated mutator outside the affine allowlist.
                         bump(&mut self.mutates_target, evidence);
+                        if let Some(channels) = channels {
+                            self.write_channels.extend(channels);
+                        } else if matches!(method, "add" | "remove") {
+                            self.write_channels.insert(WriteChannel::Membership);
+                        } else {
+                            self.channels_known = Truth::Maybe;
+                        }
                         bump(&mut self.disallowed, evidence);
                     } else {
                         // Unrecognized method on the target parameter.
                         bump(&mut self.mutates_target, Truth::Maybe);
+                        self.channels_known = Truth::Maybe;
                         bump(&mut self.calls_unknown, evidence);
                         bump(&mut self.disallowed, Truth::Maybe);
                     }
@@ -887,9 +929,64 @@ impl BodyClassifier<'_, '_> {
             uses_dt,
             reads_frame_varying: degrade(self.reads_frame_varying),
             mutates_target: degrade(self.mutates_target),
+            write_channels: self.write_channels,
+            target_reads: self.target_reads,
+            channels_known: if calls_unknown == Truth::No {
+                self.channels_known
+            } else {
+                Truth::Maybe
+            },
             pure_affine_on_target,
             calls_unknown,
         }
+    }
+}
+
+/// A direct geometry read used as the value of a target mutator argument,
+/// currently the high-confidence `driver.get_center()` shape. Nested
+/// arithmetic, subscripts, and arbitrary helpers stay unknown because the
+/// read may not actually determine the written value.
+fn direct_target_read(
+    file: FileId,
+    expr: &ast::Expr,
+    target: Option<&str>,
+    certainty: Truth,
+) -> Option<UpdaterTargetRead> {
+    let ast::Expr::Call(call) = expr else {
+        return None;
+    };
+    if !call.args.is_empty() || !call.keywords.is_empty() {
+        return None;
+    }
+    let ast::Expr::Attribute(method) = call.func.as_ref() else {
+        return None;
+    };
+    if method.attr.as_str() != "get_center" {
+        return None;
+    }
+    let binding = callback_object_binding(&method.value)?;
+    if target == Some(binding.as_str()) {
+        return None;
+    }
+    Some(UpdaterTargetRead {
+        binding,
+        method: method.attr.to_string(),
+        site: AllocationSite::new(file, call.range()),
+        channel: WriteChannel::Points,
+        certainty,
+    })
+}
+
+fn callback_object_binding(expr: &ast::Expr) -> Option<String> {
+    match expr {
+        ast::Expr::Name(name) => Some(name.id.to_string()),
+        ast::Expr::Attribute(attribute) => {
+            let ast::Expr::Name(root) = attribute.value.as_ref() else {
+                return None;
+            };
+            (root.id.as_str() == "self").then(|| format!("self.{}", attribute.attr))
+        }
+        _ => None,
     }
 }
 
@@ -947,6 +1044,9 @@ fn classify_body(
         uses_dt: false,
         reads_frame_varying: Truth::No,
         mutates_target: Truth::No,
+        write_channels: BTreeSet::new(),
+        target_reads: Vec::new(),
+        channels_known: Truth::Yes,
         disallowed: Truth::No,
         calls_unknown: Truth::No,
     };

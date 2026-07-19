@@ -752,6 +752,12 @@ self.play(square.animate.shift(RIGHT).rotate(PI))
 
 ただし rate function や path が変わる可能性があるため、自動 fix は unsafe とする。
 
+`MLC114` は `@override_animate` が versioned knowledge、または alias 解決済みの project-local decorator から正に確認でき、同じ builder に二つ以上の method がある場合だけ出す。override が通常 method の後に現れる場合は override method access、override が最初の場合はその次の method access が `NotImplementedError` の位置になる。decorator または target kind が Unknown なら発火しない。
+
+`MLC116` の初期実装は、全 path で完了した normal `Transform(source, target)` の後、source が Scene family に `PRESENT`、target が `ABSENT` の時点で、target を live target とする non-introducer `.animate` を play する狭い pattern に限定する。このとき play の auto-add により target が第二の object として追加される。`ReplacementTransform`、既に target が Scene にある場合、branch-only Transform は対象外にする。
+
+`MLC118` は通常 Animation が live target updater を確実に suspend し、play 前に updater が確実に active で、その callback の全 path の write channel が完全に分類でき、Animation の write channel と重なる場合だけ出す。根拠は `begin()` の suspend、`finish()` の `alpha=1` と resume、その直後の `Scene.update_mobjects(0)` である。conditional / unknown callback、remove 済み updater、`suspend_mobject_updating=False`、互いに素な channel は発火させない。
+
 ### 7.2 rendering / renderer
 
 | ID | 検出内容 | default severity | minimum confidence | fix |
@@ -789,6 +795,12 @@ self.play(square.animate.shift(RIGHT).rotate(PI))
 `MLR105` は一般XML parserの受理/拒否をPango markupと同一視せず、Manim/Pangoと一致を検証したliteral subsetだけ high にする。unsupported construct は Unknown。`MLR110` も TeX macro、comment、verbatim、custom environmentを含む場合はbrace countingだけでerrorにせず、対応できるliteral subsetに限定する。
 
 asset resolver はまず Manim runtime と同じ探索だけで validity を決める。概ね、profile の render `working-directory` から `Path(file_name)` を直接解決し、その後 `assets_dir / name{extension}` を Manim と同じ拡張子順で試す。source file directory や project root を勝手に runtime search path へ加えない。追加 root で候補を見つけた場合は「ここには存在するが実際の render 探索では見つからない」という修正候補として別 evidence にする。Windows absolute path は Linux `Path` として解釈せず、profile の `platform` と Windows path parser を使う。case-only mismatch も対象 platform ごとに示す。
+
+`MLR109` の初期実装は exact な Manim kind を持つ leaf の top-level root 二つに限定する。reader は lambda updater 内の curated geometry write の直接引数として `driver.get_center()` を読み、writer は同じ points channel を全 path で書き、`dt` または確定した frame-varying state を読む必要がある。正の duration を持つ dynamic wait の直前 snapshot で両 updater が active、両 lexical binding が singleton identity に解決し、Scene root order が reader → writer と exact な場合だけ medium で出す。project subclass、writer-first、group recursion、branch order、複合式、named/unresolved callback は Unknown として発火しない。
+
+`MLR118` は全 active profile が同じ canonical project-local file に literal `SVGMobject` path を解決する場合だけ asset を読む。静的 scanner が well-nested UTF-8 XML、quoted attribute、comment / CDATA / processing instruction を完全に消費できたときだけ、`<text>` / `<image>` / `<filter>` / `<mask>` / `<clipPath>` と、存在しない local `id` を指す plain `href="#..."` を high で報告する。DOCTYPE、malformed XML、entity 経由の id/href、external reference、profile ごとに異なる file、project 外 symlink は Unknown として黙る。analyzed Python や Manim は決して import / execute しない。
+
+`MLR122` は Cairo profile が active で、`bring_to_front(singleton)` が既存 root を確実に末尾へ re-add した直後だけ検査する。root order、target と比較 object の scene membership、leaf/non-empty path、両 `z_index` が exact で、他の non-empty leaf の `z_index` が target より真に大きい場合だけ high で出す。同値なら stable sort の re-add tie order が有効なので発火しない。group、branch、Unknown mutation、OpenGL-only run も発火しない。
 
 ### 7.3 performance
 
@@ -867,15 +879,17 @@ performance rule は次の emission gate と重複排除を持つ。
 - `MLP204`: fresh object を persistent Scene / family へ加える成長系を warning/high とし、既存 object の reorder は大きな Scene だけ info。
 - `MLP207` / `MLP208`: `N_family >= 32` または推定 curve insertion `>= 256` 程度から開始し、両方なら specialized な `MLP208` 一件にする。
 - `MLP211`: small coordinate vector は除外し、静的に `>= 64 KiB/frame`、family loop 内、または既知 large points allocation に限定する。
+- `MLP212`: exact curated `FullScreenRectangle`、constructor の `aspect_ratio` override / splat 不在、全 active profile が inherited default と同じ exact 16:9、play 直前の literal-derived `0 < fill_opacity < 1`、active updater 不在、style/opacity を書かない complete channel の certain direct-target animation、duration 下限 `>= 5 s` の全条件を要求する。profile ごとの frame pixel と pixel-frame 積を evidence にし、coverage / opacity / duration / target identity のどれかが Unknown なら出さない。
+- `MLP213`: active Cairo profile、exact curated `Surface`、literal `resolution` から `u × v >= 1024 faces`、certain direct-target animation を要求する。`1024` は `docs/research/perf-evidence.md` の versioned `(32, 32)` calibration workload に結び付け、計測 machine の milliseconds は portable な診断値にしない。OpenGL-only、unknown / starred / smaller resolution、branch-only play は出さない。
 - `MLP215`: 1 引数 no-op updater は普通の wait を dynamic にしない。通常 play の moving suffix と、`dt` / Scene updater による dynamic wait を別 evidence にする。
 - `MLP216`: relative affine 更新への置換は累積 drift の可能性があるため info/medium。topology と absolute transform の同値性を証明できた場合だけ強める。
 - `MLP218`: `dt` 未使用だけでは出さない。random、wall clock、external state にも依存せず、frame-invariant と証明できる時だけ high。
 - `MLP219`: 用途終了を証明できなければ「不要」と断定せず、推定生存 frame 数だけを示す。
 - `MLP222`: Cairo かつ image / screen area が閾値以上の場合。OpenGL に Cairo の PIL/full-frame cost を転用しない。
-- `MLP223`: Cairo、per-frame capture 対象、opacity が将来変わらない、の三条件を要求する。
+- `MLP223`: Cairo、singleton identity の certain direct-target play、non-empty path、exact `stroke_opacity == 0`、exact positive `stroke_width`、active updater 不在、current/future の style/opacity/unknown mutation 不在を要求する。透明 stroke が後で可視化される、または mutation / target / channel が Unknown なら出さない。
 - `MLP209`: `cairo_static_layers=True` の standard Scene で後続 static run を保持できるなら severity を下げる。
 - `MLP210`: continuous writer では per-play partial stream 境界が消えるため、OutputState が実際に per-play stream を示す時だけその cost を含める。
-- `MLP213`: large Cairo 3D Surface は通常 profile で扱える。OpenGL text-heavy 2D の劣位は driver依存なので、calibration で確認済みの profile にだけ出す。
+- `MLP213`: large Cairo 3D Surface は upstream `v0_20` profile と versioned calibration evidence で扱う。OpenGL text-heavy 2D の劣位は driver依存なので、calibration で確認済みの profile にだけ出す。
 
 `MLP209` の位置は root追加順ではなく、family flatten、`z_index` のstable sort、foregroundを反映したCairo effective display orderから計算する。順序がUnknownなら「83個」のような定量値を出さない。
 

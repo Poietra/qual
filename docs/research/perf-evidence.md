@@ -33,7 +33,7 @@ The worktree contained substantial uncommitted renderer changes. The source dige
 | Text, 1,000 characters | vectorized glyph closure saved about `20.9 ms` end to end | Text construction is not a trivial object allocation |
 | 16 distinct cold MathTex expressions | sequential `120.724 s`; submit-all/collect `11.717 s` | distinct cold resource keys and external processes must be modeled |
 | 7 cold Graph labels | `24.662 → 4.760 s` with local-fork precompile | precompile advice requires multiple distinct keys and the local capability |
-| Cairo Surface `(32, 32)`, 1,024 faces | pre-optimization z-sort about `17 ms/frame`; projection about `6.4 ms/frame`; optimized 1080p capture still about `113.6 ms/frame` in the recorded probe | use faces × frames, camera motion, shading, stroke and pixels |
+| Cairo Surface `(32, 32)`, 1,024 faces | pre-optimization z-sort about `17 ms/frame`; projection about `6.4 ms/frame`; optimized 1080p capture still about `113.6 ms/frame` in the recorded probe | use faces × frames, camera motion, shading, stroke and pixels; `MLP213` starts its advisory face gate at this recorded workload |
 | fork-per-play Cairo, 1080p | Bayes `7.55 → 3.95 s`; Algorithm `12.13 → 7.50 s` in the recorded A/B | fork blockers belong in a local-profile cost report, not generic warnings |
 
 Additional end-to-end runs later in the same audit measured different absolute totals as more optimizations and cache states changed. The linter must therefore keep symbolic multiplicities as its primary result and never embed these milliseconds as portable truth.

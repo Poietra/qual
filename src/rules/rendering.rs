@@ -27,11 +27,8 @@
 //! `renderer.opengl_only_mesh` in the knowledge profile) added to the
 //! scene while an active profile targets Cairo.
 //!
-//! Still reserved: `MLR109` (updater ordering lag), `MLR118` (SVG asset
-//! content facts), and `MLR122` (the interpreter now tracks per-object
-//! `z_index`, but the alias-safe cross-object stacking proof — "a literal
-//! `set_z_index` on another object provably keeps this one below it" — is
-//! still missing).
+//! The final Phase-4 wave adds updater-order, SVG-content, and cross-object
+//! stacking proofs (`MLR109`, `MLR118`, `MLR122`).
 
 mod assets;
 mod fixed_visibility;
@@ -44,9 +41,11 @@ mod renderer;
 mod scene_updaters;
 mod stacking;
 mod state;
+mod svg_assets;
 mod tex;
 mod tex_balance;
 mod tex_keys;
+mod updater_order;
 
 /// Shared with `rules::portability::paths` (MLD303/MLD305): recognizing
 /// Windows drive prefixes and resolving a literal path against the
@@ -88,6 +87,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(NonFiniteGeometryLiteral),
         Box::new(renderer::UnsupportedRendererApi),
         Box::new(fixed_visibility::StaleFixedVisibility),
+        Box::new(updater_order::UpdaterReadBeforeWriter),
         Box::new(tex_balance::UnbalancedTexLiteral),
         Box::new(scene_updaters::SceneUpdaterMutatesMobject),
         Box::new(points_layout::FixedPointLayoutAssumption),
@@ -96,9 +96,11 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(NonPositiveFontSize),
         Box::new(path_state::EmptyPathEdit),
         Box::new(BareRegisterFont),
+        Box::new(svg_assets::UnsupportedSvgContent),
         Box::new(renderer::MovingCameraUnderOpengl),
         Box::new(renderer::FocalDistanceUnderOpengl),
         Box::new(stacking::ZShiftForStacking),
+        Box::new(stacking::BringToFrontBelowHigherZ),
         Box::new(mesh::MeshUnderCairoTarget),
         Box::new(MarkupInPlainText),
         Box::new(state::BareMobjectLeaf),
