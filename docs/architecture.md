@@ -18,12 +18,12 @@ frontend facts ............. src/frontend/ — parse, imports/aliases,
    |                         project index, qualified calls, CFG,
    |                         statement/binding facts, target-python gate
 lifecycle interpreter ...... src/semantic/ — abstract interpretation of
-   |                         Scene runs -> LifecycleFacts
+   |                         independent Scene runs -> LifecycleFacts
 cost facts ................. src/cost/ (+ src/render_order.rs) — hot
    |                         contexts, frame intervals, execution
    |                         liveness, fork gates -> CostFacts
 rules ...................... src/rules/ — MLC / MLR / MLP / MLD query the
-   |                         fact layers via RuleContext; no AST walks
+   |                         fact layers via RuleContext; independent rules
 supersedes / suppressions .. src/rules/registry.rs, src/reporting/
    |                         suppressions.rs, baseline.rs
 reporting .................. src/reporting/ — concise | full | json |
@@ -36,12 +36,26 @@ is the clap surface. Every stage degrades to `Unknown` instead of
 guessing, and every downstream consumer must treat `Unknown` as "stay
 silent", never as evidence (invariant 2 below).
 
+For a cache-eligible `check`, `src/application.rs` first reads one source
+snapshot and asks `src/cache.rs` for a whole-project diagnostic entry. A
+dependency-validated hit skips the fact/rule stages and goes directly to
+reporting; a miss follows the pipeline above and stores the pre-baseline
+diagnostics only after asset dependencies remain stable across the rule run.
+The cache is an optimization boundary, never a semantic fact layer.
+
 Fact computation is gated on what the selected rules declare: each rule's
 `RuleMetadata::required_capabilities` names the fact layers it needs
 (`qualified-calls`, `lifecycle`, `cost-facts`, `statement-facts`, ...),
 and a `--select` that needs no lifecycle or cost facts skips computing
 them. Rules superseding a selected rule still run, so narrowing the
 selection never resurrects a superseded diagnostic.
+
+Cold analysis uses a bounded Rayon worker pool at three deterministic
+fan-out points: independent non-recursive summary SCCs in the same
+bottom-up layer, independent Scene lifecycle runs, and independent rules.
+Recursive SCC fixpoints and frontend/project-index construction remain
+sequential. Indexed collection plus the final stable diagnostic sort make
+the output byte-identical across worker counts.
 
 ## Fact-layer inventory
 
@@ -98,7 +112,8 @@ that runs each discovered Scene subclass's
 allocation-site identities, and statement-boundary snapshots. Support
 modules: `values.rs` (abstract values), `heap.rs` (abstract heap),
 `events.rs` (recorded facts), `summaries.rs` (parameter-relative effect
-summaries). The interpreter itself is a directory of nine modules under
+summaries; independent bottom-up components run in parallel). Independent
+Scene classes also run in parallel. The interpreter itself is a directory of nine modules under
 `src/semantic/interpreter/`:
 
 | Module | Owns |
@@ -155,7 +170,9 @@ numbers.
 Four group directories (`lifecycle/`, `rendering/`, `performance/`,
 `portability/`) plus `registry.rs`, which composes each group's `rules()`
 list, applies selection/capability gating, and deduplicates via
-`supersedes` metadata. Rules have **no visitors of their own**: they
+`supersedes` metadata. Enabled rules run independently in parallel, then
+their findings enter the shared deterministic supersession/filter/sort pass.
+Rules have **no visitors of their own**: they
 query `RuleContext` fact layers. The canonical traversal rule: no
 module-root AST walks in rule code — needed positions are promoted into
 frontend facts instead (DESIGN §5.6).
@@ -169,6 +186,19 @@ rollback), the output formats, and `coverage.rs` — the analysis-coverage
 report (`manim-lint coverage`, `check --analysis-summary`) that counts
 everything the analysis could *not* resolve. All output is deterministic
 and byte-stable for identical input.
+
+### Persistent cache (`src/cache.rs`)
+
+Cache v1 is a disposable `SQLite` WAL database containing JSON diagnostics
+and JSON filesystem-dependency manifests. Its project key covers the build
+fingerprint emitted by `build.rs`, schema/tool version, resolved semantic
+configuration, serialized knowledge profile, sorted source paths, and the
+exact source bytes fed to `SourceManager`. Asset files, missing candidates,
+and case-scan directory listings are re-stamped before a hit is accepted.
+WAL permits concurrent cold writers, while a monotonic access sequence and
+store-time pruning retain the 16 most recently used project snapshots.
+Corruption rebuilds with a warning; any other cache failure disables caching
+for that run and leaves full analysis available.
 
 ## One diagnostic, end to end
 

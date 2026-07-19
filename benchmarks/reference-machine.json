@@ -17,17 +17,19 @@
   },
   "enforced": {
     "cold_seconds": true,
-    "warm_seconds": false,
+    "warm_seconds": true,
     "peak_rss_mib": true,
-    "note": "DESIGN 11.4 defines warm as the second run immediately after warming the on-disk cache; the .manim-lint-cache (DESIGN 9, Phase 5) is not implemented yet, so no cached second run exists to measure. The warm measurement below is a full uncached re-analysis and is reported informationally until the cache lands, at which point warm_seconds must be flipped to enforced."
+    "note": "DESIGN 11.4 defines warm as the second run immediately after warming the on-disk cache. The benchmark asserts that cold is a cache miss, creates cache-v1.sqlite3, and warm is a dependency-validated cache hit before enforcing this threshold."
   },
   "measured": {
     "date": "2026-07-19",
     "build": "cargo test --release --test benchmark_gate -- --ignored benchmark",
     "fixture": "tests/corpus/benchmark_10kloc (20 files, 10810 physical lines)",
-    "cold_seconds": 0.714,
-    "warm_seconds": 0.626,
-    "peak_rss_mib": 215.2
+    "samples": 3,
+    "aggregation": "median of three consecutive benchmark processes",
+    "cold_seconds": 0.409,
+    "warm_seconds": 0.006,
+    "peak_rss_mib": 238.8
   },
-  "conditions": "No .manim-lint-cache exists (the on-disk cache is not implemented yet), so cold vs warm differ only by OS filesystem cache and process warm-up: cold is the first in-process check() over the fixture after test start, warm is an immediately following identical uncached run in the same process. Filesystem contents were already in the OS page cache from the build. Peak RSS is VmHWM of the test process, covering both runs."
+  "conditions": "Median of three consecutive invocations on the reference machine using the default Rayon worker pool. In each process the deterministic 20-file fixture is written to an isolated temporary project before timing, so its source contents are already in the OS page cache. Cold is the first in-process check() with .manim-lint-cache absent and asserts CacheStatus::Miss plus database creation. Warm is the immediately following identical check() and asserts CacheStatus::Hit. Peak RSS is VmHWM of the test process, covering both runs."
 }

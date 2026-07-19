@@ -160,6 +160,27 @@ fn output_is_byte_identical_across_runs() {
 }
 
 #[test]
+fn output_is_byte_identical_across_worker_counts() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path());
+    let mut args = args_for(project.path(), OutputFormat::Json);
+    args.no_cache = true;
+    let run_with = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| check(&args).unwrap())
+    };
+
+    let serial = run_with(1);
+    let parallel = run_with(4);
+    assert_eq!(serial.diagnostics, parallel.diagnostics);
+    assert_eq!(serial.output, parallel.output);
+    assert_eq!(serial.exit, parallel.exit);
+}
+
+#[test]
 fn diagnostics_are_stably_sorted() {
     let project = tempfile::tempdir().unwrap();
     write_project(project.path());

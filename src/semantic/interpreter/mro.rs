@@ -21,6 +21,11 @@ use super::exec::{
 };
 use super::{CameraKind, SceneLifecycle, TracedEvent};
 
+pub(super) struct SceneRun {
+    pub(super) lifecycle: SceneLifecycle,
+    pub(super) inline_fallbacks: Vec<super::FallbackFact>,
+}
+
 /// `super().<method>(...)` detection.
 pub(super) fn super_call_method(call: &ast::ExprCall) -> Option<&str> {
     let ast::Expr::Attribute(attribute) = call.func.as_ref() else {
@@ -316,7 +321,7 @@ fn scene_camera_kind(ctx: &Ctx<'_>, record: &ClassRecord) -> CameraKind {
     }
 }
 
-pub(super) fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
+pub(super) fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneRun {
     let (mro, constructor_state_unknown) = linearize_project(ctx.index, &record.qualified_name);
     let scene_id = ObjectId::new(
         AllocationSite::new(record.file, record.range),
@@ -392,32 +397,32 @@ pub(super) fn run_scene(ctx: &Ctx<'_>, record: &ClassRecord) -> SceneLifecycle {
             })
         })
         .collect();
-    // Play groups rehydrated from effect summaries during this scene's
-    // lifecycle runs (drained per scene: the context is shared across
-    // scenes, which run strictly sequentially).
-    let summary_derived_plays = ctx
-        .take_summary_play_groups()
+    let summary_derived_plays = std::mem::take(&mut sink.summary_play_groups)
         .into_iter()
         .map(crate::semantic::state::PlayGroupId)
         .collect();
-    SceneLifecycle {
-        qualified_name: record.qualified_name.clone(),
-        file: record.file,
-        scene_id,
-        mro,
-        constructor_state_unknown,
-        events,
-        snapshots: sink.snapshots,
-        plays: sink.plays,
-        summary_derived_plays,
-        updaters: sink.updaters,
-        updater_removals: sink.updater_removals,
-        builders: sink.builders,
-        target_requirements: sink.target_requirements,
-        scene_removals: sink.scene_removals,
-        camera_kind: scene_camera_kind(ctx, record),
-        fixed_registrations: sink.fixed_registrations,
-        super_calls,
-        final_heap: state.heap,
+    let inline_fallbacks = std::mem::take(&mut sink.inline_fallbacks);
+    SceneRun {
+        lifecycle: SceneLifecycle {
+            qualified_name: record.qualified_name.clone(),
+            file: record.file,
+            scene_id,
+            mro,
+            constructor_state_unknown,
+            events,
+            snapshots: sink.snapshots,
+            plays: sink.plays,
+            summary_derived_plays,
+            updaters: sink.updaters,
+            updater_removals: sink.updater_removals,
+            builders: sink.builders,
+            target_requirements: sink.target_requirements,
+            scene_removals: sink.scene_removals,
+            camera_kind: scene_camera_kind(ctx, record),
+            fixed_registrations: sink.fixed_registrations,
+            super_calls,
+            final_heap: state.heap,
+        },
+        inline_fallbacks,
     }
 }

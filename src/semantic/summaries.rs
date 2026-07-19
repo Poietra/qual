@@ -38,6 +38,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
+
 use crate::frontend::index::{ProjectIndex, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::events::MutationKind;
@@ -318,8 +320,9 @@ impl SummaryTable {
 ///
 /// Processing order is bottom-up over the strongly connected components of
 /// the call graph so that non-recursive callees are final before their
-/// callers are summarized; recursive SCCs iterate at most
-/// [`MAX_SCC_ITERATIONS`] times and then widen only their unstable
+/// callers are summarized. Independent non-recursive components in one
+/// bottom-up layer run in parallel; recursive SCCs iterate sequentially at
+/// most [`MAX_SCC_ITERATIONS`] times and then widen only their unstable
 /// knowledge.
 #[must_use]
 pub fn build(
@@ -333,81 +336,157 @@ pub fn build(
     let node_set: BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
     let edges = call_edges(calls, &node_set);
     let components = strongly_connected_components(&nodes, &edges);
+    let dependencies = component_dependencies(&components, &edges);
 
     let mut table = SummaryTable::default();
-    for component in components {
-        if component.len() == 1 && !is_self_recursive(&component[0], &edges) {
-            let name = &component[0];
-            let summary = crate::semantic::interpreter::summarize_callable(
-                sources, index, calls, knowledge, defs, &table, name,
-            );
-            table.summaries.insert(name.clone(), summary);
-            continue;
-        }
-        // Recursive SCC: seed every member, then iterate to a fixpoint.
-        for name in &component {
-            let params = defs
-                .defs
-                .get(name)
-                .map(FnDef::param_names)
-                .unwrap_or_default();
-            table
-                .summaries
-                .insert(name.clone(), MethodSummary::seed(name, params));
-        }
-        let mut converged = false;
-        for _ in 0..MAX_SCC_ITERATIONS {
-            let mut changed = false;
-            for name in &component {
-                let next = crate::semantic::interpreter::summarize_callable(
+    let mut remaining: BTreeSet<usize> = (0..components.len()).collect();
+    while !remaining.is_empty() {
+        let ready: Vec<usize> = remaining
+            .iter()
+            .copied()
+            .filter(|component| dependencies[*component].is_disjoint(&remaining))
+            .collect();
+        assert!(!ready.is_empty(), "SCC condensation graph must be acyclic");
+
+        let independent: Vec<usize> = ready
+            .iter()
+            .copied()
+            .filter(|component| {
+                components[*component].len() == 1
+                    && !is_self_recursive(&components[*component][0], &edges)
+            })
+            .collect();
+        let computed: Vec<(String, MethodSummary)> = independent
+            .par_iter()
+            .map(|component| {
+                let name = &components[*component][0];
+                let summary = crate::semantic::interpreter::summarize_callable(
                     sources, index, calls, knowledge, defs, &table, name,
                 );
-                if table.get(name) != Some(&next) {
-                    changed = true;
-                    table.summaries.insert(name.clone(), next);
-                }
-            }
-            if !changed {
-                converged = true;
-                break;
-            }
+                (name.clone(), summary)
+            })
+            .collect();
+        for (name, summary) in computed {
+            table.summaries.insert(name, summary);
         }
-        if !converged {
-            // Widen only the unknown part: keep the last iterate's effects
-            // and add one unknown-mutation over everything the callable
-            // could reach through its parameters (DESIGN §5.7). The play
-            // records survive widening: they are purely syntactic
-            // may-happen facts, so keeping them can only reveal plays,
-            // never fabricate state.
-            for name in &component {
-                let Some(def) = defs.defs.get(name) else {
-                    continue;
-                };
-                let site = AllocationSite::new(def.file, def.range);
-                if let Some(summary) = table.summaries.get_mut(name) {
-                    summary.converged = false;
-                    let values: Vec<SummaryOperand> = (0..summary.params.len())
-                        .map(|position| {
-                            SummaryOperand::Param(u32::try_from(position).unwrap_or(u32::MAX))
-                        })
-                        .collect();
-                    summary.events.push(SummaryEvent {
-                        certainty: Presence::Maybe,
-                        in_loop: false,
-                        in_definite_loop: false,
-                        site,
-                        effect: SummaryEffect::UnknownMutation {
-                            values,
-                            includes_scene: true,
-                        },
-                    });
-                    summary.returns = SummaryReturn::Unknown;
-                    summary.return_fact = ReturnFact::unknown();
-                }
+        for component in &independent {
+            remaining.remove(component);
+        }
+
+        for component in ready {
+            if !remaining.remove(&component) {
+                continue;
             }
+            summarize_recursive_component(
+                &components[component],
+                sources,
+                index,
+                calls,
+                knowledge,
+                defs,
+                &mut table,
+            );
         }
     }
     table
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the recursive SCC uses the same immutable analysis inputs as build"
+)]
+fn summarize_recursive_component(
+    component: &[String],
+    sources: &SourceManager,
+    index: &ProjectIndex,
+    calls: &QualifiedCallFacts,
+    knowledge: Option<&KnowledgeProfile>,
+    defs: &DefMap<'_>,
+    table: &mut SummaryTable,
+) {
+    for name in component {
+        let params = defs
+            .defs
+            .get(name)
+            .map(FnDef::param_names)
+            .unwrap_or_default();
+        table
+            .summaries
+            .insert(name.clone(), MethodSummary::seed(name, params));
+    }
+    let mut converged = false;
+    for _ in 0..MAX_SCC_ITERATIONS {
+        let mut changed = false;
+        for name in component {
+            let next = crate::semantic::interpreter::summarize_callable(
+                sources, index, calls, knowledge, defs, table, name,
+            );
+            if table.get(name) != Some(&next) {
+                changed = true;
+                table.summaries.insert(name.clone(), next);
+            }
+        }
+        if !changed {
+            converged = true;
+            break;
+        }
+    }
+    if converged {
+        return;
+    }
+    // Widen only the unknown part: keep the last iterate's effects and add
+    // one unknown mutation over everything reachable through parameters.
+    for name in component {
+        let Some(def) = defs.defs.get(name) else {
+            continue;
+        };
+        let site = AllocationSite::new(def.file, def.range);
+        if let Some(summary) = table.summaries.get_mut(name) {
+            summary.converged = false;
+            let values: Vec<SummaryOperand> = (0..summary.params.len())
+                .map(|position| SummaryOperand::Param(u32::try_from(position).unwrap_or(u32::MAX)))
+                .collect();
+            summary.events.push(SummaryEvent {
+                certainty: Presence::Maybe,
+                in_loop: false,
+                in_definite_loop: false,
+                site,
+                effect: SummaryEffect::UnknownMutation {
+                    values,
+                    includes_scene: true,
+                },
+            });
+            summary.returns = SummaryReturn::Unknown;
+            summary.return_fact = ReturnFact::unknown();
+        }
+    }
+}
+
+fn component_dependencies(
+    components: &[Vec<String>],
+    edges: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<BTreeSet<usize>> {
+    let mut component_of = BTreeMap::new();
+    for (index, component) in components.iter().enumerate() {
+        for node in component {
+            component_of.insert(node.as_str(), index);
+        }
+    }
+    let mut dependencies = vec![BTreeSet::new(); components.len()];
+    for (caller, callees) in edges {
+        let Some(&dependent) = component_of.get(caller.as_str()) else {
+            continue;
+        };
+        for callee in callees {
+            let Some(&dependency) = component_of.get(callee.as_str()) else {
+                continue;
+            };
+            if dependent != dependency {
+                dependencies[dependent].insert(dependency);
+            }
+        }
+    }
+    dependencies
 }
 
 /// The qualified caller node a call fact belongs to: the outermost

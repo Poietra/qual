@@ -107,6 +107,7 @@ pub(crate) use inline::summarize_callable;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
 use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 
@@ -868,13 +869,22 @@ pub fn analyze(
         }
     }
 
-    let mut scenes = Vec::new();
-    for class_id in &index.scene_classes {
-        let Some(record) = index.classes.get(class_id) else {
-            continue;
-        };
-        scenes.push(run_scene(&ctx, record));
-    }
+    let scene_ids: Vec<&String> = index.scene_classes.iter().collect();
+    let scene_runs: Vec<Option<_>> = scene_ids
+        .par_iter()
+        .map(|class_id| {
+            index
+                .classes
+                .get(*class_id)
+                .map(|record| run_scene(&ctx, record))
+        })
+        .collect();
+    let scene_runs: Vec<_> = scene_runs.into_iter().flatten().collect();
+    let mut inline_fallbacks: Vec<FallbackFact> = scene_runs
+        .iter()
+        .flat_map(|run| run.inline_fallbacks.iter().cloned())
+        .collect();
+    let mut scenes: Vec<SceneLifecycle> = scene_runs.into_iter().map(|run| run.lifecycle).collect();
 
     // Updater-body dataflow classification (MLC112 / MLP218): resolve
     // every registered callback body and attach its conservative fact.
@@ -904,10 +914,8 @@ pub fn analyze(
             .insert(*site, lambda_return_fact(&ctx, site.file, lambda));
     }
 
-    // Inline-fallback frontier (coverage reporting): recorded by the
-    // scene runs above, deduplicated across scenes sharing a helper
-    // chain, deterministically ordered.
-    let mut inline_fallbacks = ctx.take_inline_fallbacks();
+    // Inline-fallback frontier (coverage reporting): deduplicated across
+    // scenes sharing a helper chain, deterministically ordered.
     inline_fallbacks.sort();
     inline_fallbacks.dedup();
 

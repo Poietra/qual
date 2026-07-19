@@ -958,6 +958,8 @@ exit code:
 
 JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なしで生成する。
 
+`--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v1 では自動的に full analysis を行う。
+
 ### 8.2 `pyproject.toml`
 
 ```toml
@@ -1027,35 +1029,32 @@ baseline fingerprint は line number を使わず、`rule ID + relative path + q
 
 ## 9. cache と並列性
 
-MVP はまず逐次で正しさを確立する。測定後、module parse / index を process pool 化できる。diagnostic は必ず最後に安定 sort する。
+MVP はまず逐次で正しさを確立した。10k-LOC cold measurement で lifecycle が支配的と確認した後、cache-v1 は call graph の同じ bottom-up layer にある非再帰 summary、独立な Scene lifecycle、独立な rule を bounded worker pool で並列実行する。再帰 SCC は依存順の逐次 fixpoint のままにし、Scene と rule の結果は宣言順にcollectして最後に必ず安定sortする。worker数が変わってもdiagnostic / JSONはbyte-stableでなければならない。module parse / project index はまだ逐次であり、追加の並列化は測定後に行う。
 
-cache:
+cache-v1:
 
 ```text
 .manim-lint-cache/cache-v1.sqlite3
 ```
 
-保存するもの:
+まず逐次 analyzer の完全な一回分を atomic な project entry として保存する。保存するもの:
 
-- module exports
-- import edges
-- class hierarchy fragment
-- method summaries
-- diagnostics
-- dependency content hash
+- selector、suppression、confidence filter 適用後かつ baseline 適用前の diagnostics JSON
+- literal asset resolution / SVG inspection が参照した file content hash
+- missing path と case scan が参照した directory entry hash
 
-AST や pickle は保存せず JSON にする。key:
+AST や pickle は保存しない。diagnostics と dependency manifest は JSON にする。key:
 
 ```text
-tool/schema version
-+ target Python
+tool/schema/build version
++ target Python を含む resolved semantic config hash
 + Manim knowledge profile hash
-+ semantic config hash
-+ source content hash
-+ imported summary hashes
++ sorted relative source paths + source content hashes
 ```
 
-SQLite WAL を使い、破損時は警告して削除・再構築する。cache は正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
+cache-v1 は whole-project invalidation を選ぶため、解析対象 module の import summary は独立 entry にせず、その module source bytes が同じ project key に入る。将来 module parse / index を並列化するときは module exports、import edges、class hierarchy fragment、method summaries と imported summary hash を entry に追加し、diagnostic の意味を変えずに incremental cache へ拡張する。
+
+lookup 時は source key に加えて dependency manifest を再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と cold analysis で同じ snapshot を使う。SQLite WAL を使い、同じ project への並行 cold writer を許容する。entry は lookup / store ごとの単調な access sequence で recent 16 project snapshots に制限し、store 後に古いものを削除する。DB または保存 JSON の破損時は stderr に警告してDBを削除・再構築する。その他の cache I/O failure はその実行だけ cache を無効にし、full analysis を続ける。cache は正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
 
 ## 10. repository layout
 
@@ -1180,7 +1179,7 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - `tests/corpus/manifest-v1.json` に source digest、license、期待診断、label revision を固定する。Manim公式examples/testsと、許可済み実Scene snapshotを含める。
 - default correctness rules全体で、少なくとも200件の発火候補を人手labelし、各ruleに最低10 true-positive例を持たせる。precision点推定98%以上かつ95% Wilson下限95%以上、さらにpinned公式corpusで既知false positive 0件をrelease gateとする。
 - performance advisoryは上記と別集計にし、precisionに加えてmultiplicity evidenceと代替案が有用かをreview checklistで採点する。
-- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内とする。coldは`.manim-lint-cache`不在、filesystem cache条件も記録する。
+- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内とする。benchmark は隔離した一時projectで、cold前に`.manim-lint-cache`不在、coldがcache miss、warmがcache hitであることもassertし、filesystem cache条件を記録する。
 - peak RSS: 300 MiB 未満
 - diagnostic order と JSON は同じ入力で byte-stable
 

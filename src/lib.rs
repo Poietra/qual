@@ -3,6 +3,7 @@
 //! The analyzer never imports Manim and never executes analyzed user code.
 
 pub mod application;
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod cost;
