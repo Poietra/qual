@@ -8,7 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 
-use crate::cache::{AnalysisCache, CacheStatus, DependencyManifest};
+use crate::cache::{
+    AnalysisCache, AnalysisComponent, CacheKey, CacheStatus, ComponentCacheEntry,
+    DependencyManifest,
+};
 use crate::cli::{CheckArgs, Command, ExitStatus};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
@@ -24,7 +27,8 @@ use crate::rules::RuleContext;
 use crate::rules::registry;
 use crate::semantic;
 use crate::semantic::interpreter::SceneLifecycle;
-use crate::source::SourceManager;
+use crate::semantic::summaries::SummaryTable;
+use crate::source::{FileId, SourceManager};
 
 /// Errors that abort a command; all map to exit code 2.
 #[derive(Debug, thiserror::Error)]
@@ -103,10 +107,19 @@ pub struct CheckReport {
     pub fixes: Option<FixReport>,
     /// Analysis-coverage report when `--analysis-summary` was given.
     pub coverage: Option<CoverageReport>,
-    /// Whether this run hit, populated, or bypassed the analysis cache.
+    /// Whether this run hit, partially reused, populated, or bypassed the
+    /// analysis cache.
     pub cache_status: CacheStatus,
     /// Recoverable cache problems reported without aborting analysis.
     pub cache_warnings: Vec<String>,
+}
+
+struct ComponentPlan {
+    component: AnalysisComponent,
+    key: Option<CacheKey>,
+    hit: bool,
+    dependency_paths: BTreeSet<PathBuf>,
+    dependencies_before: Option<DependencyManifest>,
 }
 
 /// Runs `manim-lint check` and renders its output.
@@ -234,10 +247,144 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     // The coverage summary reads play-duration and builder facts, so it
     // needs the lifecycle interpreter even when no selected rule does.
     needs.lifecycle |= args.analysis_summary;
-    let facts = compute_facts(&sources, &config, &profile, needs);
+    let surface = manim_surface(&profile);
+    let frontend = frontend::index::analyze(&sources, &config.source_roots, &surface);
+
+    // A whole-project miss falls back to dependency-closed component
+    // entries. The frontend remains project-wide; only summaries, Scene
+    // lifecycles, cost facts, and diagnostics owned by miss components are
+    // recomputed (DESIGN §9 cache-v2).
+    let mut recompute_files: BTreeSet<FileId> = sources
+        .files()
+        .iter()
+        .map(crate::source::SourceFile::id)
+        .collect();
+    let mut cached_diagnostics = Vec::new();
+    let mut summary_seed = SummaryTable::default();
+    let mut component_plans = Vec::new();
+    if cache_key.is_some() {
+        recompute_files.clear();
+        let components = crate::cache::build_analysis_components(
+            &sources,
+            &config.source_roots,
+            &frontend.index,
+            &frontend.calls,
+        );
+        let project_layout: Vec<&Path> = source_snapshot
+            .iter()
+            .map(|(path, _)| path.as_path())
+            .collect();
+        let mut hits = 0;
+        for component in components {
+            let component_sources: Vec<(&Path, &[u8])> = component
+                .files
+                .iter()
+                .filter_map(|file| {
+                    let (path, bytes) = &source_snapshot[file.index()];
+                    bytes.as_deref().map(|bytes| (path.as_path(), bytes))
+                })
+                .collect();
+            let key = match crate::cache::build_component_key(
+                &project_root,
+                &config,
+                &profile,
+                &project_layout,
+                &component_sources,
+            ) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    analysis_cache.disable_with_warning(format!(
+                        "incremental cache key could not be built: {error}"
+                    ));
+                    None
+                }
+            };
+            let dependency_paths = collect_cache_dependency_paths(
+                &sources,
+                &config,
+                &profile,
+                &frontend.calls,
+                Some(&component.files),
+            );
+            let cached = key
+                .as_ref()
+                .and_then(|key| analysis_cache.lookup_component(key));
+            let valid_cached = match cached {
+                Some(entry) if component_cache_entry_belongs_to(&entry, &component) => Some(entry),
+                Some(_) => {
+                    if let Some(key) = &key {
+                        analysis_cache.reject_component(
+                            key,
+                            "an incremental entry contained facts owned by another component",
+                        );
+                    }
+                    None
+                }
+                None => None,
+            };
+            let hit = if let Some(entry) = valid_cached {
+                hits += 1;
+                cached_diagnostics.extend(entry.diagnostics);
+                summary_seed.summaries.extend(entry.summaries.summaries);
+                true
+            } else {
+                recompute_files.extend(component.files.iter().copied());
+                false
+            };
+            let dependencies_before = if hit || key.is_none() {
+                None
+            } else {
+                match DependencyManifest::capture(&dependency_paths) {
+                    Ok(dependencies) => Some(dependencies),
+                    Err(error) => {
+                        analysis_cache.disable_with_warning(format!(
+                            "incremental cache entry was not stored because dependencies could not be stamped: {error}"
+                        ));
+                        None
+                    }
+                }
+            };
+            component_plans.push(ComponentPlan {
+                component,
+                key,
+                hit,
+                dependency_paths,
+                dependencies_before,
+            });
+        }
+        analysis_cache.record_component_outcome(hits, component_plans.len());
+    }
+
+    let recompute_paths: BTreeSet<&str> = recompute_files
+        .iter()
+        .map(|file| sources.file(*file).relative_path())
+        .collect();
+    if cache_key.is_some() {
+        diagnostics.retain(|diagnostic| recompute_paths.contains(diagnostic.path.as_str()));
+    }
+
+    let facts = if recompute_files.is_empty() {
+        ProjectFacts {
+            index: frontend.index,
+            calls: frontend.calls,
+            lifecycle: semantic::interpreter::LifecycleFacts::default(),
+            cost: cost::CostFacts::default(),
+            summaries: summary_seed,
+        }
+    } else {
+        compute_incremental_facts(
+            &sources,
+            &config,
+            &profile,
+            needs,
+            frontend,
+            &recompute_files,
+            summary_seed,
+        )
+    };
     let cache_dependencies = cache_key
         .as_ref()
-        .map(|_| collect_cache_dependency_paths(&sources, &config, &profile, &facts.calls));
+        .map(|_| collect_cache_dependency_paths(&sources, &config, &profile, &facts.calls, None));
     let cache_dependencies_before = cache_dependencies.as_ref().and_then(|paths| {
         match DependencyManifest::capture(paths) {
             Ok(dependencies) => Some(dependencies),
@@ -259,14 +406,25 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
             &facts.lifecycle,
         )
     });
+    let ProjectFacts {
+        index,
+        calls,
+        lifecycle,
+        cost,
+        summaries,
+    } = facts;
     let context = RuleContext::new(&sources, &config)
         .with_knowledge(&profile)
-        .with_frontend(facts.index, facts.calls)
-        .with_lifecycle(facts.lifecycle)
-        .with_cost(facts.cost);
-    let rule_diagnostics: Vec<Vec<Diagnostic>> =
-        rules.par_iter().map(|rule| rule.run(&context)).collect();
-    diagnostics.extend(rule_diagnostics.into_iter().flatten());
+        .with_frontend(index, calls)
+        .with_lifecycle(lifecycle)
+        .with_cost(cost);
+    if !recompute_files.is_empty() {
+        let rule_diagnostics: Vec<Vec<Diagnostic>> =
+            rules.par_iter().map(|rule| rule.run(&context)).collect();
+        diagnostics.extend(rule_diagnostics.into_iter().flatten().filter(|diagnostic| {
+            cache_key.is_none() || recompute_paths.contains(diagnostic.path.as_str())
+        }));
+    }
 
     // Supersession runs BEFORE suppression filtering, deliberately: the
     // specificity dedup (DESIGN §7.3) is part of diagnostic *production* —
@@ -297,6 +455,57 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
             })
     });
 
+    diagnostics.sort_by(Diagnostic::compare_stable);
+
+    // Store each miss shard before adding hit diagnostics back. Every shard
+    // therefore owns exactly its paths and summary FileIds; component
+    // validation rejects structurally misplaced cached JSON on lookup.
+    let mut component_entries_to_store = Vec::new();
+    for plan in &component_plans {
+        if plan.hit {
+            continue;
+        }
+        let (Some(key), Some(before)) = (&plan.key, &plan.dependencies_before) else {
+            continue;
+        };
+        let component_diagnostics: Vec<Diagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| plan.component.paths.contains(&diagnostic.path))
+            .cloned()
+            .collect();
+        let component_summaries = SummaryTable {
+            summaries: summaries
+                .summaries
+                .iter()
+                .filter(|(_, summary)| {
+                    summary
+                        .file
+                        .is_some_and(|file| plan.component.files.contains(&file))
+                })
+                .map(|(name, summary)| (name.clone(), summary.clone()))
+                .collect(),
+        };
+        match DependencyManifest::capture(&plan.dependency_paths) {
+            Ok(after) if after == *before => component_entries_to_store.push((
+                key.clone(),
+                ComponentCacheEntry {
+                    diagnostics: component_diagnostics,
+                    summaries: component_summaries,
+                },
+                after,
+            )),
+            Ok(_) => analysis_cache.disable_with_warning(
+                "incremental cache entry was not stored because an asset dependency changed during analysis"
+                    .to_owned(),
+            ),
+            Err(error) => analysis_cache.disable_with_warning(format!(
+                "incremental cache entry was not stored because dependencies could not be stamped: {error}"
+            )),
+        }
+    }
+    analysis_cache.store_components(&component_entries_to_store);
+
+    diagnostics.extend(cached_diagnostics);
     diagnostics.sort_by(Diagnostic::compare_stable);
 
     if let (Some(key), Some(paths), Some(before)) =
@@ -434,7 +643,7 @@ fn read_source_snapshot(files: &[PathBuf]) -> Vec<(PathBuf, Option<Vec<u8>>)> {
 }
 
 /// Operations that need source/index state after diagnostics are produced do
-/// a full analysis in cache v1. Normal checks, every output format, and
+/// a full analysis in cache v2. Normal checks, every output format, and
 /// `--statistics` remain cacheable.
 fn cache_eligible(args: &CheckArgs) -> bool {
     !args.no_cache
@@ -442,6 +651,17 @@ fn cache_eligible(args: &CheckArgs) -> bool {
         && args.baseline.is_none()
         && args.write_baseline.is_none()
         && !args.analysis_summary
+}
+
+fn component_cache_entry_belongs_to(
+    entry: &ComponentCacheEntry,
+    component: &AnalysisComponent,
+) -> bool {
+    entry
+        .diagnostics
+        .iter()
+        .all(|diagnostic| component.paths.contains(&diagnostic.path))
+        && entry.summaries.belongs_to_files(&component.files)
 }
 
 const CACHE_SVG_MOBJECT: &str = "manim.mobject.svg.svg_mobject.SVGMobject";
@@ -458,9 +678,13 @@ fn collect_cache_dependency_paths(
     config: &ResolvedConfig,
     profile: &KnowledgeProfile,
     calls: &frontend::index::QualifiedCallFacts,
+    included_files: Option<&BTreeSet<FileId>>,
 ) -> BTreeSet<PathBuf> {
     let mut dependencies = BTreeSet::new();
     for call in &calls.calls {
+        if included_files.is_some_and(|files| !files.contains(&call.file)) {
+            continue;
+        }
         let known: Vec<&str> = call
             .candidates
             .iter()
@@ -673,6 +897,7 @@ struct ProjectFacts {
     calls: frontend::index::QualifiedCallFacts,
     lifecycle: semantic::interpreter::LifecycleFacts,
     cost: cost::CostFacts,
+    summaries: SummaryTable,
 }
 
 /// Which optional fact layers a run must compute. Frontend facts (project
@@ -746,6 +971,55 @@ fn compute_facts(
         calls: facts.calls,
         lifecycle,
         cost,
+        summaries: SummaryTable::default(),
+    }
+}
+
+/// Computes only the derived facts owned by cache-miss components. Frontend
+/// facts are deliberately project-wide and supplied by the caller; cached
+/// method summaries seed dependency components that were validated as hits.
+fn compute_incremental_facts(
+    sources: &SourceManager,
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+    needs: FactNeeds,
+    frontend: frontend::index::FrontendFacts,
+    recompute_files: &BTreeSet<FileId>,
+    summary_seed: SummaryTable,
+) -> ProjectFacts {
+    let (lifecycle, summaries) = if needs.lifecycle {
+        semantic::interpreter::analyze_incremental(
+            sources,
+            &frontend.index,
+            &frontend.calls,
+            Some(profile),
+            recompute_files,
+            summary_seed,
+        )
+    } else {
+        (
+            semantic::interpreter::LifecycleFacts::default(),
+            summary_seed,
+        )
+    };
+    let cost = if needs.cost {
+        cost::CostFacts::compute_with_lifecycle(
+            sources,
+            &frontend.index,
+            &frontend.calls,
+            Some(profile),
+            &config.active_profiles,
+            &lifecycle,
+        )
+    } else {
+        cost::CostFacts::default()
+    };
+    ProjectFacts {
+        index: frontend.index,
+        calls: frontend.calls,
+        lifecycle,
+        cost,
+        summaries,
     }
 }
 

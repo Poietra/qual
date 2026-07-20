@@ -958,7 +958,7 @@ exit code:
 
 JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なしで生成する。
 
-`--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v1 では自動的に full analysis を行う。
+`--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v2 では自動的に full analysis を行う。
 
 ### 8.2 `pyproject.toml`
 
@@ -1031,19 +1031,19 @@ baseline fingerprint は line number を使わず、`rule ID + relative path + q
 
 MVP はまず逐次で正しさを確立した。10k-LOC cold measurement で lifecycle が支配的と確認した後、cache-v1 は call graph の同じ bottom-up layer にある非再帰 summary、独立な Scene lifecycle、独立な rule を bounded worker pool で並列実行する。再帰 SCC は依存順の逐次 fixpoint のままにし、Scene と rule の結果は宣言順にcollectして最後に必ず安定sortする。worker数が変わってもdiagnostic / JSONはbyte-stableでなければならない。module parse / project index はまだ逐次であり、追加の並列化は測定後に行う。
 
-cache-v1:
+cache-v2:
 
 ```text
-.manim-lint-cache/cache-v1.sqlite3
+.manim-lint-cache/cache-v2.sqlite3
 ```
 
-まず逐次 analyzer の完全な一回分を atomic な project entry として保存する。保存するもの:
+第一層はcache-v1と同じatomicなwhole-project entryである。全sourceが一致する通常のwarm runはfrontendを起動せず、次を再利用する:
 
 - selector、suppression、confidence filter 適用後かつ baseline 適用前の diagnostics JSON
 - literal asset resolution / SVG inspection が参照した file content hash
 - missing path と case scan が参照した directory entry hash
 
-AST や pickle は保存しない。diagnostics と dependency manifest は JSON にする。key:
+whole-project key:
 
 ```text
 tool/schema/build version
@@ -1052,9 +1052,27 @@ tool/schema/build version
 + sorted relative source paths + source content hashes
 ```
 
-cache-v1 は whole-project invalidation を選ぶため、解析対象 module の import summary は独立 entry にせず、その module source bytes が同じ project key に入る。将来 module parse / index を並列化するときは module exports、import edges、class hierarchy fragment、method summaries と imported summary hash を entry に追加し、diagnostic の意味を変えずに incremental cache へ拡張する。
+第二層はwhole-project miss時のincremental component entryである。全sourceをdecode / parseし、module tree、exports、import edge、class hierarchy、qualified callsを再構築してから、project-localのimport、qualified call、resolved base class、module-name collision edgeを無向に見た弱連結componentを作る。cross-file helperの診断がcallee側spanへanchorされ得るため、primary pathだけを単独のcache shardにはしない。一つでも静的な意味依存edgeがあれば同じcomponentとして無効化する。
 
-lookup 時は source key に加えて dependency manifest を再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と cold analysis で同じ snapshot を使う。SQLite WAL を使い、同じ project への並行 cold writer を許容する。entry は lookup / store ごとの単調な access sequence で recent 16 project snapshots に制限し、store 後に古いものを削除する。DB または保存 JSON の破損時は stderr に警告してDBを削除・再構築する。その他の cache I/O failure はその実行だけ cache を無効にし、full analysis を続ける。cache は正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
+component entryに保存するもの:
+
+- component内callableの`MethodSummary` JSON
+- componentが所有する、filter後かつbaseline前のdiagnostics JSON
+- component内のliteral asset / case scan dependency manifest JSON
+
+AST、token、source text、heap snapshotは保存しない。`FileId`を含むsummaryは、全projectのsorted relative source layout hashをkeyに含め、layoutが変われば全componentをmissにする。component key:
+
+```text
+tool/schema/build version
++ resolved semantic config hash
++ Manim knowledge profile hash
++ sorted project source layout hash
++ sorted component source paths + source content hashes
+```
+
+componentはproject-local summary dependencyの推移閉包を含むため、このcomponent content hashがimported summary hashを兼ねる。whole-project missではhit componentのsummaryをseedし、miss componentのsummaryと、そのcomponentが定義するScene lifecycle / cost factsだけを再計算する。ruleは決定的な同じproject contextをqueryするが、新規diagnosticとして採用するのはmiss component所有pathだけとし、hit componentの保存済みdiagnostic shardと結合して最後に安定sortする。componentが一部だけhitした実行は内部statusを`partial`とする。
+
+lookup 時は source key に加えてentryごとのdependency manifestを再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と解析で同じ snapshot を使う。SQLite WAL を使い、同じ project への並行 cold writer を許容する。entry は lookup / store ごとの単調な access sequenceで、recent 16 whole-project snapshotsとrecent 256 component snapshotsに制限し、store後に古いものを削除する。DBまたは保存JSONのparse破損時はstderrに警告してDBを削除・再構築し、component外の`FileId`を含む構造不正entryはそのentryだけを削除・再構築する。その他のcache I/O failureはその実行だけcacheを無効にし、必要なcomponentまたはfull analysisを続ける。cacheは正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
 
 ## 10. repository layout
 
@@ -1179,7 +1197,7 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - `tests/corpus/manifest-v1.json` に source digest、license、期待診断、label revision を固定する。Manim公式examples/testsと、許可済み実Scene snapshotを含める。
 - default correctness rules全体で、少なくとも200件の発火候補を人手labelし、各ruleに最低10 true-positive例を持たせる。precision点推定98%以上かつ95% Wilson下限95%以上、さらにpinned公式corpusで既知false positive 0件をrelease gateとする。
 - performance advisoryは上記と別集計にし、precisionに加えてmultiplicity evidenceと代替案が有用かをreview checklistで採点する。
-- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内とする。benchmark は隔離した一時projectで、cold前に`.manim-lint-cache`不在、coldがcache miss、warmがcache hitであることもassertし、filesystem cache条件を記録する。
+- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内、20個の独立componentのうち1fileだけを変更したincremental runを0.5秒以内とする。benchmark は隔離した一時projectで、cold前に`.manim-lint-cache`不在、coldがcache miss、warmがcache hit、incrementalがpartial hitであることもassertし、filesystem cache条件を記録する。
 - peak RSS: 300 MiB 未満
 - diagnostic order と JSON は同じ入力で byte-stable
 

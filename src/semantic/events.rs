@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::semantic::state::{AnimationState, CallbackRef, UpdaterFact};
 use crate::semantic::values::{AllocationSite, KindSet, Num, ObjectId};
 
@@ -151,7 +153,7 @@ impl Default for Multiplicity {
 }
 
 /// Which fact dimension a mutation writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MutationKind {
     /// Geometry points changed.
     Points,

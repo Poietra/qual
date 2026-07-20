@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 
 use rustpython_parser::text_size::TextRange;
+use serde::{Deserialize, Serialize};
 
 use crate::source::FileId;
 
@@ -22,7 +23,7 @@ pub const MAX_CALL_CONTEXT_DEPTH: usize = 2;
 pub const MAX_KIND_CANDIDATES: usize = 8;
 
 /// Whether an object is in a collection (e.g. Scene membership).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Presence {
     /// Definitely not a member on every path.
     Absent,
@@ -33,7 +34,7 @@ pub enum Presence {
 }
 
 /// Three-valued boolean fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Truth {
     /// Definitely false on every path.
     No,
@@ -112,7 +113,7 @@ impl Visibility {
 ///
 /// Integers are kept exact as `i64` instead of being converted to `f64`, so
 /// counts such as loop bounds and family sizes never lose precision.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum NumLit {
     /// An exact integer.
     Int(i64),
@@ -185,7 +186,7 @@ impl std::ops::Mul for NumLit {
 /// bound), `Symbol(name)`, or `Unknown`. Unknown values are never assumed to
 /// be `1` or `0`: any arithmetic involving `Symbol` or `Unknown` yields
 /// `Unknown` rather than a fabricated exact value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Num {
     /// An exactly known value.
     Exact(NumLit),
@@ -377,7 +378,7 @@ impl Num {
 }
 
 /// How many runtime objects one abstract [`ObjectId`] may stand for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Cardinality {
     /// Exactly one runtime object.
     Singleton,
@@ -397,7 +398,7 @@ impl Cardinality {
 
 /// A source location used as an allocation site or call site: file plus the
 /// byte span of the originating expression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AllocationSite {
     /// File the expression lives in.
     pub file: FileId,
@@ -428,7 +429,7 @@ pub type CallSite = AllocationSite;
 /// Calling the same helper from two different sites yields two different
 /// contexts, so allocations inside the helper are not collapsed into one
 /// identity (DESIGN §5.5).
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CallContextId {
     frames: Vec<CallSite>,
 }
@@ -461,7 +462,7 @@ impl CallContextId {
 
 /// Abstract object identity: `(allocation site, bounded call context,
 /// cardinality)` (DESIGN §5.5).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectId {
     /// Where the object was allocated.
     pub site: AllocationSite,
@@ -547,7 +548,7 @@ pub struct CopyOf {
 }
 
 /// A candidate set of fully qualified Manim class names.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KindSet {
     /// The object's class is one of these candidates.
     Known(BTreeSet<String>),

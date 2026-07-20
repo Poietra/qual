@@ -877,7 +877,7 @@ pub(crate) fn summarize_callable(
 ) -> MethodSummary {
     let _ = sources;
     let Some(def) = defs.defs.get(qualified_name) else {
-        return MethodSummary::seed(qualified_name, Vec::new());
+        return MethodSummary::seed(qualified_name, None, Vec::new());
     };
     let ctx = Ctx::new(index, calls, knowledge, defs, table);
     let params = def.param_names();
@@ -1089,6 +1089,7 @@ pub(crate) fn summarize_callable(
 
     MethodSummary {
         qualified_name: qualified_name.to_owned(),
+        file: Some(def.file),
         params,
         events,
         plays,

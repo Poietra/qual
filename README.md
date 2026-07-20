@@ -161,24 +161,27 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
 ## Analysis cache
 
 Normal `check` runs keep a disposable SQLite cache at
-`.manim-lint-cache/cache-v1.sqlite3`. The first run analyzes the complete
-project and stores the filtered diagnostic set as JSON; an identical second
-run validates its filesystem dependencies and reuses that result. The key
-covers the analyzer build, resolved semantic configuration, Manim knowledge
-profile, selected source paths, and source bytes. Literal asset candidates
-and case-sensitive directory walks are stamped separately, so creating,
-deleting, renaming, or changing an asset invalidates the entry even when the
-Python source did not change.
+`.manim-lint-cache/cache-v2.sqlite3`. An identical second run validates
+filesystem dependencies and reuses the whole-project diagnostic JSON without
+starting the frontend. After a source edit, cache v2 still parses and indexes
+the complete project, then divides project files into weak dependency
+components using resolved imports, calls, base classes, and module-name
+collisions. Unchanged components reuse JSON method summaries and filtered
+diagnostics; only changed components rerun summaries, Scene lifecycle, and
+cost analysis. ASTs and analyzed code are never serialized or executed.
 
-The database uses SQLite WAL, supports concurrent cold writers, and retains
-the 16 most recently used project snapshots so stale configurations cannot
-grow it without bound. It is never required for correctness. A corrupt
-database is reported as a warning, deleted, and rebuilt while the full
-analysis continues. `--no-cache` disables all cache filesystem activity.
-Cache v1 also deliberately runs a full analysis for `--fix`, baselines, and
-`--analysis-summary`, because those operations need live source or index
-state after diagnostics have been produced. Add `.manim-lint-cache/` to a
-project's ignore file; this repository's own `.gitignore` already does so.
+Keys cover the analyzer build, resolved semantic configuration, Manim
+knowledge profile, complete source layout, and relevant source bytes. Literal
+asset candidates and case-sensitive directory walks are stamped per entry,
+so asset changes invalidate the affected component. The SQLite WAL database
+supports concurrent cold writers and retains the 16 most recently used
+project snapshots plus 256 component snapshots. It is never required for
+correctness: corruption rebuilds with a warning and other failures continue
+with analysis. `--no-cache` disables all cache filesystem activity. `--fix`,
+baselines, and `--analysis-summary` deliberately run a complete analysis
+because they need live source or index state after diagnostics are produced.
+Add `.manim-lint-cache/` to a project's ignore file. Older
+`cache-v1.sqlite3` files are unused and may be removed.
 
 Cold runs parallelize independent summary components, Scene lifecycle runs,
 and rules using a bounded worker pool. Recursive summary fixpoints and the
@@ -649,12 +652,13 @@ Three additional gates guard releases:
 cargo test --test corpus_gate
 
 # Benchmark gate — explicit, release build, quiet machine.
-# Cold ≤ 2 s / warm cache hit ≤ 0.5 s / peak RSS < 300 MiB over the pinned 10k-LOC fixture
+# Cold ≤ 2 s / warm hit ≤ 0.5 s / one-of-20 incremental ≤ 0.5 s /
+# peak RSS < 300 MiB over the pinned 10k-LOC fixture
 # (tests/corpus/benchmark_10kloc); thresholds assert only on the machine
 # matching benchmarks/reference-machine.json, informational elsewhere.
-# The gate also proves cold is a cache miss and warm is a validated hit.
-# Three-run median on the reference machine (2026-07-19): cold 0.409 s,
-# warm 0.006 s, peak RSS 238.8 MiB — all within budget.
+# The gate proves cold is a miss, warm a validated hit, and incremental a partial hit.
+# Three-run median on the reference machine (2026-07-20): cold 0.422 s,
+# warm 0.006 s, incremental 0.171 s, peak RSS 246.5 MiB — all within budget.
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # Knowledge drift gate — needs the sibling Manim checkout; in CI it runs

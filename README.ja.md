@@ -105,21 +105,24 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
 ## 解析キャッシュ
 
 通常の `check` は破棄可能な SQLite cache を
-`.manim-lint-cache/cache-v1.sqlite3` に保持します。初回はproject全体を
-解析してfilter後のdiagnosticsをJSONで保存し、同一入力の二回目はfilesystem
-dependencyを検証して結果を再利用します。keyにはanalyzer build、解決済みの
-semantic config、Manim knowledge profile、対象source pathとsource bytesが
-含まれます。literal asset候補とcase-sensitiveなdirectory walkは別にstamp
-されるため、Python sourceが不変でもassetの作成・削除・rename・内容変更で
-entryは無効になります。
+`.manim-lint-cache/cache-v2.sqlite3` に保持します。同一入力の二回目はfilesystem
+dependencyを検証し、frontendを起動せずwhole-project diagnostics JSONを再利用
+します。source変更後は全projectをparse/indexしてから、解決済みimport、call、
+base class、module名collisionを弱連結componentへまとめます。変更のないcomponent
+はmethod summaryとfilter済みdiagnosticsのJSONを再利用し、変更componentだけ
+summary、Scene lifecycle、cost解析をやり直します。ASTや解析対象codeは保存も
+実行もしません。
 
-DBはSQLite WALを使って並行cold writerを許容し、古い設定で際限なく増えない
-よう直近に使った16個のproject snapshotだけを保持します。正しさに必要な状態
-ではありません。破損はwarningを出してDBを削除・再構築し、完全解析を継続
-します。`--no-cache` はcacheに関するfilesystem accessをすべて無効にします。
-cache-v1ではlive source/index stateを後段でも使う`--fix`、baseline、
-`--analysis-summary`も意図的に完全解析します。projectのignore fileには
-`.manim-lint-cache/`を追加してください。
+keyにはanalyzer build、semantic config、Manim knowledge profile、全source layout、
+該当componentのsource bytesが含まれます。literal asset候補とcase-sensitiveな
+directory walkもentryごとにstampするため、asset変更は該当componentを無効化
+します。SQLite WALは並行cold writerを許容し、直近16個のproject snapshotと
+256個のcomponent snapshotを保持します。cacheは正しさに必要な状態ではなく、
+破損時はwarning付きで再構築し、その他のfailureでも解析を継続します。
+`--no-cache`はcache filesystem accessをすべて無効にします。`--fix`、baseline、
+`--analysis-summary`はlive source/index stateが必要なため完全解析します。
+projectのignore fileには`.manim-lint-cache/`を追加してください。旧
+`cache-v1.sqlite3`は使われないため削除できます。
 
 cold runは依存しないsummary component、Scene lifecycle、ruleをbounded worker
 poolで並列化します。再帰summaryのfixpointとfrontend/project indexは順序を
@@ -435,12 +438,13 @@ cargo test --test corpus_gate
 
 # ベンチマークゲート — 明示的に実行、release ビルド、静かなマシンで。
 # ピン留めされた 10k-LOC フィクスチャ(tests/corpus/benchmark_10kloc)で
-# cold ≤ 2 s / warm cache hit ≤ 0.5 s / peak RSS < 300 MiB。
+# cold ≤ 2 s / warm hit ≤ 0.5 s / 20component中1fileのincremental ≤ 0.5 s /
+# peak RSS < 300 MiB。
 # 閾値は benchmarks/reference-machine.json
 # に一致するマシンでのみ assert され、それ以外では情報提供のみ。
-# gateはcoldがcache miss、warmが検証済みhitであることも証明する。
-# リファレンスマシンでの3回の中央値(2026-07-19): cold 0.409 s、
-# warm 0.006 s、peak RSS 238.8 MiB — すべてバジェット内。
+# gateはcoldがmiss、warmが検証済みhit、incrementalがpartial hitであることも証明する。
+# リファレンスマシンでの3回の中央値(2026-07-20): cold 0.422 s、
+# warm 0.006 s、incremental 0.171 s、peak RSS 246.5 MiB — すべてバジェット内。
 cargo test --release --test benchmark_gate -- --ignored benchmark
 
 # knowledge ドリフトゲート — 兄弟の Manim チェックアウトが必要。CI では
