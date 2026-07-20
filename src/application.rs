@@ -12,7 +12,7 @@ use crate::cache::{
     AnalysisCache, AnalysisComponent, CacheKey, CacheStatus, ComponentCacheEntry,
     DependencyManifest,
 };
-use crate::cli::{CheckArgs, Command, ExitStatus};
+use crate::cli::{CheckArgs, Command, ExitStatus, StaticFactsArgs};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::cost;
@@ -29,6 +29,7 @@ use crate::semantic;
 use crate::semantic::interpreter::SceneLifecycle;
 use crate::semantic::summaries::SummaryTable;
 use crate::source::{FileId, SourceManager};
+use crate::static_facts::{self as static_facts_projection, ProjectionInput};
 
 /// Errors that abort a command; all map to exit code 2.
 #[derive(Debug, thiserror::Error)]
@@ -89,7 +90,91 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
         Command::Config => run_config(),
         Command::Cost { path, scene } => run_cost(&path, scene.as_deref()),
         Command::Coverage { paths, format } => run_coverage(&paths, format),
+        Command::StaticFacts(args) => run_static_facts(&args),
     }
+}
+
+/// Outcome of a `static-facts` run for library callers and acceptance tests.
+#[derive(Debug)]
+pub struct StaticFactsReport {
+    /// Parsed public document, suitable for schema validation or embedding.
+    pub document: serde_json::Value,
+    /// Canonical, deterministic pretty JSON (including one trailing newline).
+    pub output: String,
+    /// The resolved semantic configuration used for the snapshot.
+    pub config: ResolvedConfig,
+}
+
+/// Runs `manim-lint static-facts [PATH...]` and writes `StaticFacts` v0 JSON.
+pub fn run_static_facts(args: &StaticFactsArgs) -> Result<Execution, ApplicationError> {
+    let report = static_facts(args)?;
+    Ok(Execution::success(report.output))
+}
+
+/// Computes the public `StaticFacts` v0 projection without running lint rules.
+///
+/// Source files are read exactly once. The same immutable raw byte vectors
+/// feed both Python decoding/parsing and public raw-content hashes, so an
+/// on-disk race cannot create a self-inconsistent snapshot.
+pub fn static_facts(args: &StaticFactsArgs) -> Result<StaticFactsReport, ApplicationError> {
+    let check_args = CheckArgs {
+        paths: args.paths.clone(),
+        profile: args.profile.clone(),
+        renderer: args.renderer,
+        fps: args.fps,
+        resolution: args.resolution,
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&check_args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&check_args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+
+    let mut raw_sources = Vec::with_capacity(files.len());
+    for path in &files {
+        raw_sources.push(std::fs::read(path).map_err(|source| ApplicationError::Io {
+            path: path.clone(),
+            source,
+        })?);
+    }
+    let mut sources = SourceManager::new(project_root);
+    for (path, raw) in files.iter().zip(&raw_sources) {
+        sources.load_bytes(path, raw);
+    }
+
+    // The public contract is independent of configured rule selection. It
+    // always asks for every fact layer in the StaticFacts contract and
+    // projects those facts directly, without executing the diagnostic
+    // registry. The symbolic cost model is not a v0 contract input.
+    let facts = compute_facts(
+        &sources,
+        &config,
+        &profile,
+        FactNeeds {
+            lifecycle: true,
+            cost: false,
+        },
+    );
+    let projected = static_facts_projection::project(ProjectionInput {
+        sources: &sources,
+        raw_sources: &raw_sources,
+        config: &config,
+        knowledge: &profile,
+        index: &facts.index,
+        calls: &facts.calls,
+        lifecycle: &facts.lifecycle,
+    });
+    Ok(StaticFactsReport {
+        document: projected.document,
+        output: projected.json,
+        config,
+    })
 }
 
 /// Outcome of a `check` run, for library callers and tests.

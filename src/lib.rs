@@ -15,5 +15,6 @@ pub mod reporting;
 pub mod rules;
 pub mod semantic;
 pub mod source;
+pub mod static_facts;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

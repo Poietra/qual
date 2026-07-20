@@ -111,6 +111,30 @@ pub enum Command {
         #[arg(long, default_value = "text")]
         format: CoverageFormat,
     },
+    /// Emit the versioned static facts v0 semantic projection as JSON.
+    StaticFacts(StaticFactsArgs),
+}
+
+/// Options for `manim-lint static-facts`.
+///
+/// Diagnostic selectors are deliberately absent: `StaticFacts` always computes
+/// every fact capability in its public contract.
+#[derive(Debug, Args, Default)]
+pub struct StaticFactsArgs {
+    /// Files or directories to analyze (default: current directory).
+    pub paths: Vec<PathBuf>,
+    /// Render profile to analyze, or `all`.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Override the renderer (cairo|opengl).
+    #[arg(long)]
+    pub renderer: Option<Renderer>,
+    /// Override the frame rate.
+    #[arg(long)]
+    pub fps: Option<f64>,
+    /// Override the resolution as `WIDTHxHEIGHT`.
+    #[arg(long)]
+    pub resolution: Option<Resolution>,
 }
 
 /// Options for `manim-lint check`.
@@ -274,5 +298,26 @@ mod tests {
             panic!("expected check");
         };
         assert!(args.analysis_summary);
+    }
+
+    #[test]
+    fn cli_parses_static_facts_without_rule_selectors() {
+        let cli = Cli::try_parse_from([
+            "manim-lint",
+            "static-facts",
+            "scenes",
+            "--profile",
+            "production",
+            "--renderer",
+            "cairo",
+        ])
+        .expect("parses");
+        let Command::StaticFacts(args) = cli.command else {
+            panic!("expected static-facts");
+        };
+        assert_eq!(args.paths, vec![PathBuf::from("scenes")]);
+        assert_eq!(args.profile.as_deref(), Some("production"));
+        assert_eq!(args.renderer, Some(Renderer::Cairo));
+        assert!(Cli::try_parse_from(["manim-lint", "static-facts", "--select", "MLC"]).is_err());
     }
 }

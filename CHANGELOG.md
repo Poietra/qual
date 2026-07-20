@@ -18,6 +18,14 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **StaticFacts v0 contract and producer (RFC 0001)**: `manim-lint
+  static-facts` emits the Draft 2020-12-schema-validated Poietra/fast-manim
+  semantic bridge, with snapshot-scoped public
+  IDs, encoding-aware source anchors, reason-carrying unknown values, renderer
+  risks, and coverage frontiers. The projection is rule-selection independent,
+  uses one immutable raw-source snapshot, and is byte-stable across worker
+  counts.
+
 - **Incremental analysis cache v2**: an exact whole-project SQLite/WAL entry
   remains the fastest unchanged warm path; after a source edit, the frontend
   rebuilds the static project graph and reuses JSON method summaries and

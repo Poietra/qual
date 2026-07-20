@@ -187,6 +187,28 @@ report (`manim-lint coverage`, `check --analysis-summary`) that counts
 everything the analysis could *not* resolve. All output is deterministic
 and byte-stable for identical input.
 
+### Public semantic projection
+
+RFC 0001 defines `StaticFacts v0`, a versioned projection for Poietra and
+fast-manim. It sits beside diagnostic reporting rather than exposing
+`LifecycleFacts`, heap records, cache entries, or internal IDs directly. The
+contract uses snapshot-scoped hashed IDs, encoding-aware source anchors, and
+reason-carrying unknown values; it includes Scenes, reachable objects,
+plays/animations, updaters, play-boundary membership/render order, renderer
+risks, and coverage frontiers. See
+[`docs/rfcs/0001-static-facts-v0.md`](rfcs/0001-static-facts-v0.md) and
+[`schemas/static-facts-v0.json`](../schemas/static-facts-v0.json).
+
+`manim-lint static-facts [PATH...]` reads each source into one immutable raw
+byte snapshot, runs the frontend and lifecycle fact layers independently of
+selected lint rules, and projects those facts through `src/static_facts.rs`.
+The projection never serializes internal analyzer structs. It emits sorted,
+pretty JSON with one trailing newline and is byte-identical across worker
+counts. The initial command deliberately uses full analysis; a future
+incremental route must feed the same projector and pass full/incremental byte
+equality before it can be enabled. It may report optimization blockers, but
+never grants renderer optimization permission.
+
 ### Persistent cache (`src/cache.rs`)
 
 Cache v2 is a disposable `SQLite` WAL database with two layers. The exact

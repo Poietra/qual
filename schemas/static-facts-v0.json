@@ -1,0 +1,963 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/static-facts-v0.json",
+  "title": "manim-lint StaticFacts v0",
+  "description": "Stable external projection of static Manim semantic facts. This is not a serialization of internal analyzer handles or cache entries.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "snapshot",
+    "knowledge_profile",
+    "profiles",
+    "files",
+    "scenes",
+    "objects",
+    "plays",
+    "animations",
+    "updaters",
+    "renderer_risks",
+    "coverage"
+  ],
+  "properties": {
+    "schema_version": { "const": 0 },
+    "tool": { "$ref": "#/$defs/tool" },
+    "snapshot": { "$ref": "#/$defs/snapshot" },
+    "knowledge_profile": { "$ref": "#/$defs/knowledgeProfile" },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/renderProfile" }
+    },
+    "files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/file" }
+    },
+    "scenes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/scene" }
+    },
+    "objects": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/object" }
+    },
+    "plays": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/play" }
+    },
+    "animations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/animation" }
+    },
+    "updaters": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/updater" }
+    },
+    "renderer_risks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/rendererRisk" }
+    },
+    "coverage": { "$ref": "#/$defs/coverage" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "snapshotId": {
+      "type": "string",
+      "pattern": "^snapshot:sf0:[0-9a-f]{64}$"
+    },
+    "sceneId": {
+      "type": "string",
+      "pattern": "^scene:sf0:[0-9a-f]{64}$"
+    },
+    "objectId": {
+      "type": "string",
+      "pattern": "^object:sf0:[0-9a-f]{64}$"
+    },
+    "playId": {
+      "type": "string",
+      "pattern": "^play:sf0:[0-9a-f]{64}$"
+    },
+    "animationId": {
+      "type": "string",
+      "pattern": "^animation:sf0:[0-9a-f]{64}$"
+    },
+    "updaterId": {
+      "type": "string",
+      "pattern": "^updater:sf0:[0-9a-f]{64}$"
+    },
+    "riskId": {
+      "type": "string",
+      "pattern": "^risk:sf0:[0-9a-f]{64}$"
+    },
+    "frontierId": {
+      "type": "string",
+      "pattern": "^frontier:sf0:[0-9a-f]{64}$"
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^(scene|object|play|animation|updater):sf0:[0-9a-f]{64}$"
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "byteRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "raw_content_hash",
+        "encoding",
+        "byte_order_mark",
+        "utf8_byte_range",
+        "unicode_span"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Project-relative POSIX source path"
+        },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "encoding": { "type": "string", "minLength": 1 },
+        "byte_order_mark": { "type": "boolean" },
+        "utf8_byte_range": { "$ref": "#/$defs/byteRange" },
+        "unicode_span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "unknownReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "dynamic-call-target",
+            "dynamic-attribute",
+            "unresolved-name",
+            "unresolved-import",
+            "unavailable-definition",
+            "recursive-summary",
+            "inline-depth-cap",
+            "branch-join",
+            "loop-widening",
+            "unknown-cardinality",
+            "unknown-animation-target",
+            "unknown-write-channel",
+            "unknown-render-order",
+            "dynamic-wait",
+            "active-updater",
+            "always-redraw",
+            "camera-mutation",
+            "external-state-or-io",
+            "randomness",
+            "star-arguments",
+            "decode-error",
+            "parse-error",
+            "unsupported-syntax",
+            "unsupported-semantics",
+            "candidate-cap",
+            "non-literal-expression",
+            "untracked-value",
+            "unknown-callback"
+          ]
+        },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "related_entity_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/entityId" }
+        },
+        "detail": { "type": "string" }
+      }
+    },
+    "unknownReasons": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/unknownReason" }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "semantic_build_hash"],
+      "properties": {
+        "name": { "const": "manim-lint" },
+        "version": { "type": "string", "minLength": 1 },
+        "semantic_build_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_manifest_hash",
+        "semantic_config_hash",
+        "target_python",
+        "object_call_context_depth",
+        "helper_call_path_depth"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/snapshotId" },
+        "source_manifest_hash": { "$ref": "#/$defs/sha256" },
+        "semantic_config_hash": { "$ref": "#/$defs/sha256" },
+        "target_python": {
+          "type": "string",
+          "pattern": "^3\\.(6|7|8|9|10|11|12)$"
+        },
+        "object_call_context_depth": { "const": 2 },
+        "helper_call_path_depth": { "const": 32 }
+      }
+    },
+    "knowledgeProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "schema_version", "source_digest"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "source_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "renderProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "renderer", "config_hash"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "renderer": { "enum": ["cairo", "opengl"] },
+        "config_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "analysisStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": { "status": { "const": "analyzed" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "raw_content_hash",
+        "decoded_utf8_hash",
+        "encoding",
+        "byte_order_mark",
+        "newline",
+        "utf8_byte_length",
+        "analysis"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "decoded_utf8_hash": { "$ref": "#/$defs/sha256" },
+        "encoding": { "type": "string", "minLength": 1 },
+        "byte_order_mark": { "type": "boolean" },
+        "newline": { "enum": ["lf", "crlf", "cr", "mixed"] },
+        "utf8_byte_length": { "type": "integer", "minimum": 0 },
+        "analysis": { "$ref": "#/$defs/analysisStatus" }
+      }
+    },
+    "truthFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "known" },
+            "value": { "enum": ["yes", "no"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "presenceFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "known" },
+            "value": { "enum": ["present", "absent"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "numericFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "exact" },
+            "value": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "const": "interval" },
+            "lower_inclusive": { "type": "number" },
+            "upper_inclusive": { "type": "number" }
+          },
+          "anyOf": [
+            { "required": ["lower_inclusive"] },
+            { "required": ["upper_inclusive"] }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "name"],
+          "properties": {
+            "status": { "const": "symbolic" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "stringCandidateFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "values"],
+          "properties": {
+            "status": { "const": "known" },
+            "values": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "candidates", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "candidates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "objectIdSetFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "object_ids"],
+          "properties": {
+            "status": { "const": "known" },
+            "object_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/objectId" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "candidates", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "candidates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/objectId" }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "playIdSetFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "play_ids"],
+          "properties": {
+            "status": { "const": "known" },
+            "play_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/playId" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "candidates", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "candidates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/playId" }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "updaterHostId": {
+      "type": "string",
+      "pattern": "^(scene|object):sf0:[0-9a-f]{64}$"
+    },
+    "updaterHostSetFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "entity_ids"],
+          "properties": {
+            "status": { "const": "known" },
+            "entity_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/updaterHostId" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "candidates", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "candidates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/updaterHostId" }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "writeChannelsFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "channels"],
+          "properties": {
+            "status": { "const": "known" },
+            "channels": { "$ref": "#/$defs/writeChannels" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "known_channels", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "known_channels": { "$ref": "#/$defs/writeChannels" },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "writeChannels": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["points", "style", "opacity", "membership", "camera-state"]
+      }
+    },
+    "boundedCallContext": {
+      "type": "array",
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/sourceAnchor" }
+    },
+    "helperCallPath": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/sourceAnchor" }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "qualified_name",
+        "definition_anchor",
+        "constructor_state_complete",
+        "object_ids",
+        "play_ids",
+        "updater_ids"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/sceneId" },
+        "qualified_name": { "type": "string", "minLength": 1 },
+        "definition_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "constructor_state_complete": { "$ref": "#/$defs/truthFact" },
+        "object_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/objectId" }
+        },
+        "play_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/playId" }
+        },
+        "updater_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/updaterId" }
+        }
+      }
+    },
+    "objectRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "objects"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "parent",
+            "child",
+            "copy-of",
+            "generated-target-of",
+            "animation-starting-copy-of",
+            "animation-target-copy-of",
+            "replaces",
+            "replaced-by"
+          ]
+        },
+        "objects": { "$ref": "#/$defs/objectIdSetFact" }
+      }
+    },
+    "membershipState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scene_root", "family", "foreground"],
+      "properties": {
+        "scene_root": { "$ref": "#/$defs/presenceFact" },
+        "family": { "$ref": "#/$defs/presenceFact" },
+        "foreground": { "$ref": "#/$defs/truthFact" }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scene_id",
+        "allocation_anchor",
+        "call_context",
+        "cardinality",
+        "kind_candidates",
+        "binding_candidates",
+        "relations",
+        "final_membership"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/objectId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" },
+        "allocation_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "call_context": { "$ref": "#/$defs/boundedCallContext" },
+        "cardinality": { "enum": ["singleton", "many", "maybe-many"] },
+        "kind_candidates": { "$ref": "#/$defs/stringCandidateFact" },
+        "binding_candidates": { "$ref": "#/$defs/stringCandidateFact" },
+        "relations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/objectRelation" }
+        },
+        "final_membership": { "$ref": "#/$defs/membershipState" }
+      }
+    },
+    "membershipEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_id", "state"],
+      "properties": {
+        "object_id": { "$ref": "#/$defs/objectId" },
+        "state": { "$ref": "#/$defs/membershipState" }
+      }
+    },
+    "membershipFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "entries"],
+          "properties": {
+            "status": { "const": "known" },
+            "entries": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/membershipEntry" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "entries", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "entries": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/membershipEntry" }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "orderFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "object_ids"],
+          "properties": {
+            "status": { "const": "known" },
+            "object_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/objectId" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "candidate_object_ids", "reasons"],
+          "properties": {
+            "status": { "const": "unknown" },
+            "candidate_object_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/objectId" }
+            },
+            "reasons": { "$ref": "#/$defs/unknownReasons" }
+          }
+        }
+      ]
+    },
+    "playBoundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "during", "after"],
+      "properties": {
+        "before": {},
+        "during": {},
+        "after": {}
+      }
+    },
+    "membershipBoundaries": {
+      "allOf": [
+        { "$ref": "#/$defs/playBoundaries" },
+        {
+          "properties": {
+            "before": { "$ref": "#/$defs/membershipFact" },
+            "during": { "$ref": "#/$defs/membershipFact" },
+            "after": { "$ref": "#/$defs/membershipFact" }
+          }
+        }
+      ]
+    },
+    "orderBoundaries": {
+      "allOf": [
+        { "$ref": "#/$defs/playBoundaries" },
+        {
+          "properties": {
+            "before": { "$ref": "#/$defs/orderFact" },
+            "during": { "$ref": "#/$defs/orderFact" },
+            "after": { "$ref": "#/$defs/orderFact" }
+          }
+        }
+      ]
+    },
+    "play": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scene_id",
+        "kind",
+        "call_anchor",
+        "helper_call_path",
+        "cardinality",
+        "execution_certainty",
+        "repetitions",
+        "duration",
+        "animation_ids",
+        "membership",
+        "render_order"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/playId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" },
+        "kind": { "enum": ["play", "wait"] },
+        "call_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "helper_call_path": { "$ref": "#/$defs/helperCallPath" },
+        "cardinality": { "enum": ["singleton", "many", "maybe-many"] },
+        "execution_certainty": { "$ref": "#/$defs/presenceFact" },
+        "repetitions": { "$ref": "#/$defs/numericFact" },
+        "duration": { "$ref": "#/$defs/numericFact" },
+        "animation_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/animationId" }
+        },
+        "membership": { "$ref": "#/$defs/membershipBoundaries" },
+        "render_order": { "$ref": "#/$defs/orderBoundaries" }
+      }
+    },
+    "animationEffects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["introducer", "remover", "replacement_targets"],
+      "properties": {
+        "introducer": { "$ref": "#/$defs/truthFact" },
+        "remover": { "$ref": "#/$defs/truthFact" },
+        "replacement_targets": { "$ref": "#/$defs/objectIdSetFact" }
+      }
+    },
+    "animation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "play_id",
+        "source_argument_ordinal",
+        "source_anchor",
+        "kind_candidates",
+        "target_candidates",
+        "write_channels",
+        "effects"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/animationId" },
+        "play_id": { "$ref": "#/$defs/playId" },
+        "source_argument_ordinal": { "type": "integer", "minimum": 0 },
+        "source_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "kind_candidates": { "$ref": "#/$defs/stringCandidateFact" },
+        "target_candidates": { "$ref": "#/$defs/objectIdSetFact" },
+        "write_channels": { "$ref": "#/$defs/writeChannelsFact" },
+        "effects": { "$ref": "#/$defs/animationEffects" }
+      }
+    },
+    "updater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scene_id",
+        "registration_anchor",
+        "call_context",
+        "host_candidates",
+        "callback_candidates",
+        "time_based",
+        "write_channels",
+        "active_play_candidates"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/updaterId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" },
+        "registration_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "call_context": { "$ref": "#/$defs/boundedCallContext" },
+        "host_candidates": { "$ref": "#/$defs/updaterHostSetFact" },
+        "callback_candidates": { "$ref": "#/$defs/stringCandidateFact" },
+        "time_based": { "$ref": "#/$defs/truthFact" },
+        "write_channels": { "$ref": "#/$defs/writeChannelsFact" },
+        "active_play_candidates": { "$ref": "#/$defs/playIdSetFact" }
+      }
+    },
+    "rendererRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "certainty",
+        "anchor",
+        "related_entity_ids",
+        "applicable_profiles"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/riskId" },
+        "kind": {
+          "enum": [
+            "dynamic-call",
+            "unknown-animation-target",
+            "active-updater",
+            "always-redraw",
+            "dynamic-wait",
+            "stop-condition",
+            "camera-mutation",
+            "external-state-or-io",
+            "randomness",
+            "unknown-write-channel",
+            "unknown-render-order"
+          ]
+        },
+        "certainty": { "enum": ["certain", "possible"] },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "related_entity_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/entityId" }
+        },
+        "applicable_profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "coverageFrontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "related_entity_ids", "reasons"],
+      "properties": {
+        "id": { "$ref": "#/$defs/frontierId" },
+        "kind": {
+          "enum": [
+            "source",
+            "name-resolution",
+            "call-resolution",
+            "helper-expansion",
+            "control-flow",
+            "cardinality",
+            "animation-target",
+            "write-channel",
+            "render-order",
+            "unsupported-semantics"
+          ]
+        },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "related_entity_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/entityId" }
+        },
+        "reasons": { "$ref": "#/$defs/unknownReasons" }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeness", "frontiers"],
+      "properties": {
+        "completeness": { "enum": ["complete", "partial"] },
+        "frontiers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/coverageFrontier" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "completeness": { "const": "complete" } }
+          },
+          "then": { "properties": { "frontiers": { "maxItems": 0 } } }
+        },
+        {
+          "if": {
+            "properties": { "completeness": { "const": "partial" } }
+          },
+          "then": { "properties": { "frontiers": { "minItems": 1 } } }
+        }
+      ]
+    }
+  }
+}

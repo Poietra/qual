@@ -123,6 +123,7 @@ manim-lint rules                        # every rule ID, phase, and status
 manim-lint config                       # resolved effective configuration
 manim-lint cost scenes/demo.py          # per-scene cost breakdown
 manim-lint coverage .                   # what the analysis could not resolve
+manim-lint static-facts . > facts.json  # StaticFacts v0 semantic projection
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -555,8 +556,16 @@ knowledge-profile system, and how one diagnostic flows end to end.
 [`DESIGN.md`](DESIGN.md) is the authoritative specification for the semantic
 model, the rule catalog, and every public contract. JSON output follows
 [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json); baselines
-follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). Output is
-deterministic and byte-stable for the same input.
+follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). The
+Poietra/fast-manim semantic bridge emitted by `manim-lint static-facts` is
+specified by
+[`StaticFacts v0`](docs/rfcs/0001-static-facts-v0.md) and its
+[`JSON Schema`](schemas/static-facts-v0.json). It publishes snapshot-scoped
+Scene/object/play/animation/updater IDs, encoding-aware source anchors,
+reason-carrying unknowns, renderer risks, and coverage frontiers without
+exposing analyzer handles. It reports blockers but never grants permission to
+skip or fork rendering. Output is deterministic and byte-stable for the same
+input.
 
 ## Known limitations
 
