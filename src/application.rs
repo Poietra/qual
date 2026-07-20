@@ -349,12 +349,13 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let mut component_plans = Vec::new();
     if cache_key.is_some() {
         recompute_files.clear();
-        let components = crate::cache::build_analysis_components(
+        let dependency_graph = semantic::dependency::SemanticDependencyGraph::from_frontend(
             &sources,
             &config.source_roots,
             &frontend.index,
             &frontend.calls,
         );
+        let components = crate::cache::build_analysis_components(&sources, &dependency_graph);
         let project_layout: Vec<&Path> = source_snapshot
             .iter()
             .map(|(path, _)| path.as_path())

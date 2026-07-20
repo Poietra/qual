@@ -17,8 +17,11 @@ knowledge profile .......... src/knowledge/ — versioned Manim 0.20
 frontend facts ............. src/frontend/ — parse, imports/aliases,
    |                         project index, qualified calls, CFG,
    |                         statement/binding facts, target-python gate
+dependency graph ........... src/semantic/dependency.rs — definitions,
+   |                         calls, Scenes; deterministic forward/reverse
 lifecycle interpreter ...... src/semantic/ — abstract interpretation of
    |                         independent Scene runs -> LifecycleFacts
+   |                         and play/object dependency edges
 cost facts ................. src/cost/ (+ src/render_order.rs) — hot
    |                         contexts, frame intervals, execution
    |                         liveness, fork gates -> CostFacts
@@ -140,6 +143,22 @@ non-helper calls — with combined certainty and summary-derived
 `LifecycleFacts::inline_fallbacks` and surfaces in `manim-lint coverage`
 as `helper calls summarized, not inlined`.
 
+### Semantic dependency graph (`src/semantic/dependency.rs`)
+
+RFC 0002 defines the cache-independent `SemanticDependencyGraph`. Every edge
+is stored as dependent to dependency: callers point to callees, Scenes to
+lifecycle entrypoints, plays to their defining callable, and possible target
+objects to their play. The same ordered edge set backs deterministic forward
+and reverse indexes. Unresolved dynamic calls, bases, imports, and lifecycle
+attribution become anchored Unknown frontiers, never guessed edges.
+
+The frontend-only graph is available before lifecycle interpretation and is
+the single source for cache file components. After lifecycle analysis it can
+be enriched with Scene/play/object/animation/updater relationships for
+ChangeImpact. Graph handles are snapshot-local internal facts; external JSON
+must project them through StaticFacts IDs and source anchors. See
+[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](rfcs/0002-semantic-dependency-graph-v0.md).
+
 ### Cost model (`src/cost/` and `src/render_order.rs`)
 
 `CostFacts` (DESIGN §4): symbolic, evidence-carrying — never fabricated
@@ -213,8 +232,9 @@ never grants renderer optimization permission.
 
 Cache v2 is a disposable `SQLite` WAL database with two layers. The exact
 whole-project entry contains filtered diagnostic JSON for the no-frontend
-warm path. On a project miss, the freshly rebuilt frontend graph partitions
-files by resolved import/call/base/collision edges; dependency-closed entries
+warm path. On a project miss, the freshly rebuilt semantic dependency graph
+partitions files by its resolved import/call/base/collision file-edge view;
+dependency-closed entries
 contain JSON method summaries, diagnostics, and filesystem manifests. Hit
 summaries seed the project table and only miss-component definitions and
 Scenes are interpreted. Component ownership avoids reusing helper-anchored

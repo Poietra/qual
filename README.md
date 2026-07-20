@@ -567,6 +567,12 @@ exposing analyzer handles. It reports blockers but never grants permission to
 skip or fork rendering. Output is deterministic and byte-stable for the same
 input.
 
+The cache-independent
+[`SemanticDependencyGraph v0`](docs/rfcs/0002-semantic-dependency-graph-v0.md)
+is the shared fact layer for cache component partitioning and conservative
+source-change impact. It retains anchored Unknown frontiers instead of
+guessing dynamic dependency edges.
+
 ## Known limitations
 
 - **Target version.** The shipped knowledge profile covers Manim Community

@@ -18,6 +18,13 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **SemanticDependencyGraph v0 (RFC 0002)**: a cache-independent fact layer
+  now owns deterministic dependent-to-dependency edges and reverse indexes
+  across files, definitions, Scenes, plays, objects, animation targets, and
+  updater hosts. Dynamic relationships remain anchored Unknown frontiers;
+  cache v2 consumes only the graph's weak file-component view, leaving the
+  reverse reason paths available to ChangeImpact.
+
 - **StaticFacts v0 contract and producer (RFC 0001)**: `manim-lint
   static-facts` emits the Draft 2020-12-schema-validated Poietra/fast-manim
   semantic bridge, with snapshot-scoped public

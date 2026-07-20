@@ -339,13 +339,15 @@ SourceManager: read + ast.parse + tokenize
 ProjectIndex: modules/imports/symbols/class hierarchy
     ↓
 qualified Manim call facts
+    ├─ SemanticDependencyGraph: file/definition forward + reverse edges
     ↓
 CFG + reachable method summaries
     ↓
 Manim abstract interpreter
     ├─ lifecycle events
     ├─ renderer facts
-    └─ symbolic cost facts
+    ├─ symbolic cost facts
+    └─ SemanticDependencyGraph: Scene/play/object edges
     ↓
 rule queries
     ↓
@@ -1041,7 +1043,7 @@ source anchorはraw bytesのSHA-256、正規化encoding、BOM有無、decoded UT
 
 StaticFacts producerはrule selection / suppression / baselineから独立して必要なfact capabilityを全て計算する。初期producerはcacheを経由しないfull analysisとして同じraw byte snapshotをparseとhashへ渡す。semantic dependency graphを接続してincremental producerを追加する時も、同一snapshotについてfull / incremental、cache状態、worker数が異なるJSONはbyte-identicalでなければならない。renderer riskはdynamic call、unknown animation target、active updater、`always_redraw`、dynamic wait / stop condition、camera mutation、external state / I/O、randomness、unknown write channel、unknown render orderを報告するが、`safe_to_skip_render`や`safe_to_fork`などの最適化許可は公開しない。
 
-semantic dependency graphはcacheではなくfact layerとして所有する。cache component partitionはforward edgeを利用でき、ChangeImpactはbefore/after snapshotのreverse edgeを利用し、StaticFactsはreason pathをprojectionする。Runtime ID、Static/Runtime最終照合、gesture意味論、TracePlan、checkpoint、visual validationは本repositoryの責務外とする。
+semantic dependency graphはcacheではなくfact layerとして所有し、[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](docs/rfcs/0002-semantic-dependency-graph-v0.md) を契約とする。辺の正規方向は常にdependentからdependency（callerからcallee、Sceneからentrypoint、対象objectからplay）とし、同じ辺から決定的なforward/reverse indexを構築する。解決不能なdynamic call、base、import、definition attributionは推測した辺にせず、所有node・reason・anchorを持つUnknown frontierとして残す。cache component partitionはfile間edgeを無向に見た弱連結成分だけを利用し、ChangeImpactはbefore/after snapshotのreverse edgeを利用し、外部JSONは内部handleではなくStaticFactsのsnapshot IDとsource anchorへprojectionする。Runtime ID、Static/Runtime最終照合、gesture意味論、TracePlan、checkpoint、visual validationは本repositoryの責務外とする。
 
 ## 9. cache と並列性
 
@@ -1068,7 +1070,7 @@ tool/schema/build version
 + sorted relative source paths + source content hashes
 ```
 
-第二層はwhole-project miss時のincremental component entryである。全sourceをdecode / parseし、module tree、exports、import edge、class hierarchy、qualified callsを再構築してから、project-localのimport、qualified call、resolved base class、module-name collision edgeを無向に見た弱連結componentを作る。cross-file helperの診断がcallee側spanへanchorされ得るため、primary pathだけを単独のcache shardにはしない。一つでも静的な意味依存edgeがあれば同じcomponentとして無効化する。
+第二層はwhole-project miss時のincremental component entryである。全sourceをdecode / parseし、module tree、exports、class hierarchy、qualified callsと`SemanticDependencyGraph`のfrontend部分を再構築してから、そのgraphのproject-local import、qualified call、resolved base class、module-name collision edgeを無向に見た弱連結componentを作る。cache module自身はこれらの意味依存を再発見しない。cross-file helperの診断がcallee側spanへanchorされ得るため、primary pathだけを単独のcache shardにはしない。一つでも静的な意味依存edgeがあれば同じcomponentとして無効化する。
 
 component entryに保存するもの:
 
