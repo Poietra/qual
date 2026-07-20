@@ -12,7 +12,8 @@ use crate::cache::{
     AnalysisCache, AnalysisComponent, CacheKey, CacheStatus, ComponentCacheEntry,
     DependencyManifest,
 };
-use crate::cli::{CheckArgs, Command, ExitStatus, StaticFactsArgs};
+use crate::change_impact::{self as change_impact_projection, SnapshotInput};
+use crate::cli::{ChangeImpactArgs, CheckArgs, Command, ExitStatus, StaticFactsArgs};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::cost;
@@ -91,7 +92,129 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
         Command::Cost { path, scene } => run_cost(&path, scene.as_deref()),
         Command::Coverage { paths, format } => run_coverage(&paths, format),
         Command::StaticFacts(args) => run_static_facts(&args),
+        Command::ChangeImpact(args) => run_change_impact(&args),
     }
+}
+
+/// Outcome of a `change-impact` run for library callers and schema tests.
+#[derive(Debug)]
+pub struct ChangeImpactReport {
+    /// Parsed public document.
+    pub document: serde_json::Value,
+    /// Canonical deterministic JSON including one trailing newline.
+    pub output: String,
+    /// Resolved configuration for the base snapshot.
+    pub base_config: ResolvedConfig,
+    /// Resolved configuration for the target snapshot.
+    pub target_config: ResolvedConfig,
+}
+
+/// Runs `manim-lint change-impact --before OLD --after NEW`.
+pub fn run_change_impact(args: &ChangeImpactArgs) -> Result<Execution, ApplicationError> {
+    let report = change_impact(args)?;
+    Ok(Execution::success(report.output))
+}
+
+/// Computes `ChangeImpact` v0 without running diagnostic rules or using the
+/// analysis cache.
+pub fn change_impact(args: &ChangeImpactArgs) -> Result<ChangeImpactReport, ApplicationError> {
+    let base = analyze_impact_snapshot(&args.before, args)?;
+    let target = analyze_impact_snapshot(&args.after, args)?;
+    let projected = change_impact_projection::compare(base.input(), target.input());
+    Ok(ChangeImpactReport {
+        document: projected.document,
+        output: projected.json,
+        base_config: base.config,
+        target_config: target.config,
+    })
+}
+
+struct AnalyzedImpactSnapshot {
+    sources: SourceManager,
+    raw_sources: Vec<Vec<u8>>,
+    graph: semantic::dependency::SemanticDependencyGraph,
+    static_facts: static_facts_projection::StaticFactsOutput,
+    config: ResolvedConfig,
+}
+
+impl AnalyzedImpactSnapshot {
+    fn input(&self) -> SnapshotInput<'_> {
+        SnapshotInput {
+            sources: &self.sources,
+            raw_sources: &self.raw_sources,
+            graph: &self.graph,
+            static_facts: &self.static_facts,
+        }
+    }
+}
+
+fn analyze_impact_snapshot(
+    path: &Path,
+    args: &ChangeImpactArgs,
+) -> Result<AnalyzedImpactSnapshot, ApplicationError> {
+    let check_args = CheckArgs {
+        paths: vec![path.to_path_buf()],
+        profile: args.profile.clone(),
+        renderer: args.renderer,
+        fps: args.fps,
+        resolution: args.resolution,
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&check_args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&check_args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+    let mut raw_sources = Vec::with_capacity(files.len());
+    for source_path in &files {
+        raw_sources.push(
+            std::fs::read(source_path).map_err(|source| ApplicationError::Io {
+                path: source_path.clone(),
+                source,
+            })?,
+        );
+    }
+    let mut sources = SourceManager::new(project_root);
+    for (source_path, raw) in files.iter().zip(&raw_sources) {
+        sources.load_bytes(source_path, raw);
+    }
+    let facts = compute_facts(
+        &sources,
+        &config,
+        &profile,
+        FactNeeds {
+            lifecycle: true,
+            cost: false,
+        },
+    );
+    let mut graph = semantic::dependency::SemanticDependencyGraph::from_frontend(
+        &sources,
+        &config.source_roots,
+        &facts.index,
+        &facts.calls,
+    );
+    graph.attach_lifecycle(&facts.lifecycle, &sources, &facts.index);
+    let static_facts = static_facts_projection::project(ProjectionInput {
+        sources: &sources,
+        raw_sources: &raw_sources,
+        config: &config,
+        knowledge: &profile,
+        index: &facts.index,
+        calls: &facts.calls,
+        lifecycle: &facts.lifecycle,
+    });
+    Ok(AnalyzedImpactSnapshot {
+        sources,
+        raw_sources,
+        graph,
+        static_facts,
+        config,
+    })
 }
 
 /// Outcome of a `static-facts` run for library callers and acceptance tests.

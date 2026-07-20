@@ -4,6 +4,7 @@
 
 pub mod application;
 pub mod cache;
+pub mod change_impact;
 pub mod cli;
 pub mod config;
 pub mod cost;

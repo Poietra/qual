@@ -159,6 +159,14 @@ ChangeImpact. Graph handles are snapshot-local internal facts; external JSON
 must project them through StaticFacts IDs and source anchors. See
 [`docs/rfcs/0002-semantic-dependency-graph-v0.md`](rfcs/0002-semantic-dependency-graph-v0.md).
 
+`manim-lint change-impact --before OLD --after NEW` constructs this full graph
+for both snapshots. Raw file and definition changes seed reverse traversal in
+each graph, preserving deleted edges on the base side and added edges on the
+target side. `src/change_impact.rs` projects reached Scene/play/object nodes
+through each snapshot's StaticFacts IDs and emits reason paths plus relevant
+Unknown frontiers. RFC 0003 and `schemas/change-impact-v0.json` define the
+external contract; cross-snapshot rematching remains a separate P1 feature.
+
 ### Cost model (`src/cost/` and `src/render_order.rs`)
 
 `CostFacts` (DESIGN §4): symbolic, evidence-carrying — never fabricated

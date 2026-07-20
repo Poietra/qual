@@ -933,6 +933,7 @@ manim-lint config
 manim-lint cost PATH [--scene NAME]
 manim-lint coverage [PATH...] [--format text|json]
 manim-lint static-facts [PATH...] [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+manim-lint change-impact --before PATH --after PATH [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
 ```
 
 `check` options:
@@ -963,6 +964,8 @@ exit code:
 JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なしで生成する。
 
 `static-facts`は診断を実行せず、`schemas/static-facts-v0.json`準拠の静的意味projectionをstdoutへ出力する。rule selector、suppression、baseline、confidence/fail levelは意味入力ではないため、このcommandにはそれらのoptionを持たせない。成功は常にexit 0、path/config/IO errorはexit 2とする。
+
+`change-impact`はbefore/after双方をfull解析し、`schemas/change-impact-v0.json`準拠の保守的な影響候補をstdoutへ出力する。cacheとruleは実行せず、削除・rename前のedgeをbase graphから保持する。成功はexit 0、入力/config/IO errorはexit 2とする。
 
 `--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v2 では自動的に full analysis を行う。
 
@@ -1044,6 +1047,14 @@ source anchorはraw bytesのSHA-256、正規化encoding、BOM有無、decoded UT
 StaticFacts producerはrule selection / suppression / baselineから独立して必要なfact capabilityを全て計算する。初期producerはcacheを経由しないfull analysisとして同じraw byte snapshotをparseとhashへ渡す。semantic dependency graphを接続してincremental producerを追加する時も、同一snapshotについてfull / incremental、cache状態、worker数が異なるJSONはbyte-identicalでなければならない。renderer riskはdynamic call、unknown animation target、active updater、`always_redraw`、dynamic wait / stop condition、camera mutation、external state / I/O、randomness、unknown write channel、unknown render orderを報告するが、`safe_to_skip_render`や`safe_to_fork`などの最適化許可は公開しない。
 
 semantic dependency graphはcacheではなくfact layerとして所有し、[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](docs/rfcs/0002-semantic-dependency-graph-v0.md) を契約とする。辺の正規方向は常にdependentからdependency（callerからcallee、Sceneからentrypoint、対象objectからplay）とし、同じ辺から決定的なforward/reverse indexを構築する。解決不能なdynamic call、base、import、definition attributionは推測した辺にせず、所有node・reason・anchorを持つUnknown frontierとして残す。cache component partitionはfile間edgeを無向に見た弱連結成分だけを利用し、ChangeImpactはbefore/after snapshotのreverse edgeを利用し、外部JSONは内部handleではなくStaticFactsのsnapshot IDとsource anchorへprojectionする。Runtime ID、Static/Runtime最終照合、gesture意味論、TracePlan、checkpoint、visual validationは本repositoryの責務外とする。
+
+### 8.5 ChangeImpact v0 public contract
+
+[`docs/rfcs/0003-change-impact-v0.md`](docs/rfcs/0003-change-impact-v0.md) と [`schemas/change-impact-v0.json`](schemas/change-impact-v0.json) を外部契約とする。入力はbefore/afterの2 source snapshotを必須とし、両方を独立にfull解析する。raw hashでadded/removed/modified fileを、qualified name・definition kind・relative path・definition source sliceでchanged definitionを判定する。renameは推測せずremoved + addedとして表す。
+
+changed file/definitionをbase/target各graphのreverse traversal originとし、base側は削除済みedge、target側は新規edgeを保持する。出力候補は`base | target`を明記したStaticFacts Scene/play/object ID、source anchor、originからのreason pathを持つ。異なるsnapshotのIDを同一視せず、cross-snapshot rematchingはP1へ残す。
+
+到達したdynamic call、unresolved base/import、definition attribution不能、decode/parse failureは非空`reasons`配列を持つUnknown frontierとして投影する。semantic configまたはknowledge profileが異なる場合は両snapshotの全source semanticsをoriginに広げ、`semantic-config-changed` frontierを返す。frontierがなければ`completeness=complete`、一つでもあれば`candidates`とする。これは候補集合の静的coverageであり、編集意図や描画最適化許可ではない。
 
 ## 9. cache と並列性
 

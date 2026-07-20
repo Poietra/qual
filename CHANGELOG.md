@@ -18,6 +18,13 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **ChangeImpact v0 (RFC 0003)**: `manim-lint change-impact --before OLD
+  --after NEW` compares two full source snapshots and emits schema-validated
+  added/removed/modified definitions, conservative Scene/play/object
+  candidates, deterministic reverse dependency reason paths, and structured
+  Unknown frontiers. Traversing both graphs preserves deleted and renamed
+  relationships without guessing cross-snapshot identity.
+
 - **SemanticDependencyGraph v0 (RFC 0002)**: a cache-independent fact layer
   now owns deterministic dependent-to-dependency edges and reverse indexes
   across files, definitions, Scenes, plays, objects, animation targets, and

@@ -124,6 +124,7 @@ manim-lint config                       # resolved effective configuration
 manim-lint cost scenes/demo.py          # per-scene cost breakdown
 manim-lint coverage .                   # what the analysis could not resolve
 manim-lint static-facts . > facts.json  # StaticFacts v0 semantic projection
+manim-lint change-impact --before old --after new > impact.json
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -572,6 +573,9 @@ The cache-independent
 is the shared fact layer for cache component partitioning and conservative
 source-change impact. It retains anchored Unknown frontiers instead of
 guessing dynamic dependency edges.
+[`ChangeImpact v0`](docs/rfcs/0003-change-impact-v0.md) compares two source
+snapshots and emits schema-validated, reason-carrying Scene/play/object impact
+candidates, including relations deleted from the target tree.
 
 ## Known limitations
 

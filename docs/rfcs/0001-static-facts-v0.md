@@ -323,9 +323,9 @@ becomes a risk/frontier with reasons.
 
 The semantic dependency graph is a fact layer, not the cache partition. Cache
 components may consume its forward edges, while ChangeImpact consumes its
-reverse edges and StaticFacts projects reason paths. ChangeImpact will compare
-two source snapshots (or base StaticFacts plus a target snapshot) so deleted
-and renamed definitions remain discoverable from the base graph.
+reverse edges and projects reason paths through StaticFacts IDs and anchors.
+ChangeImpact compares two source snapshots so deleted and renamed definitions
+remain discoverable from the base graph.
 
 Source patching and rematching are P1. They will consume these anchors and raw
 hash preconditions but will define a separate schema. Arbitrary Python

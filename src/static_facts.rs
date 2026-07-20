@@ -15,6 +15,7 @@ use crate::config::model::ResolvedConfig;
 use crate::frontend::index::{ProjectIndex, QualifiedCall, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::render_order::{DisplayOrder, OrderUnknownReason, RenderOrderInputs};
+use crate::semantic::dependency::DependencyNode;
 use crate::semantic::heap::AbstractHeap;
 use crate::semantic::interpreter::{
     FallbackReason, LifecycleFacts, PlayFact, PlayKind, SceneLifecycle, UpdaterHost,
@@ -57,6 +58,7 @@ pub struct ProjectionInput<'a> {
 pub struct StaticFactsOutput {
     pub document: Value,
     pub json: String,
+    pub(crate) index: ProjectionIndex,
 }
 
 /// Projects the complete fact stack into `StaticFacts` v0.
@@ -64,12 +66,40 @@ pub struct StaticFactsOutput {
 pub fn project(input: ProjectionInput<'_>) -> StaticFactsOutput {
     let projector = Projector::new(input);
     let document = projector.build();
+    let index = projector.projection_index();
     let mut rendered = serde_json::to_string_pretty(&document)
         .expect("StaticFacts projection contains only finite JSON values");
     rendered.push('\n');
     StaticFactsOutput {
         document,
         json: rendered,
+        index,
+    }
+}
+
+/// Internal bridge from snapshot-local semantic graph nodes to the public IDs
+/// emitted in the document. The handles in the map are never serialized.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProjectionIndex {
+    scenes: BTreeMap<String, String>,
+    plays: BTreeMap<(String, usize), String>,
+    objects: BTreeMap<(String, ObjectId), String>,
+}
+
+impl ProjectionIndex {
+    pub(crate) fn id_for_node(&self, node: &DependencyNode) -> Option<&str> {
+        match node {
+            DependencyNode::Scene(scene) => self.scenes.get(scene).map(String::as_str),
+            DependencyNode::Play(play) => self
+                .plays
+                .get(&(play.scene.clone(), play.ordinal))
+                .map(String::as_str),
+            DependencyNode::Object(object) => self
+                .objects
+                .get(&(object.scene.clone(), object.object.clone()))
+                .map(String::as_str),
+            DependencyNode::File(_) | DependencyNode::Definition(_) => None,
+        }
     }
 }
 
@@ -219,6 +249,26 @@ impl<'a> Projector<'a> {
             "renderer_risks": renderer_risks,
             "coverage": coverage,
         })
+    }
+
+    fn projection_index(&self) -> ProjectionIndex {
+        let mut index = ProjectionIndex::default();
+        for (scene, ids) in self.input.lifecycle.scenes.iter().zip(&self.ids) {
+            index
+                .scenes
+                .insert(scene.qualified_name.clone(), ids.scene.clone());
+            for (ordinal, id) in ids.plays.iter().enumerate() {
+                index
+                    .plays
+                    .insert((scene.qualified_name.clone(), ordinal), id.clone());
+            }
+            for (object, id) in &ids.objects {
+                index
+                    .objects
+                    .insert((scene.qualified_name.clone(), object.clone()), id.clone());
+            }
+        }
+        index
     }
 
     fn profile_facts(&self) -> Vec<Value> {
@@ -1698,6 +1748,48 @@ fn source_anchor(
     json!({
         "path": source.relative_path(),
         "raw_content_hash": files[&site.file].raw_hash,
+        "encoding": source.encoding().label,
+        "byte_order_mark": source.encoding().byte_order_mark,
+        "utf8_byte_range": { "start": start, "end": end },
+        "unicode_span": {
+            "start": {
+                "line": start_position.line,
+                "column": start_position.column,
+            },
+            "end": {
+                "line": end_position.line,
+                "column": end_position.column,
+            },
+        },
+    })
+}
+
+/// Projects a semantic allocation site through the same source-anchor
+/// contract used by `StaticFacts`. `raw_sources` must be the immutable snapshot
+/// parallel to `SourceManager::files`.
+pub(crate) fn project_source_anchor(
+    sources: &SourceManager,
+    raw_sources: &[Vec<u8>],
+    site: AllocationSite,
+) -> Value {
+    assert_eq!(
+        sources.files().len(),
+        raw_sources.len(),
+        "raw source snapshot must align with SourceManager"
+    );
+    let source = sources.file(site.file);
+    let start = usize::try_from(site.start)
+        .unwrap_or(usize::MAX)
+        .min(source.text().len());
+    let end = usize::try_from(site.end)
+        .unwrap_or(usize::MAX)
+        .min(source.text().len())
+        .max(start);
+    let start_position = source.position_of_byte(start);
+    let end_position = source.position_of_byte(end);
+    json!({
+        "path": source.relative_path(),
+        "raw_content_hash": sha256(&raw_sources[site.file.index()]),
         "encoding": source.encoding().label,
         "byte_order_mark": source.encoding().byte_order_mark,
         "utf8_byte_range": { "start": start, "end": end },
