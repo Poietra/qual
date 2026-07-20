@@ -1,0 +1,545 @@
+{
+  "schema_version": 0,
+  "tool": {
+    "name": "manim-lint",
+    "version": "0.1.0",
+    "semantic_build_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "snapshot": {
+    "id": "snapshot:sf0:9999999999999999999999999999999999999999999999999999999999999999",
+    "source_manifest_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "semantic_config_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "target_python": "3.11",
+    "object_call_context_depth": 2,
+    "helper_call_path_depth": 32
+  },
+  "knowledge_profile": {
+    "name": "upstream_0_20",
+    "schema_version": 1,
+    "source_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "profiles": [
+    {
+      "name": "production",
+      "renderer": "cairo",
+      "config_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  ],
+  "files": [
+    {
+      "path": "シーン.py",
+      "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "decoded_utf8_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "encoding": "shift_jis",
+      "byte_order_mark": false,
+      "newline": "crlf",
+      "utf8_byte_length": 640,
+      "analysis": { "status": "analyzed" }
+    }
+  ],
+  "scenes": [
+    {
+      "id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "qualified_name": "シーン.DemoScene",
+      "definition_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 24, "end": 33 },
+        "unicode_span": {
+          "start": { "line": 3, "column": 7 },
+          "end": { "line": 3, "column": 16 }
+        }
+      },
+      "constructor_state_complete": { "status": "known", "value": "yes" },
+      "object_ids": [
+        "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "object:sf0:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "play_ids": [
+        "play:sf0:1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "updater_ids": [
+        "updater:sf0:5555555555555555555555555555555555555555555555555555555555555555"
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "allocation_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 140, "end": 145 },
+        "unicode_span": {
+          "start": { "line": 9, "column": 12 },
+          "end": { "line": 9, "column": 17 }
+        }
+      },
+      "call_context": [
+        {
+          "path": "シーン.py",
+          "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+          "encoding": "shift_jis",
+          "byte_order_mark": false,
+          "utf8_byte_range": { "start": 80, "end": 92 },
+          "unicode_span": {
+            "start": { "line": 6, "column": 9 },
+            "end": { "line": 6, "column": 21 }
+          }
+        }
+      ],
+      "cardinality": "singleton",
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.mobject.geometry.arc.Dot"]
+      },
+      "binding_candidates": { "status": "known", "values": ["点_a"] },
+      "relations": [],
+      "final_membership": {
+        "scene_root": { "status": "known", "value": "present" },
+        "family": { "status": "known", "value": "present" },
+        "foreground": { "status": "known", "value": "no" }
+      }
+    },
+    {
+      "id": "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "allocation_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 140, "end": 145 },
+        "unicode_span": {
+          "start": { "line": 9, "column": 12 },
+          "end": { "line": 9, "column": 17 }
+        }
+      },
+      "call_context": [
+        {
+          "path": "シーン.py",
+          "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+          "encoding": "shift_jis",
+          "byte_order_mark": false,
+          "utf8_byte_range": { "start": 96, "end": 108 },
+          "unicode_span": {
+            "start": { "line": 7, "column": 9 },
+            "end": { "line": 7, "column": 21 }
+          }
+        }
+      ],
+      "cardinality": "singleton",
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.mobject.geometry.arc.Dot"]
+      },
+      "binding_candidates": { "status": "known", "values": ["点_b"] },
+      "relations": [
+        {
+          "kind": "replaced-by",
+          "objects": {
+            "status": "known",
+            "object_ids": [
+              "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            ]
+          }
+        }
+      ],
+      "final_membership": {
+        "scene_root": { "status": "known", "value": "absent" },
+        "family": { "status": "known", "value": "absent" },
+        "foreground": { "status": "known", "value": "no" }
+      }
+    },
+    {
+      "id": "object:sf0:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "allocation_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 180, "end": 186 },
+        "unicode_span": {
+          "start": { "line": 12, "column": 16 },
+          "end": { "line": 12, "column": 22 }
+        }
+      },
+      "call_context": [],
+      "cardinality": "many",
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.mobject.geometry.polygram.Square"]
+      },
+      "binding_candidates": { "status": "known", "values": ["四角"] },
+      "relations": [],
+      "final_membership": {
+        "scene_root": { "status": "known", "value": "present" },
+        "family": { "status": "known", "value": "present" },
+        "foreground": { "status": "known", "value": "no" }
+      }
+    },
+    {
+      "id": "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "allocation_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 220, "end": 226 },
+        "unicode_span": {
+          "start": { "line": 14, "column": 18 },
+          "end": { "line": 14, "column": 24 }
+        }
+      },
+      "call_context": [],
+      "cardinality": "singleton",
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.mobject.geometry.polygram.Circle"]
+      },
+      "binding_candidates": { "status": "known", "values": ["置換先"] },
+      "relations": [
+        {
+          "kind": "replaces",
+          "objects": {
+            "status": "known",
+            "object_ids": [
+              "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            ]
+          }
+        }
+      ],
+      "final_membership": {
+        "scene_root": { "status": "known", "value": "present" },
+        "family": { "status": "known", "value": "present" },
+        "foreground": { "status": "known", "value": "no" }
+      }
+    }
+  ],
+  "plays": [
+    {
+      "id": "play:sf0:1111111111111111111111111111111111111111111111111111111111111111",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "play",
+      "call_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 280, "end": 390 },
+        "unicode_span": {
+          "start": { "line": 18, "column": 9 },
+          "end": { "line": 21, "column": 10 }
+        }
+      },
+      "helper_call_path": [],
+      "cardinality": "singleton",
+      "execution_certainty": { "status": "known", "value": "present" },
+      "repetitions": { "status": "exact", "value": 1 },
+      "duration": { "status": "exact", "value": 1.5 },
+      "animation_arguments_complete": { "status": "known", "value": "yes" },
+      "animation_ids": [
+        "animation:sf0:3333333333333333333333333333333333333333333333333333333333333333",
+        "animation:sf0:4444444444444444444444444444444444444444444444444444444444444444"
+      ],
+      "membership": {
+        "before": {
+          "status": "known",
+          "entries": [
+            {
+              "object_id": "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "state": {
+                "scene_root": { "status": "known", "value": "present" },
+                "family": { "status": "known", "value": "present" },
+                "foreground": { "status": "known", "value": "no" }
+              }
+            }
+          ]
+        },
+        "during": {
+          "status": "known",
+          "entries": [
+            {
+              "object_id": "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "state": {
+                "scene_root": { "status": "known", "value": "present" },
+                "family": { "status": "known", "value": "present" },
+                "foreground": { "status": "known", "value": "no" }
+              }
+            }
+          ]
+        },
+        "after": {
+          "status": "known",
+          "entries": [
+            {
+              "object_id": "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "state": {
+                "scene_root": { "status": "known", "value": "present" },
+                "family": { "status": "known", "value": "present" },
+                "foreground": { "status": "known", "value": "no" }
+              }
+            }
+          ]
+        }
+      },
+      "render_order": {
+        "before": {
+          "status": "known",
+          "object_ids": [
+            "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ]
+        },
+        "during": {
+          "status": "unknown",
+          "candidate_object_ids": [
+            "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          ],
+          "reasons": [
+            {
+              "kind": "unknown-render-order",
+              "anchor": {
+                "path": "シーン.py",
+                "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "encoding": "shift_jis",
+                "byte_order_mark": false,
+                "utf8_byte_range": { "start": 280, "end": 390 },
+                "unicode_span": {
+                  "start": { "line": 18, "column": 9 },
+                  "end": { "line": 21, "column": 10 }
+                }
+              }
+            }
+          ]
+        },
+        "after": {
+          "status": "known",
+          "object_ids": [
+            "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ]
+        }
+      }
+    }
+  ],
+  "animations": [
+    {
+      "id": "animation:sf0:3333333333333333333333333333333333333333333333333333333333333333",
+      "play_id": "play:sf0:1111111111111111111111111111111111111111111111111111111111111111",
+      "source_argument_ordinal": 0,
+      "source_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 300, "end": 325 },
+        "unicode_span": {
+          "start": { "line": 19, "column": 13 },
+          "end": { "line": 19, "column": 38 }
+        }
+      },
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.animation.transform.Transform"]
+      },
+      "target_candidates": {
+        "status": "known",
+        "object_ids": [
+          "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      },
+      "write_channels": { "status": "known", "channels": ["points"] },
+      "effects": {
+        "introducer": { "status": "known", "value": "no" },
+        "remover": { "status": "known", "value": "no" },
+        "replacement_targets": {
+          "status": "known",
+          "object_ids": []
+        }
+      }
+    },
+    {
+      "id": "animation:sf0:4444444444444444444444444444444444444444444444444444444444444444",
+      "play_id": "play:sf0:1111111111111111111111111111111111111111111111111111111111111111",
+      "source_argument_ordinal": 1,
+      "source_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 330, "end": 380 },
+        "unicode_span": {
+          "start": { "line": 20, "column": 13 },
+          "end": { "line": 20, "column": 63 }
+        }
+      },
+      "kind_candidates": {
+        "status": "known",
+        "values": ["manim.animation.transform.ReplacementTransform"]
+      },
+      "target_candidates": {
+        "status": "unknown",
+        "candidates": [
+          "object:sf0:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "reasons": [
+          {
+            "kind": "dynamic-call-target",
+            "anchor": {
+              "path": "シーン.py",
+              "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+              "encoding": "shift_jis",
+              "byte_order_mark": false,
+              "utf8_byte_range": { "start": 350, "end": 362 },
+              "unicode_span": {
+                "start": { "line": 20, "column": 33 },
+                "end": { "line": 20, "column": 45 }
+              }
+            }
+          }
+        ]
+      },
+      "write_channels": {
+        "status": "known",
+        "channels": ["points", "membership"]
+      },
+      "effects": {
+        "introducer": { "status": "known", "value": "no" },
+        "remover": { "status": "known", "value": "yes" },
+        "replacement_targets": {
+          "status": "known",
+          "object_ids": [
+            "object:sf0:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ]
+        }
+      }
+    }
+  ],
+  "updaters": [
+    {
+      "id": "updater:sf0:5555555555555555555555555555555555555555555555555555555555555555",
+      "scene_id": "scene:sf0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "registration_anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 240, "end": 270 },
+        "unicode_span": {
+          "start": { "line": 16, "column": 9 },
+          "end": { "line": 16, "column": 39 }
+        }
+      },
+      "call_context": [],
+      "host_candidates": {
+        "status": "known",
+        "entity_ids": [
+          "object:sf0:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      },
+      "callback_candidates": {
+        "status": "known",
+        "values": ["シーン.DemoScene.follow"]
+      },
+      "time_based": { "status": "known", "value": "yes" },
+      "write_channels": { "status": "known", "channels": ["points"] },
+      "active_play_candidates": {
+        "status": "known",
+        "play_ids": [
+          "play:sf0:1111111111111111111111111111111111111111111111111111111111111111"
+        ]
+      }
+    }
+  ],
+  "renderer_risks": [
+    {
+      "id": "risk:sf0:6666666666666666666666666666666666666666666666666666666666666666",
+      "kind": "active-updater",
+      "certainty": "certain",
+      "anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 240, "end": 270 },
+        "unicode_span": {
+          "start": { "line": 16, "column": 9 },
+          "end": { "line": 16, "column": 39 }
+        }
+      },
+      "related_entity_ids": [
+        "play:sf0:1111111111111111111111111111111111111111111111111111111111111111",
+        "updater:sf0:5555555555555555555555555555555555555555555555555555555555555555"
+      ],
+      "applicable_profiles": ["production"]
+    },
+    {
+      "id": "risk:sf0:7777777777777777777777777777777777777777777777777777777777777777",
+      "kind": "dynamic-call",
+      "certainty": "possible",
+      "anchor": {
+        "path": "シーン.py",
+        "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "encoding": "shift_jis",
+        "byte_order_mark": false,
+        "utf8_byte_range": { "start": 350, "end": 362 },
+        "unicode_span": {
+          "start": { "line": 20, "column": 33 },
+          "end": { "line": 20, "column": 45 }
+        }
+      },
+      "related_entity_ids": [
+        "animation:sf0:4444444444444444444444444444444444444444444444444444444444444444"
+      ],
+      "applicable_profiles": ["production"]
+    }
+  ],
+  "coverage": {
+    "completeness": "partial",
+    "frontiers": [
+      {
+        "id": "frontier:sf0:8888888888888888888888888888888888888888888888888888888888888888",
+        "kind": "call-resolution",
+        "anchor": {
+          "path": "シーン.py",
+          "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+          "encoding": "shift_jis",
+          "byte_order_mark": false,
+          "utf8_byte_range": { "start": 350, "end": 362 },
+          "unicode_span": {
+            "start": { "line": 20, "column": 33 },
+            "end": { "line": 20, "column": 45 }
+          }
+        },
+        "related_entity_ids": [
+          "animation:sf0:4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "reasons": [
+          {
+            "kind": "dynamic-call-target",
+            "anchor": {
+              "path": "シーン.py",
+              "raw_content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+              "encoding": "shift_jis",
+              "byte_order_mark": false,
+              "utf8_byte_range": { "start": 350, "end": 362 },
+              "unicode_span": {
+                "start": { "line": 20, "column": 33 },
+                "end": { "line": 20, "column": 45 }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

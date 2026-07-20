@@ -17,8 +17,11 @@ knowledge profile .......... src/knowledge/ — versioned Manim 0.20
 frontend facts ............. src/frontend/ — parse, imports/aliases,
    |                         project index, qualified calls, CFG,
    |                         statement/binding facts, target-python gate
+dependency graph ........... src/semantic/dependency.rs — definitions,
+   |                         calls, Scenes; deterministic forward/reverse
 lifecycle interpreter ...... src/semantic/ — abstract interpretation of
    |                         independent Scene runs -> LifecycleFacts
+   |                         and play/object dependency edges
 cost facts ................. src/cost/ (+ src/render_order.rs) — hot
    |                         contexts, frame intervals, execution
    |                         liveness, fork gates -> CostFacts
@@ -140,6 +143,38 @@ non-helper calls — with combined certainty and summary-derived
 `LifecycleFacts::inline_fallbacks` and surfaces in `manim-lint coverage`
 as `helper calls summarized, not inlined`.
 
+### Semantic dependency graph (`src/semantic/dependency.rs`)
+
+RFC 0002 defines the cache-independent `SemanticDependencyGraph`. Every edge
+is stored as dependent to dependency: callers point to callees, Scenes to
+lifecycle entrypoints, plays to their defining callable, and possible target
+objects to their play. The same ordered edge set backs deterministic forward
+and reverse indexes. Unresolved dynamic calls, bases, imports, and lifecycle
+attribution become anchored Unknown frontiers, never guessed edges.
+
+The frontend-only graph is available before lifecycle interpretation and is
+the single source for cache file components. After lifecycle analysis it can
+be enriched with Scene/play/object/animation/updater relationships for
+ChangeImpact. Graph handles are snapshot-local internal facts; external JSON
+must project them through StaticFacts IDs and source anchors. See
+[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](rfcs/0002-semantic-dependency-graph-v0.md).
+
+`manim-lint change-impact --before OLD --after NEW` constructs this full graph
+for both snapshots. Raw file and definition changes seed reverse traversal in
+each graph, preserving deleted edges on the base side and added edges on the
+target side. `src/change_impact.rs` projects reached Scene/play/object nodes
+through each snapshot's StaticFacts IDs and emits reason paths plus relevant
+Unknown frontiers. RFC 0003 and `schemas/change-impact-v0.json` define the
+external contract; the bounded patch/rematching layer is described next.
+
+`src/source_bridge.rs` completes that P1 boundary for three bounded local
+templates. The command verifies a StaticFacts snapshot/entity request,
+generates rollback-carrying hash-guarded edits, and leaves the working tree
+untouched. `src/application.rs` applies each candidate to an in-memory raw
+snapshot, reruns the full semantic stack, then accepts it only after one
+semantic rematch and no coverage regression. RFC 0004 plus the request/output
+schemas define the external contract.
+
 ### Cost model (`src/cost/` and `src/render_order.rs`)
 
 `CostFacts` (DESIGN §4): symbolic, evidence-carrying — never fabricated
@@ -187,12 +222,35 @@ report (`manim-lint coverage`, `check --analysis-summary`) that counts
 everything the analysis could *not* resolve. All output is deterministic
 and byte-stable for identical input.
 
+### Public semantic projection
+
+RFC 0001 defines `StaticFacts v0`, a versioned projection for Poietra and
+fast-manim. It sits beside diagnostic reporting rather than exposing
+`LifecycleFacts`, heap records, cache entries, or internal IDs directly. The
+contract uses snapshot-scoped hashed IDs, encoding-aware source anchors, and
+reason-carrying unknown values; it includes Scenes, reachable objects,
+plays/animations, updaters, play-boundary membership/render order, renderer
+risks, and coverage frontiers. See
+[`docs/rfcs/0001-static-facts-v0.md`](rfcs/0001-static-facts-v0.md) and
+[`schemas/static-facts-v0.json`](../schemas/static-facts-v0.json).
+
+`manim-lint static-facts [PATH...]` reads each source into one immutable raw
+byte snapshot, runs the frontend and lifecycle fact layers independently of
+selected lint rules, and projects those facts through `src/static_facts.rs`.
+The projection never serializes internal analyzer structs. It emits sorted,
+pretty JSON with one trailing newline and is byte-identical across worker
+counts. The initial command deliberately uses full analysis; a future
+incremental route must feed the same projector and pass full/incremental byte
+equality before it can be enabled. It may report optimization blockers, but
+never grants renderer optimization permission.
+
 ### Persistent cache (`src/cache.rs`)
 
 Cache v2 is a disposable `SQLite` WAL database with two layers. The exact
 whole-project entry contains filtered diagnostic JSON for the no-frontend
-warm path. On a project miss, the freshly rebuilt frontend graph partitions
-files by resolved import/call/base/collision edges; dependency-closed entries
+warm path. On a project miss, the freshly rebuilt semantic dependency graph
+partitions files by its resolved import/call/base/collision file-edge view;
+dependency-closed entries
 contain JSON method summaries, diagnostics, and filesystem manifests. Hit
 summaries seed the project table and only miss-component definitions and
 Scenes are interpreted. Component ownership avoids reusing helper-anchored

@@ -1,19 +1,12 @@
-//! Conservative project dependency components for incremental cache shards.
+//! Dependency-closed cache shards derived from the semantic dependency graph.
 //!
-//! Diagnostics produced while interpreting one Scene may be anchored in a
-//! helper's source file. Sharding by primary path alone would therefore be
-//! unsound. We instead join every file connected by a statically resolved
-//! project import, qualified call, base class, or module-name collision and
-//! cache the resulting weakly connected component atomically (DESIGN §9).
+//! The cache owns only weak-component partitioning. Import/call/base/collision
+//! discovery belongs to [`SemanticDependencyGraph`], whose directed edges are
+//! also consumed by source-change impact analysis (DESIGN §8.4, §9).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rustpython_parser::ast;
-
-use crate::frontend::imports::{ImportTarget, ImportedNames, import_from_names};
-use crate::frontend::index::{BaseRef, ProjectIndex, QualifiedCallFacts};
-use crate::frontend::names::Binding;
-use crate::frontend::parser::{ModuleIdentity, module_identity};
+use crate::semantic::dependency::SemanticDependencyGraph;
 use crate::source::{FileId, SourceManager};
 
 /// One dependency-closed cache shard, deterministically ordered by path.
@@ -25,93 +18,17 @@ pub(crate) struct AnalysisComponent {
     pub paths: Vec<String>,
 }
 
-/// Builds weak dependency components over every source file, including files
-/// that failed to parse (those remain isolated unless they collide with a
-/// parsed module identity).
+/// Builds weak file components from the graph's cache-partition view.
+///
+/// Files that failed to parse remain nodes and therefore isolated unless a
+/// module-name collision connects them to another file.
 pub(crate) fn build(
     sources: &SourceManager,
-    source_roots: &[String],
-    index: &ProjectIndex,
-    calls: &QualifiedCallFacts,
+    graph: &SemanticDependencyGraph,
 ) -> Vec<AnalysisComponent> {
     let mut union = UnionFind::new(sources.files().len());
-    let identities: BTreeMap<FileId, ModuleIdentity> = sources
-        .files()
-        .iter()
-        .map(|file| {
-            (
-                file.id(),
-                module_identity(file.relative_path(), source_roots),
-            )
-        })
-        .collect();
-
-    // Colliding module names share one resolver namespace: the first file
-    // wins, but changing either file or the sorted project layout can affect
-    // which facts are visible.
-    let mut first_by_module: BTreeMap<&str, FileId> = BTreeMap::new();
-    for (file, identity) in &identities {
-        if let Some(first) = first_by_module.get(identity.name.as_str()) {
-            union.join(file.index(), first.index());
-        } else {
-            first_by_module.insert(identity.name.as_str(), *file);
-        }
-    }
-
-    let owner_by_module: BTreeMap<&str, FileId> = index
-        .modules
-        .iter()
-        .map(|(name, record)| (name.as_str(), record.file))
-        .collect();
-
-    // Every syntactic import is collected recursively, including imports in
-    // functions, classes, and branches. Only project modules create edges;
-    // external modules cannot make one project shard depend on another.
-    for file in sources.files() {
-        let (Some(module), Some(identity)) = (file.ast(), identities.get(&file.id())) else {
-            continue;
-        };
-        let mut targets = BTreeSet::new();
-        collect_import_targets(&module.body, identity, &mut targets);
-        for target in targets {
-            connect_module_prefixes(file.id(), &target, &owner_by_module, &mut union);
-        }
-    }
-
-    // Final namespace bindings capture re-export chains and module aliases
-    // that the fixpoint resolver made concrete.
-    for record in index.modules.values() {
-        for binding in record.namespace.values() {
-            let target = match binding {
-                Binding::ImportedModule(target)
-                | Binding::ImportedSymbol(target)
-                | Binding::LocalClass(target)
-                | Binding::LocalFunction(target) => Some(target.as_str()),
-                Binding::LocalVar(_) | Binding::Unknown => None,
-            };
-            if let Some(target) = target {
-                connect_qualified(record.file, target, index, &mut union);
-            }
-        }
-    }
-
-    // Resolved project bases affect MRO, Scene discovery, and every summary
-    // inherited through that chain.
-    for class in index.classes.values() {
-        for base in &class.bases {
-            if let BaseRef::Resolved(target) = base {
-                connect_qualified(class.file, target, index, &mut union);
-            }
-        }
-    }
-
-    // Qualified calls include alias.attr chains such as `import pkg;
-    // pkg.helpers.run()`, for which the plain import target alone may be an
-    // implied package without its own source file.
-    for call in &calls.calls {
-        for candidate in &call.candidates {
-            connect_qualified(call.file, candidate, index, &mut union);
-        }
+    for (dependent, dependency) in graph.cache_file_edges() {
+        union.join(dependent.index(), dependency.index());
     }
 
     let mut grouped: BTreeMap<usize, Vec<FileId>> = BTreeMap::new();
@@ -142,147 +59,6 @@ pub(crate) fn build(
         .collect();
     components.sort_by(|left, right| left.paths.cmp(&right.paths));
     components
-}
-
-fn connect_qualified(source: FileId, qualified: &str, index: &ProjectIndex, union: &mut UnionFind) {
-    let owner = index
-        .modules
-        .iter()
-        .filter(|(module, _)| {
-            qualified == module.as_str()
-                || qualified
-                    .strip_prefix(module.as_str())
-                    .is_some_and(|tail| tail.starts_with('.'))
-        })
-        .max_by_key(|(module, _)| module.len())
-        .map(|(_, record)| record.file);
-    if let Some(owner) = owner {
-        union.join(source.index(), owner.index());
-    }
-}
-
-fn connect_module_prefixes(
-    source: FileId,
-    target: &str,
-    owner_by_module: &BTreeMap<&str, FileId>,
-    union: &mut UnionFind,
-) {
-    let mut end = target.len();
-    loop {
-        let prefix = &target[..end];
-        if let Some(owner) = owner_by_module.get(prefix) {
-            union.join(source.index(), owner.index());
-        }
-        let Some(dot) = prefix.rfind('.') else {
-            break;
-        };
-        end = dot;
-    }
-}
-
-fn collect_import_targets(
-    statements: &[ast::Stmt],
-    identity: &ModuleIdentity,
-    targets: &mut BTreeSet<String>,
-) {
-    for statement in statements {
-        match statement {
-            ast::Stmt::Import(import) => {
-                targets.extend(import.names.iter().map(|alias| alias.name.to_string()));
-            }
-            ast::Stmt::ImportFrom(import) => match import_from_names(import, identity) {
-                ImportedNames::Bindings(bindings) => {
-                    for binding in bindings {
-                        match binding.target {
-                            ImportTarget::Module(module) => {
-                                targets.insert(module);
-                            }
-                            ImportTarget::Symbol { module, name } => {
-                                targets.insert(format!("{module}.{name}"));
-                                targets.insert(module);
-                            }
-                            ImportTarget::Unknown => {}
-                        }
-                    }
-                }
-                ImportedNames::Star {
-                    module: Some(module),
-                    ..
-                } => {
-                    targets.insert(module);
-                }
-                ImportedNames::Star { module: None, .. } => {}
-            },
-            ast::Stmt::FunctionDef(def) => {
-                collect_import_targets(&def.body, identity, targets);
-            }
-            ast::Stmt::AsyncFunctionDef(def) => {
-                collect_import_targets(&def.body, identity, targets);
-            }
-            ast::Stmt::ClassDef(def) => {
-                collect_import_targets(&def.body, identity, targets);
-            }
-            ast::Stmt::For(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-            }
-            ast::Stmt::AsyncFor(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-            }
-            ast::Stmt::While(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-            }
-            ast::Stmt::If(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-            }
-            ast::Stmt::With(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-            }
-            ast::Stmt::AsyncWith(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-            }
-            ast::Stmt::Match(inner) => {
-                for case in &inner.cases {
-                    collect_import_targets(&case.body, identity, targets);
-                }
-            }
-            ast::Stmt::Try(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-                collect_import_targets(&inner.finalbody, identity, targets);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    collect_import_targets(&handler.body, identity, targets);
-                }
-            }
-            ast::Stmt::TryStar(inner) => {
-                collect_import_targets(&inner.body, identity, targets);
-                collect_import_targets(&inner.orelse, identity, targets);
-                collect_import_targets(&inner.finalbody, identity, targets);
-                for handler in &inner.handlers {
-                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    collect_import_targets(&handler.body, identity, targets);
-                }
-            }
-            ast::Stmt::Return(_)
-            | ast::Stmt::Delete(_)
-            | ast::Stmt::Assign(_)
-            | ast::Stmt::TypeAlias(_)
-            | ast::Stmt::AugAssign(_)
-            | ast::Stmt::AnnAssign(_)
-            | ast::Stmt::Raise(_)
-            | ast::Stmt::Assert(_)
-            | ast::Stmt::Global(_)
-            | ast::Stmt::Nonlocal(_)
-            | ast::Stmt::Expr(_)
-            | ast::Stmt::Pass(_)
-            | ast::Stmt::Break(_)
-            | ast::Stmt::Continue(_) => {}
-        }
-    }
 }
 
 struct UnionFind {
@@ -335,7 +111,13 @@ mod tests {
         }
         let roots: Vec<String> = roots.iter().map(|root| (*root).to_owned()).collect();
         let frontend = index::analyze(&sources, &roots, &ManimSurface::default());
-        build(&sources, &roots, &frontend.index, &frontend.calls)
+        let graph = SemanticDependencyGraph::from_frontend(
+            &sources,
+            &roots,
+            &frontend.index,
+            &frontend.calls,
+        );
+        build(&sources, &graph)
             .into_iter()
             .map(|component| component.paths)
             .collect()

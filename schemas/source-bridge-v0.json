@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/source-bridge-v0.json",
+  "title": "manim-lint SourceBridge v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tool", "snapshot", "request", "status", "candidates", "unknowns"],
+  "properties": {
+    "schema_version": { "const": 0 },
+    "tool": { "$ref": "#/$defs/tool" },
+    "snapshot": { "$ref": "#/$defs/snapshot" },
+    "request": { "$ref": "#/$defs/requestSummary" },
+    "status": { "enum": ["unique", "ambiguous", "unavailable"] },
+    "candidates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "unknowns": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/unknown" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "snapshotId": { "type": "string", "pattern": "^snapshot:sf0:[0-9a-f]{64}$" },
+    "entityId": { "type": "string", "pattern": "^(scene|play|object):sf0:[0-9a-f]{64}$" },
+    "patchId": { "type": "string", "pattern": "^patch:sb0:[0-9a-f]{64}$" },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "semantic_build_hash"],
+      "properties": {
+        "name": { "const": "manim-lint" },
+        "version": { "type": "string", "minLength": 1 },
+        "semantic_build_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_manifest_hash", "semantic_config_hash"],
+      "properties": {
+        "id": { "$ref": "#/$defs/snapshotId" },
+        "source_manifest_hash": { "$ref": "#/$defs/sha256" },
+        "semantic_config_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "requestSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "operation"],
+      "properties": {
+        "target_id": { "$ref": "#/$defs/entityId" },
+        "operation": {
+          "enum": ["replace-literal-argument", "modify-existing-shift", "insert-shift-chain"]
+        }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "byteRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "raw_content_hash", "encoding", "byte_order_mark", "utf8_byte_range", "unicode_span"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "encoding": { "type": "string", "minLength": 1 },
+        "byte_order_mark": { "type": "boolean" },
+        "utf8_byte_range": { "$ref": "#/$defs/byteRange" },
+        "unicode_span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "requestAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "raw_content_hash", "utf8_byte_range"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "utf8_byte_range": { "$ref": "#/$defs/byteRange" }
+      }
+    },
+    "precondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "raw_content_hash"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "raw_content_hash", "anchor", "original_text", "replacement"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "original_text": { "type": "string" },
+        "replacement": { "type": "string" }
+      }
+    },
+    "rematch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "original_id", "candidate_ids"],
+      "properties": {
+        "status": { "enum": ["match", "ambiguous", "missing"] },
+        "original_id": { "$ref": "#/$defs/entityId" },
+        "candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/entityId" }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "new_frontier_kinds"],
+      "properties": {
+        "status": { "enum": ["preserved", "decreased"] },
+        "new_frontier_kinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "validationReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["unsupported-edit-set", "post-edit-parse-failed", "ambiguous-rematch", "missing-rematch", "coverage-decreased"]
+        },
+        "detail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "parse", "rematch", "coverage", "reasons"],
+      "properties": {
+        "status": { "enum": ["accepted", "rejected"] },
+        "parse": { "enum": ["valid", "invalid"] },
+        "target_snapshot_id": { "$ref": "#/$defs/snapshotId" },
+        "rematch": { "$ref": "#/$defs/rematch" },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/validationReason" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "accepted" } } },
+          "then": {
+            "required": ["target_snapshot_id"],
+            "properties": {
+              "parse": { "const": "valid" },
+              "rematch": {
+                "allOf": [
+                  { "$ref": "#/$defs/rematch" },
+                  { "properties": { "status": { "const": "match" } } }
+                ]
+              },
+              "coverage": {
+                "allOf": [
+                  { "$ref": "#/$defs/coverage" },
+                  { "properties": { "status": { "const": "preserved" } } }
+                ]
+              },
+              "reasons": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "rejected" } } },
+          "then": { "properties": { "reasons": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "confidence", "preconditions", "edits", "validation"],
+      "properties": {
+        "id": { "$ref": "#/$defs/patchId" },
+        "confidence": { "enum": ["high", "medium"] },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/precondition" }
+        },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/edit" }
+        },
+        "validation": { "$ref": "#/$defs/validation" }
+      }
+    },
+    "unknownKind": {
+      "enum": [
+        "unsupported-request-version", "snapshot-mismatch", "missing-target", "replacement-not-literal",
+        "source-precondition-failed", "call-anchor-not-unique", "call-not-target-anchor", "argument-not-found", "dynamic-existing-argument",
+        "invalid-replacement-expression", "target-not-object", "binding-not-unique", "object-kind-unknown",
+        "allocation-call-not-unique", "existing-shift-not-found", "binding-reassigned-before-shift",
+        "shift-receiver-identity-unknown", "target-object-identity-unavailable",
+        "invalid-source-anchor", "allocation-not-clear-call"
+      ]
+    },
+    "unknownReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/unknownKind" },
+        "anchor": {
+          "oneOf": [
+            { "$ref": "#/$defs/sourceAnchor" },
+            { "$ref": "#/$defs/requestAnchor" }
+          ]
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reasons"],
+      "properties": {
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/unknownReason" }
+        }
+      }
+    }
+  }
+}

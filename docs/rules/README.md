@@ -9,6 +9,13 @@ the capabilities `cost-report` + `local-fork-overlay` — its home is the
 `cost` command's fork fast-path section under a local-fork knowledge
 profile, and only an exact `--select MLP225` evaluates it in `check`.
 
+Rule selection controls diagnostics only. The
+[`StaticFacts v0`](../rfcs/0001-static-facts-v0.md) public semantic projection
+emitted by `manim-lint static-facts` requests all facts in its contract independently of `--select`,
+`--ignore`, suppressions, confidence thresholds, and baselines. Renderer risk
+facts in that projection are static evidence, not new diagnostics and not
+permission to skip or fork rendering.
+
 Columns:
 
 - **Default severity** — `error` / `warning` / `info`; what the rule reports

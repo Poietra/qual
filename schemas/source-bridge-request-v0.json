@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/source-bridge-request-v0.json",
+  "title": "manim-lint SourceBridge request v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "target_id", "operation"],
+  "properties": {
+    "schema_version": { "const": 0 },
+    "snapshot_id": { "$ref": "#/$defs/snapshotId" },
+    "target_id": { "$ref": "#/$defs/entityId" },
+    "operation": {
+      "oneOf": [
+        { "$ref": "#/$defs/replaceLiteral" },
+        { "$ref": "#/$defs/modifyShift" },
+        { "$ref": "#/$defs/insertShift" }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "snapshotId": {
+      "type": "string",
+      "pattern": "^snapshot:sf0:[0-9a-f]{64}$"
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^(scene|play|object):sf0:[0-9a-f]{64}$"
+    },
+    "byteRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "requestAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "raw_content_hash", "utf8_byte_range"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "utf8_byte_range": { "$ref": "#/$defs/byteRange" }
+      }
+    },
+    "argumentSelector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position"],
+          "properties": {
+            "position": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keyword"],
+          "properties": {
+            "keyword": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        }
+      ]
+    },
+    "replaceLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "call", "argument", "replacement"],
+      "properties": {
+        "kind": { "const": "replace-literal-argument" },
+        "call": { "$ref": "#/$defs/requestAnchor" },
+        "argument": { "$ref": "#/$defs/argumentSelector" },
+        "replacement": { "type": "string", "minLength": 1 }
+      }
+    },
+    "modifyShift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "argument"],
+      "properties": {
+        "kind": { "const": "modify-existing-shift" },
+        "argument": { "type": "string", "minLength": 1 }
+      }
+    },
+    "insertShift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "argument"],
+      "properties": {
+        "kind": { "const": "insert-shift-chain" },
+        "argument": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

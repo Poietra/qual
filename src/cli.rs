@@ -111,6 +111,81 @@ pub enum Command {
         #[arg(long, default_value = "text")]
         format: CoverageFormat,
     },
+    /// Emit the versioned static facts v0 semantic projection as JSON.
+    StaticFacts(StaticFactsArgs),
+    /// Compare two source snapshots and emit conservative `ChangeImpact` v0
+    /// candidates as JSON.
+    ChangeImpact(ChangeImpactArgs),
+    /// Generate and semantically validate bounded source patch candidates.
+    SourceBridge(SourceBridgeArgs),
+}
+
+/// Options for `manim-lint source-bridge`.
+#[derive(Debug, Args)]
+pub struct SourceBridgeArgs {
+    /// Source file or project directory to analyze.
+    pub path: PathBuf,
+    /// Versioned patch request JSON.
+    #[arg(long)]
+    pub request: PathBuf,
+    /// Render profile to analyze, or `all`.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Override the renderer (cairo|opengl).
+    #[arg(long)]
+    pub renderer: Option<Renderer>,
+    /// Override the frame rate.
+    #[arg(long)]
+    pub fps: Option<f64>,
+    /// Override the resolution as `WIDTHxHEIGHT`.
+    #[arg(long)]
+    pub resolution: Option<Resolution>,
+}
+
+/// Options for `manim-lint change-impact`.
+#[derive(Debug, Args)]
+pub struct ChangeImpactArgs {
+    /// Base source file or project directory (the state before the edit).
+    #[arg(long)]
+    pub before: PathBuf,
+    /// Target source file or project directory (the state after the edit).
+    #[arg(long)]
+    pub after: PathBuf,
+    /// Render profile to analyze, or `all`, applied independently in both
+    /// projects.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Override the renderer (cairo|opengl).
+    #[arg(long)]
+    pub renderer: Option<Renderer>,
+    /// Override the frame rate.
+    #[arg(long)]
+    pub fps: Option<f64>,
+    /// Override the resolution as `WIDTHxHEIGHT`.
+    #[arg(long)]
+    pub resolution: Option<Resolution>,
+}
+
+/// Options for `manim-lint static-facts`.
+///
+/// Diagnostic selectors are deliberately absent: `StaticFacts` always computes
+/// every fact capability in its public contract.
+#[derive(Debug, Args, Default)]
+pub struct StaticFactsArgs {
+    /// Files or directories to analyze (default: current directory).
+    pub paths: Vec<PathBuf>,
+    /// Render profile to analyze, or `all`.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Override the renderer (cairo|opengl).
+    #[arg(long)]
+    pub renderer: Option<Renderer>,
+    /// Override the frame rate.
+    #[arg(long)]
+    pub fps: Option<f64>,
+    /// Override the resolution as `WIDTHxHEIGHT`.
+    #[arg(long)]
+    pub resolution: Option<Resolution>,
 }
 
 /// Options for `manim-lint check`.
@@ -274,5 +349,63 @@ mod tests {
             panic!("expected check");
         };
         assert!(args.analysis_summary);
+    }
+
+    #[test]
+    fn cli_parses_static_facts_without_rule_selectors() {
+        let cli = Cli::try_parse_from([
+            "manim-lint",
+            "static-facts",
+            "scenes",
+            "--profile",
+            "production",
+            "--renderer",
+            "cairo",
+        ])
+        .expect("parses");
+        let Command::StaticFacts(args) = cli.command else {
+            panic!("expected static-facts");
+        };
+        assert_eq!(args.paths, vec![PathBuf::from("scenes")]);
+        assert_eq!(args.profile.as_deref(), Some("production"));
+        assert_eq!(args.renderer, Some(Renderer::Cairo));
+        assert!(Cli::try_parse_from(["manim-lint", "static-facts", "--select", "MLC"]).is_err());
+    }
+
+    #[test]
+    fn cli_requires_both_change_impact_snapshots() {
+        let cli = Cli::try_parse_from([
+            "manim-lint",
+            "change-impact",
+            "--before",
+            "old",
+            "--after",
+            "new",
+        ])
+        .expect("parses");
+        let Command::ChangeImpact(args) = cli.command else {
+            panic!("expected change-impact");
+        };
+        assert_eq!(args.before, PathBuf::from("old"));
+        assert_eq!(args.after, PathBuf::from("new"));
+        assert!(Cli::try_parse_from(["manim-lint", "change-impact", "--before", "old"]).is_err());
+    }
+
+    #[test]
+    fn cli_requires_source_bridge_project_and_request() {
+        let cli = Cli::try_parse_from([
+            "manim-lint",
+            "source-bridge",
+            "project",
+            "--request",
+            "patch.json",
+        ])
+        .expect("parses");
+        let Command::SourceBridge(args) = cli.command else {
+            panic!("expected source-bridge");
+        };
+        assert_eq!(args.path, PathBuf::from("project"));
+        assert_eq!(args.request, PathBuf::from("patch.json"));
+        assert!(Cli::try_parse_from(["manim-lint", "source-bridge", "project"]).is_err());
     }
 }

@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://manim-lint.dev/schemas/change-impact-v0.json",
+  "title": "manim-lint ChangeImpact v0",
+  "description": "Conservative source-change impact candidates derived from base and target semantic snapshots.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "base_snapshot",
+    "target_snapshot",
+    "changed_files",
+    "changed_definitions",
+    "affected_scenes",
+    "affected_plays",
+    "affected_objects",
+    "reason_paths",
+    "unknown_frontiers",
+    "completeness"
+  ],
+  "properties": {
+    "schema_version": { "const": 0 },
+    "tool": { "$ref": "#/$defs/tool" },
+    "base_snapshot": { "$ref": "#/$defs/snapshot" },
+    "target_snapshot": { "$ref": "#/$defs/snapshot" },
+    "changed_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/changedFile" }
+    },
+    "changed_definitions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/changedDefinition" }
+    },
+    "affected_scenes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/affectedScene" }
+    },
+    "affected_plays": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/affectedPlay" }
+    },
+    "affected_objects": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/affectedObject" }
+    },
+    "reason_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/reasonPath" }
+    },
+    "unknown_frontiers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/unknownFrontier" }
+    },
+    "completeness": { "enum": ["complete", "candidates"] }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "snapshotId": {
+      "type": "string",
+      "pattern": "^snapshot:sf0:[0-9a-f]{64}$"
+    },
+    "sceneId": {
+      "type": "string",
+      "pattern": "^scene:sf0:[0-9a-f]{64}$"
+    },
+    "playId": {
+      "type": "string",
+      "pattern": "^play:sf0:[0-9a-f]{64}$"
+    },
+    "objectId": {
+      "type": "string",
+      "pattern": "^object:sf0:[0-9a-f]{64}$"
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^(scene|play|object):sf0:[0-9a-f]{64}$"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "semantic_build_hash"],
+      "properties": {
+        "name": { "const": "manim-lint" },
+        "version": { "type": "string", "minLength": 1 },
+        "semantic_build_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "knowledgeProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "schema_version", "source_digest"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "source_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_manifest_hash",
+        "semantic_config_hash",
+        "knowledge_profile"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/snapshotId" },
+        "source_manifest_hash": { "$ref": "#/$defs/sha256" },
+        "semantic_config_hash": { "$ref": "#/$defs/sha256" },
+        "knowledge_profile": { "$ref": "#/$defs/knowledgeProfile" }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "byteRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "raw_content_hash",
+        "encoding",
+        "byte_order_mark",
+        "utf8_byte_range",
+        "unicode_span"
+      ],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "encoding": { "type": "string", "minLength": 1 },
+        "byte_order_mark": { "type": "boolean" },
+        "utf8_byte_range": { "$ref": "#/$defs/byteRange" },
+        "unicode_span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "changeKind": { "enum": ["added", "removed", "modified"] },
+    "changedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "change"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "change": { "$ref": "#/$defs/changeKind" },
+        "base_raw_content_hash": { "$ref": "#/$defs/sha256" },
+        "target_raw_content_hash": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "change": { "const": "added" } } },
+          "then": { "required": ["target_raw_content_hash"] }
+        },
+        {
+          "if": { "properties": { "change": { "const": "removed" } } },
+          "then": { "required": ["base_raw_content_hash"] }
+        },
+        {
+          "if": { "properties": { "change": { "const": "modified" } } },
+          "then": {
+            "required": ["base_raw_content_hash", "target_raw_content_hash"]
+          }
+        }
+      ]
+    },
+    "changedDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qualified_name", "kind", "change"],
+      "properties": {
+        "qualified_name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["class", "callable"] },
+        "change": { "$ref": "#/$defs/changeKind" },
+        "base_anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "target_anchor": { "$ref": "#/$defs/sourceAnchor" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "change": { "const": "added" } } },
+          "then": { "required": ["target_anchor"] }
+        },
+        {
+          "if": { "properties": { "change": { "const": "removed" } } },
+          "then": { "required": ["base_anchor"] }
+        },
+        {
+          "if": { "properties": { "change": { "const": "modified" } } },
+          "then": { "required": ["base_anchor", "target_anchor"] }
+        }
+      ]
+    },
+    "snapshotSide": { "enum": ["base", "target"] },
+    "affectedScene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "id", "qualified_name", "anchor"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshotSide" },
+        "id": { "$ref": "#/$defs/sceneId" },
+        "qualified_name": { "type": "string", "minLength": 1 },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" }
+      }
+    },
+    "affectedPlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "id", "scene_id", "anchor"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshotSide" },
+        "id": { "$ref": "#/$defs/playId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" }
+      }
+    },
+    "affectedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "id", "scene_id", "anchor"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshotSide" },
+        "id": { "$ref": "#/$defs/objectId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" }
+      }
+    },
+    "nodeKind": {
+      "enum": ["file", "definition", "scene", "play", "object", "snapshot"]
+    },
+    "nodeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/nodeKind" },
+        "id": { "$ref": "#/$defs/entityId" },
+        "path": { "type": "string", "minLength": 1 },
+        "qualified_name": { "type": "string", "minLength": 1 },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "file" } } },
+          "then": { "required": ["path"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "definition" } } },
+          "then": { "required": ["qualified_name", "anchor"] }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["scene", "play", "object"] }
+            }
+          },
+          "then": { "required": ["id"] }
+        }
+      ]
+    },
+    "edgeReason": {
+      "enum": [
+        "module-collision",
+        "import",
+        "namespace-binding",
+        "base-class",
+        "call",
+        "defined-in",
+        "scene-class",
+        "scene-entrypoint",
+        "play-definition",
+        "object-definition",
+        "scene-ownership",
+        "animation-target",
+        "starred-animation-target",
+        "updater-host"
+      ]
+    },
+    "reasonStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/edgeReason" },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" }
+      }
+    },
+    "affectedRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["scene", "play", "object"] },
+        "id": { "$ref": "#/$defs/entityId" }
+      }
+    },
+    "reasonPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "origin", "affected", "steps"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshotSide" },
+        "origin": { "$ref": "#/$defs/nodeRef" },
+        "affected": { "$ref": "#/$defs/affectedRef" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/reasonStep" }
+        }
+      }
+    },
+    "unknownKind": {
+      "enum": [
+        "dynamic-call-target",
+        "unresolved-base",
+        "unresolved-import",
+        "unavailable-definition",
+        "star-arguments",
+        "decode-error",
+        "parse-error",
+        "semantic-config-changed"
+      ]
+    },
+    "unknownReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/unknownKind" },
+        "anchor": { "$ref": "#/$defs/sourceAnchor" },
+        "detail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "unknownFrontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "dependent", "reasons"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshotSide" },
+        "dependent": { "$ref": "#/$defs/nodeRef" },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/unknownReason" }
+        }
+      }
+    }
+  }
+}

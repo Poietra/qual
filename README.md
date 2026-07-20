@@ -123,6 +123,9 @@ manim-lint rules                        # every rule ID, phase, and status
 manim-lint config                       # resolved effective configuration
 manim-lint cost scenes/demo.py          # per-scene cost breakdown
 manim-lint coverage .                   # what the analysis could not resolve
+manim-lint static-facts . > facts.json  # StaticFacts v0 semantic projection
+manim-lint change-impact --before old --after new > impact.json
+manim-lint source-bridge . --request patch.json > candidates.json
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -555,8 +558,28 @@ knowledge-profile system, and how one diagnostic flows end to end.
 [`DESIGN.md`](DESIGN.md) is the authoritative specification for the semantic
 model, the rule catalog, and every public contract. JSON output follows
 [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json); baselines
-follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). Output is
-deterministic and byte-stable for the same input.
+follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). The
+Poietra/fast-manim semantic bridge emitted by `manim-lint static-facts` is
+specified by
+[`StaticFacts v0`](docs/rfcs/0001-static-facts-v0.md) and its
+[`JSON Schema`](schemas/static-facts-v0.json). It publishes snapshot-scoped
+Scene/object/play/animation/updater IDs, encoding-aware source anchors,
+reason-carrying unknowns, renderer risks, and coverage frontiers without
+exposing analyzer handles. It reports blockers but never grants permission to
+skip or fork rendering. Output is deterministic and byte-stable for the same
+input.
+
+The cache-independent
+[`SemanticDependencyGraph v0`](docs/rfcs/0002-semantic-dependency-graph-v0.md)
+is the shared fact layer for cache component partitioning and conservative
+source-change impact. It retains anchored Unknown frontiers instead of
+guessing dynamic dependency edges.
+[`ChangeImpact v0`](docs/rfcs/0003-change-impact-v0.md) compares two source
+snapshots and emits schema-validated, reason-carrying Scene/play/object impact
+candidates, including relations deleted from the target tree.
+[`SourceBridge v0`](docs/rfcs/0004-source-bridge-v0.md) generates hash-guarded
+local patch candidates, validates them against an in-memory reanalysis, and
+reports `match | ambiguous | missing` without writing project files.
 
 ## Known limitations
 

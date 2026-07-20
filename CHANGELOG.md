@@ -18,6 +18,35 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **SourceBridge/rematching v0 (RFC 0004)**: `manim-lint source-bridge`
+  generates non-writing, hash-guarded literal/shift patch candidates with
+  rollback text, virtually reparses and fully reanalyzes each edit, reports
+  `match | ambiguous | missing`, and rejects parse failures or new coverage
+  frontiers. Request/output schemas cover ambiguity, preconditions, structured
+  Unknowns, and accepted/rejected validation.
+
+- **ChangeImpact v0 (RFC 0003)**: `manim-lint change-impact --before OLD
+  --after NEW` compares two full source snapshots and emits schema-validated
+  added/removed/modified definitions, conservative Scene/play/object
+  candidates, deterministic reverse dependency reason paths, and structured
+  Unknown frontiers. Traversing both graphs preserves deleted and renamed
+  relationships without guessing cross-snapshot identity.
+
+- **SemanticDependencyGraph v0 (RFC 0002)**: a cache-independent fact layer
+  now owns deterministic dependent-to-dependency edges and reverse indexes
+  across files, definitions, Scenes, plays, objects, animation targets, and
+  updater hosts. Dynamic relationships remain anchored Unknown frontiers;
+  cache v2 consumes only the graph's weak file-component view, leaving the
+  reverse reason paths available to ChangeImpact.
+
+- **StaticFacts v0 contract and producer (RFC 0001)**: `manim-lint
+  static-facts` emits the Draft 2020-12-schema-validated Poietra/fast-manim
+  semantic bridge, with snapshot-scoped public
+  IDs, encoding-aware source anchors, reason-carrying unknown values, renderer
+  risks, and coverage frontiers. The projection is rule-selection independent,
+  uses one immutable raw-source snapshot, and is byte-stable across worker
+  counts.
+
 - **Incremental analysis cache v2**: an exact whole-project SQLite/WAL entry
   remains the fastest unchanged warm path; after a source edit, the frontend
   rebuilds the static project graph and reuses JSON method summaries and
@@ -261,6 +290,12 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Fixed
 
+- Static semantic-toolchain review hardening: SourceBridge now proves that an
+  existing `.shift(...)` receiver still denotes the requested object before
+  proposing a patch; starred `play` arguments publish an incomplete-animation
+  frontier and conservatively connect every reachable Scene object; and
+  StaticFacts unknown reasons now come from explicit projection provenance,
+  falling back to `unsupported-semantics` when no cause fact was retained.
 - A literal play-level `run_time` kwarg now decides the whole-play
   duration exactly regardless of animation identity (scene.py
   `compile_animations` `setattr`s the kwarg onto every animation): a

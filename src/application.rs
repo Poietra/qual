@@ -7,12 +7,16 @@ use std::path::{Component, Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
+use sha2::Digest;
 
 use crate::cache::{
     AnalysisCache, AnalysisComponent, CacheKey, CacheStatus, ComponentCacheEntry,
     DependencyManifest,
 };
-use crate::cli::{CheckArgs, Command, ExitStatus};
+use crate::change_impact::{self as change_impact_projection, SnapshotInput};
+use crate::cli::{
+    ChangeImpactArgs, CheckArgs, Command, ExitStatus, SourceBridgeArgs, StaticFactsArgs,
+};
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
 use crate::cost;
@@ -29,6 +33,8 @@ use crate::semantic;
 use crate::semantic::interpreter::SceneLifecycle;
 use crate::semantic::summaries::SummaryTable;
 use crate::source::{FileId, SourceManager};
+use crate::source_bridge::{self, GenerationInput, PatchCandidate, PatchEdit, PatchRequest};
+use crate::static_facts::{self as static_facts_projection, ProjectionInput};
 
 /// Errors that abort a command; all map to exit code 2.
 #[derive(Debug, thiserror::Error)]
@@ -89,7 +95,481 @@ pub fn execute(command: Command) -> Result<Execution, ApplicationError> {
         Command::Config => run_config(),
         Command::Cost { path, scene } => run_cost(&path, scene.as_deref()),
         Command::Coverage { paths, format } => run_coverage(&paths, format),
+        Command::StaticFacts(args) => run_static_facts(&args),
+        Command::ChangeImpact(args) => run_change_impact(&args),
+        Command::SourceBridge(args) => run_source_bridge(&args),
     }
+}
+
+/// Outcome of one non-writing source bridge run.
+#[derive(Debug)]
+pub struct SourceBridgeReport {
+    /// Parsed public document.
+    pub document: serde_json::Value,
+    /// Canonical deterministic JSON including one trailing newline.
+    pub output: String,
+}
+
+/// Runs `manim-lint source-bridge PATH --request REQUEST.json`.
+pub fn run_source_bridge(args: &SourceBridgeArgs) -> Result<Execution, ApplicationError> {
+    let report = source_bridge(args)?;
+    Ok(Execution::success(report.output))
+}
+
+/// Generates and virtually validates bounded source patches without writing
+/// project files.
+pub fn source_bridge(args: &SourceBridgeArgs) -> Result<SourceBridgeReport, ApplicationError> {
+    let request_bytes = std::fs::read(&args.request).map_err(|source| ApplicationError::Io {
+        path: args.request.clone(),
+        source,
+    })?;
+    let request: PatchRequest = serde_json::from_slice(&request_bytes).map_err(|error| {
+        ApplicationError::Cli(format!("invalid source bridge request JSON: {error}"))
+    })?;
+    request.validate_contract().map_err(|error| {
+        ApplicationError::Cli(format!("invalid source bridge request: {error}"))
+    })?;
+    let snapshot = analyze_semantic_snapshot(
+        &args.path,
+        args.profile.as_deref(),
+        args.renderer,
+        args.fps,
+        args.resolution,
+    )?;
+    let generated = source_bridge::generate(
+        &GenerationInput {
+            sources: &snapshot.sources,
+            raw_sources: &snapshot.raw_sources,
+            calls: &snapshot.calls,
+            lifecycle: &snapshot.lifecycle,
+            static_facts: &snapshot.static_facts,
+        },
+        &request,
+    );
+    let profile_name = snapshot
+        .config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    let mut candidates = Vec::new();
+    let mut accepted = 0usize;
+    for candidate in &generated.candidates {
+        let validation = validate_patch_candidate(&snapshot, candidate, &request, &profile);
+        if validation["status"] == "accepted" {
+            accepted += 1;
+        }
+        candidates.push(source_bridge::candidate_value(
+            candidate,
+            &validation,
+            &snapshot.sources,
+            &snapshot.raw_sources,
+        ));
+    }
+    let status = match accepted {
+        0 => "unavailable",
+        1 => "unique",
+        _ => "ambiguous",
+    };
+    let document = serde_json::json!({
+        "schema_version": 0,
+        "tool": {
+            "name": "manim-lint",
+            "version": crate::VERSION,
+            "semantic_build_hash": snapshot.static_facts.document["tool"]["semantic_build_hash"],
+        },
+        "snapshot": {
+            "id": snapshot.static_facts.document["snapshot"]["id"],
+            "source_manifest_hash": snapshot.static_facts.document["snapshot"]["source_manifest_hash"],
+            "semantic_config_hash": snapshot.static_facts.document["snapshot"]["semantic_config_hash"],
+        },
+        "request": {
+            "target_id": request.target_id,
+            "operation": source_bridge::operation_name(&request.operation),
+        },
+        "status": status,
+        "candidates": candidates,
+        "unknowns": generated.unknowns,
+    });
+    let mut output = serde_json::to_string_pretty(&document)
+        .expect("source bridge projection contains finite JSON");
+    output.push('\n');
+    Ok(SourceBridgeReport { document, output })
+}
+
+/// Outcome of a `change-impact` run for library callers and schema tests.
+#[derive(Debug)]
+pub struct ChangeImpactReport {
+    /// Parsed public document.
+    pub document: serde_json::Value,
+    /// Canonical deterministic JSON including one trailing newline.
+    pub output: String,
+    /// Resolved configuration for the base snapshot.
+    pub base_config: ResolvedConfig,
+    /// Resolved configuration for the target snapshot.
+    pub target_config: ResolvedConfig,
+}
+
+/// Runs `manim-lint change-impact --before OLD --after NEW`.
+pub fn run_change_impact(args: &ChangeImpactArgs) -> Result<Execution, ApplicationError> {
+    let report = change_impact(args)?;
+    Ok(Execution::success(report.output))
+}
+
+/// Computes `ChangeImpact` v0 without running diagnostic rules or using the
+/// analysis cache.
+pub fn change_impact(args: &ChangeImpactArgs) -> Result<ChangeImpactReport, ApplicationError> {
+    let base = analyze_semantic_snapshot(
+        &args.before,
+        args.profile.as_deref(),
+        args.renderer,
+        args.fps,
+        args.resolution,
+    )?;
+    let target = analyze_semantic_snapshot(
+        &args.after,
+        args.profile.as_deref(),
+        args.renderer,
+        args.fps,
+        args.resolution,
+    )?;
+    let projected = change_impact_projection::compare(base.input(), target.input());
+    Ok(ChangeImpactReport {
+        document: projected.document,
+        output: projected.json,
+        base_config: base.config,
+        target_config: target.config,
+    })
+}
+
+struct AnalyzedSemanticSnapshot {
+    sources: SourceManager,
+    raw_sources: Vec<Vec<u8>>,
+    calls: frontend::index::QualifiedCallFacts,
+    lifecycle: semantic::interpreter::LifecycleFacts,
+    graph: semantic::dependency::SemanticDependencyGraph,
+    static_facts: static_facts_projection::StaticFactsOutput,
+    config: ResolvedConfig,
+}
+
+impl AnalyzedSemanticSnapshot {
+    fn input(&self) -> SnapshotInput<'_> {
+        SnapshotInput {
+            sources: &self.sources,
+            raw_sources: &self.raw_sources,
+            graph: &self.graph,
+            static_facts: &self.static_facts,
+        }
+    }
+}
+
+fn analyze_semantic_snapshot(
+    path: &Path,
+    profile: Option<&str>,
+    renderer: Option<crate::config::model::Renderer>,
+    fps: Option<f64>,
+    resolution: Option<crate::cli::Resolution>,
+) -> Result<AnalyzedSemanticSnapshot, ApplicationError> {
+    let check_args = CheckArgs {
+        paths: vec![path.to_path_buf()],
+        profile: profile.map(str::to_owned),
+        renderer,
+        fps,
+        resolution,
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&check_args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&check_args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+    let mut raw_sources = Vec::with_capacity(files.len());
+    for source_path in &files {
+        raw_sources.push(
+            std::fs::read(source_path).map_err(|source| ApplicationError::Io {
+                path: source_path.clone(),
+                source,
+            })?,
+        );
+    }
+    let mut sources = SourceManager::new(project_root);
+    for (source_path, raw) in files.iter().zip(&raw_sources) {
+        sources.load_bytes(source_path, raw);
+    }
+    Ok(analyze_loaded_semantic_snapshot(
+        sources,
+        raw_sources,
+        config,
+        &profile,
+    ))
+}
+
+fn analyze_loaded_semantic_snapshot(
+    sources: SourceManager,
+    raw_sources: Vec<Vec<u8>>,
+    config: ResolvedConfig,
+    profile: &KnowledgeProfile,
+) -> AnalyzedSemanticSnapshot {
+    let facts = compute_facts(
+        &sources,
+        &config,
+        profile,
+        FactNeeds {
+            lifecycle: true,
+            cost: false,
+        },
+    );
+    let mut graph = semantic::dependency::SemanticDependencyGraph::from_frontend(
+        &sources,
+        &config.source_roots,
+        &facts.index,
+        &facts.calls,
+    );
+    graph.attach_lifecycle(&facts.lifecycle, &sources, &facts.index);
+    let static_facts = static_facts_projection::project(ProjectionInput {
+        sources: &sources,
+        raw_sources: &raw_sources,
+        config: &config,
+        knowledge: profile,
+        index: &facts.index,
+        calls: &facts.calls,
+        lifecycle: &facts.lifecycle,
+    });
+    AnalyzedSemanticSnapshot {
+        sources,
+        raw_sources,
+        calls: facts.calls,
+        lifecycle: facts.lifecycle,
+        graph,
+        static_facts,
+        config,
+    }
+}
+
+fn validate_patch_candidate(
+    before: &AnalyzedSemanticSnapshot,
+    candidate: &PatchCandidate,
+    request: &PatchRequest,
+    profile: &KnowledgeProfile,
+) -> serde_json::Value {
+    let Some(edit) = candidate
+        .edits
+        .first()
+        .filter(|_| candidate.edits.len() == 1)
+    else {
+        return rejected_validation(
+            &request.target_id,
+            "unsupported-edit-set",
+            "v0 requires exactly one edit",
+        );
+    };
+    let after = match analyze_virtual_edit(before, edit, profile) {
+        Ok(after) => after,
+        Err(detail) => {
+            return rejected_validation(&request.target_id, "post-edit-parse-failed", &detail);
+        }
+    };
+    let parsed = after
+        .sources
+        .files()
+        .iter()
+        .all(crate::source::SourceFile::is_parsed);
+    let rematch = source_bridge::rematch(
+        &before.static_facts.document,
+        &after.static_facts.document,
+        &request.target_id,
+        edit,
+    );
+    let shift_frontier_allowance = if matches!(
+        &request.operation,
+        crate::source_bridge::PatchOperation::InsertShiftChain { .. }
+    ) {
+        source_bridge::inserted_shift_frontier_allowance(&after.static_facts.document, edit)
+    } else {
+        0
+    };
+    let allowed_frontiers = if shift_frontier_allowance > 0 {
+        vec![(
+            "call-resolution:dynamic-call-target",
+            shift_frontier_allowance,
+        )]
+    } else {
+        Vec::new()
+    };
+    let coverage = source_bridge::coverage_validation(
+        &before.static_facts.document,
+        &after.static_facts.document,
+        &allowed_frontiers,
+    );
+    let mut reasons = Vec::new();
+    if !parsed {
+        reasons.push(serde_json::json!({ "kind": "post-edit-parse-failed" }));
+    }
+    match rematch["status"].as_str() {
+        Some("match") => {}
+        Some("ambiguous") => reasons.push(serde_json::json!({ "kind": "ambiguous-rematch" })),
+        _ => reasons.push(serde_json::json!({ "kind": "missing-rematch" })),
+    }
+    if coverage["status"] == "decreased" {
+        reasons.push(serde_json::json!({ "kind": "coverage-decreased" }));
+    }
+    serde_json::json!({
+        "status": if reasons.is_empty() { "accepted" } else { "rejected" },
+        "parse": if parsed { "valid" } else { "invalid" },
+        "target_snapshot_id": after.static_facts.document["snapshot"]["id"],
+        "rematch": rematch,
+        "coverage": coverage,
+        "reasons": reasons,
+    })
+}
+
+fn rejected_validation(original_id: &str, kind: &str, detail: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "rejected",
+        "parse": "invalid",
+        "rematch": {
+            "status": "missing",
+            "original_id": original_id,
+            "candidate_ids": [],
+        },
+        "coverage": {
+            "status": "decreased",
+            "new_frontier_kinds": [],
+        },
+        "reasons": [{ "kind": kind, "detail": detail }],
+    })
+}
+
+fn analyze_virtual_edit(
+    before: &AnalyzedSemanticSnapshot,
+    edit: &PatchEdit,
+    profile: &KnowledgeProfile,
+) -> Result<AnalyzedSemanticSnapshot, String> {
+    let Some((index, source)) = before
+        .sources
+        .files()
+        .iter()
+        .enumerate()
+        .find(|(_, source)| source.relative_path() == edit.path)
+    else {
+        return Err(format!("edit path is not in the snapshot: {}", edit.path));
+    };
+    let current_hash = format!(
+        "sha256:{:x}",
+        sha2::Sha256::digest(&before.raw_sources[index])
+    );
+    if current_hash != edit.raw_content_hash {
+        return Err("raw source hash precondition failed".to_owned());
+    }
+    let Some(original) = source.text().get(edit.range.start..edit.range.end) else {
+        return Err("edit range is not on UTF-8 character boundaries".to_owned());
+    };
+    if original != edit.original_text {
+        return Err("rollback text precondition failed".to_owned());
+    }
+    let mut text = source.text().to_owned();
+    text.replace_range(edit.range.start..edit.range.end, &edit.replacement);
+    let encoded = fixes::encode(source, &text)?;
+    let mut raw_sources = before.raw_sources.clone();
+    raw_sources[index] = encoded;
+    let mut sources = SourceManager::new(before.sources.project_root());
+    for (source, raw) in before.sources.files().iter().zip(&raw_sources) {
+        sources.load_bytes(source.path(), raw);
+    }
+    Ok(analyze_loaded_semantic_snapshot(
+        sources,
+        raw_sources,
+        before.config.clone(),
+        profile,
+    ))
+}
+
+/// Outcome of a `static-facts` run for library callers and acceptance tests.
+#[derive(Debug)]
+pub struct StaticFactsReport {
+    /// Parsed public document, suitable for schema validation or embedding.
+    pub document: serde_json::Value,
+    /// Canonical, deterministic pretty JSON (including one trailing newline).
+    pub output: String,
+    /// The resolved semantic configuration used for the snapshot.
+    pub config: ResolvedConfig,
+}
+
+/// Runs `manim-lint static-facts [PATH...]` and writes `StaticFacts` v0 JSON.
+pub fn run_static_facts(args: &StaticFactsArgs) -> Result<Execution, ApplicationError> {
+    let report = static_facts(args)?;
+    Ok(Execution::success(report.output))
+}
+
+/// Computes the public `StaticFacts` v0 projection without running lint rules.
+///
+/// Source files are read exactly once. The same immutable raw byte vectors
+/// feed both Python decoding/parsing and public raw-content hashes, so an
+/// on-disk race cannot create a self-inconsistent snapshot.
+pub fn static_facts(args: &StaticFactsArgs) -> Result<StaticFactsReport, ApplicationError> {
+    let check_args = CheckArgs {
+        paths: args.paths.clone(),
+        profile: args.profile.clone(),
+        renderer: args.renderer,
+        fps: args.fps,
+        resolution: args.resolution,
+        ..CheckArgs::default()
+    };
+    let paths = normalized_input_paths(&check_args)?;
+    let project_root = discover_project_root(&paths)?;
+    let config = resolve_config(&check_args, &project_root)?;
+    let profile_name = config
+        .knowledge_profile
+        .clone()
+        .unwrap_or_else(|| knowledge::DEFAULT_PROFILE.to_owned());
+    let profile = knowledge::load(&profile_name)?;
+    validate_declared_manim_version(&config, &profile)?;
+    let files = collect_python_files(&paths, &project_root, &config.exclude)?;
+
+    let mut raw_sources = Vec::with_capacity(files.len());
+    for path in &files {
+        raw_sources.push(std::fs::read(path).map_err(|source| ApplicationError::Io {
+            path: path.clone(),
+            source,
+        })?);
+    }
+    let mut sources = SourceManager::new(project_root);
+    for (path, raw) in files.iter().zip(&raw_sources) {
+        sources.load_bytes(path, raw);
+    }
+
+    // The public contract is independent of configured rule selection. It
+    // always asks for every fact layer in the StaticFacts contract and
+    // projects those facts directly, without executing the diagnostic
+    // registry. The symbolic cost model is not a v0 contract input.
+    let facts = compute_facts(
+        &sources,
+        &config,
+        &profile,
+        FactNeeds {
+            lifecycle: true,
+            cost: false,
+        },
+    );
+    let projected = static_facts_projection::project(ProjectionInput {
+        sources: &sources,
+        raw_sources: &raw_sources,
+        config: &config,
+        knowledge: &profile,
+        index: &facts.index,
+        calls: &facts.calls,
+        lifecycle: &facts.lifecycle,
+    });
+    Ok(StaticFactsReport {
+        document: projected.document,
+        output: projected.json,
+        config,
+    })
 }
 
 /// Outcome of a `check` run, for library callers and tests.
@@ -264,12 +744,13 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let mut component_plans = Vec::new();
     if cache_key.is_some() {
         recompute_files.clear();
-        let components = crate::cache::build_analysis_components(
+        let dependency_graph = semantic::dependency::SemanticDependencyGraph::from_frontend(
             &sources,
             &config.source_roots,
             &frontend.index,
             &frontend.calls,
         );
+        let components = crate::cache::build_analysis_components(&sources, &dependency_graph);
         let project_layout: Vec<&Path> = source_snapshot
             .iter()
             .map(|(path, _)| path.as_path())

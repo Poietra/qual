@@ -339,13 +339,15 @@ SourceManager: read + ast.parse + tokenize
 ProjectIndex: modules/imports/symbols/class hierarchy
     ↓
 qualified Manim call facts
+    ├─ SemanticDependencyGraph: file/definition forward + reverse edges
     ↓
 CFG + reachable method summaries
     ↓
 Manim abstract interpreter
     ├─ lifecycle events
     ├─ renderer facts
-    └─ symbolic cost facts
+    ├─ symbolic cost facts
+    └─ SemanticDependencyGraph: Scene/play/object edges
     ↓
 rule queries
     ↓
@@ -929,6 +931,10 @@ manim-lint explain RULE
 manim-lint rules
 manim-lint config
 manim-lint cost PATH [--scene NAME]
+manim-lint coverage [PATH...] [--format text|json]
+manim-lint static-facts [PATH...] [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+manim-lint change-impact --before PATH --after PATH [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+manim-lint source-bridge PATH --request REQUEST.json [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
 ```
 
 `check` options:
@@ -957,6 +963,12 @@ exit code:
 - `2`: CLI / config / internal error
 
 JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なしで生成する。
+
+`static-facts`は診断を実行せず、`schemas/static-facts-v0.json`準拠の静的意味projectionをstdoutへ出力する。rule selector、suppression、baseline、confidence/fail levelは意味入力ではないため、このcommandにはそれらのoptionを持たせない。成功は常にexit 0、path/config/IO errorはexit 2とする。
+
+`change-impact`はbefore/after双方をfull解析し、`schemas/change-impact-v0.json`準拠の保守的な影響候補をstdoutへ出力する。cacheとruleは実行せず、削除・rename前のedgeをbase graphから保持する。成功はexit 0、入力/config/IO errorはexit 2とする。
+
+`source-bridge`は`schemas/source-bridge-request-v0.json`準拠requestから限定的なpatch候補を生成し、diskへ書かずに仮想適用・full再解析・rematchingを行い、`schemas/source-bridge-v0.json`準拠結果をstdoutへ出力する。成功はexit 0、request JSON/config/IO errorはexit 2とする。候補がunavailable/rejectedでもcontract上の正常結果なのでexit 0である。
 
 `--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v2 では自動的に full analysis を行う。
 
@@ -1027,6 +1039,38 @@ label = always_redraw(...)
 
 baseline fingerprint は line number を使わず、`rule ID + relative path + qualified Scene + surrounding token hash` で作る。行追加だけで baseline が全失効しないようにする。
 
+### 8.4 StaticFacts v0 public contract
+
+Poietra / fast-manim 向けの静的意味情報は、内部の `FileId`、`ObjectId`、`PlayGroupId`、heap、cache entry をserializeせず、[`docs/rfcs/0001-static-facts-v0.md`](docs/rfcs/0001-static-facts-v0.md) と [`schemas/static-facts-v0.json`](schemas/static-facts-v0.json) に定義したversioned projectionとして`manim-lint static-facts`から公開する。RFCを正典、JSON Schemaを機械検証可能な形とする。
+
+v0の範囲はScene、reachable object、play/animation、updater、play境界のmembership/render order、renderer risk、coverage frontierに限定する。公開IDはrelative POSIX path、raw source hash、source anchor、bounded call path、cardinality、Scene identityからsnapshot内で決定的に生成し、内部handleを含めない。編集前後の同一性はIDの安定性ではなく後続のrematching契約で扱う。
+
+source anchorはraw bytesのSHA-256、正規化encoding、BOM有無、decoded UTF-8 text上のend-exclusive byte range、1-based line / Unicode scalar columnを持つ。Unknownは`null`にせず、必ず非空の`reasons`配列を持つ。内部の`Num` / `Truth` / `Presence`を全面変更する必要はなく、projection生成時のprovenance sidecarで理由を合成してよい。
+
+provenance sidecarはCFG/call/lifecycle factから実際に確認できた原因だけを記録する。`Maybe`や`Unknown`というlattice値だけから`branch-join`、`loop-widening`、candidate cap等を推測してはならない。branchとloopのように複数原因が実在する場合はdeduplicateしたreason集合を保持し、原因factを保持していないfieldは`unsupported-semantics`へ落とす。
+
+StaticFacts producerはrule selection / suppression / baselineから独立して必要なfact capabilityを全て計算する。初期producerはcacheを経由しないfull analysisとして同じraw byte snapshotをparseとhashへ渡す。semantic dependency graphを接続してincremental producerを追加する時も、同一snapshotについてfull / incremental、cache状態、worker数が異なるJSONはbyte-identicalでなければならない。renderer riskはdynamic call、unknown animation target、active updater、`always_redraw`、dynamic wait / stop condition、camera mutation、external state / I/O、randomness、unknown write channel、unknown render orderを報告するが、`safe_to_skip_render`や`safe_to_fork`などの最適化許可は公開しない。
+
+semantic dependency graphはcacheではなくfact layerとして所有し、[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](docs/rfcs/0002-semantic-dependency-graph-v0.md) を契約とする。辺の正規方向は常にdependentからdependency（callerからcallee、Sceneからentrypoint、対象objectからplay）とし、同じ辺から決定的なforward/reverse indexを構築する。解決不能なdynamic call、base、import、definition attributionは推測した辺にせず、所有node・reason・anchorを持つUnknown frontierとして残す。cache component partitionはfile間edgeを無向に見た弱連結成分だけを利用し、ChangeImpactはbefore/after snapshotのreverse edgeを利用し、外部JSONは内部handleではなくStaticFactsのsnapshot IDとsource anchorへprojectionする。Runtime ID、Static/Runtime最終照合、gesture意味論、TracePlan、checkpoint、visual validationは本repositoryの責務外とする。
+
+### 8.5 ChangeImpact v0 public contract
+
+[`docs/rfcs/0003-change-impact-v0.md`](docs/rfcs/0003-change-impact-v0.md) と [`schemas/change-impact-v0.json`](schemas/change-impact-v0.json) を外部契約とする。入力はbefore/afterの2 source snapshotを必須とし、両方を独立にfull解析する。raw hashでadded/removed/modified fileを、qualified name・definition kind・relative path・definition source sliceでchanged definitionを判定する。renameは推測せずremoved + addedとして表す。
+
+changed file/definitionをbase/target各graphのreverse traversal originとし、base側は削除済みedge、target側は新規edgeを保持する。出力候補は`base | target`を明記したStaticFacts Scene/play/object ID、source anchor、originからのreason pathを持つ。異なるsnapshotのIDを同一視せず、cross-snapshot rematchingはP1へ残す。
+
+到達したdynamic call、unresolved base/import、definition attribution不能、decode/parse failureは非空`reasons`配列を持つUnknown frontierとして投影する。semantic configまたはknowledge profileが異なる場合は両snapshotの全source semanticsをoriginに広げ、`semantic-config-changed` frontierを返す。frontierがなければ`completeness=complete`、一つでもあれば`candidates`とする。これは候補集合の静的coverageであり、編集意図や描画最適化許可ではない。
+
+`self.play(*animations)`はanimation/target列を完全とは扱わず、Playに`star-arguments` frontierを付ける。dependency graphでは同じPlayから所有Sceneの全reachable objectへ`starred-animation-target`候補辺を張り、ChangeImpactを`candidates`へ落とす。
+
+### 8.6 SourceBridge / rematching v0 public contract
+
+[`docs/rfcs/0004-source-bridge-v0.md`](docs/rfcs/0004-source-bridge-v0.md)、[`schemas/source-bridge-request-v0.json`](schemas/source-bridge-request-v0.json)、[`schemas/source-bridge-v0.json`](schemas/source-bridge-v0.json)を外部契約とする。v0 templateはliteral call argument置換、一意bindingの既存`.shift(ARG)`引数置換、allocation call直後の`.shift(ARG)`挿入に限定する。dynamic existing argument、複数binding、不明allocation、hash/snapshot不一致では推測しない。複数source候補はmedium confidenceで全件を返し、自動選択しない。
+
+各editはpath、raw source hash precondition、encoding-aware anchor、`original_text`、replacementを持つ。command自身はdiskへ書かず、`original_text`をapplication guardとrollback payloadの双方に使う。候補ごとにmemory上で適用し、元encodingへ再encode、全sourceを再parse・frontend/lifecycle/StaticFactsまで再解析する。
+
+rematchingは編集前後IDの一致を要求せず、Scene identity、entity kind、edit-adjusted source range、bounded call path、cardinality、kind/binding候補を使う。結果は`match | ambiguous | missing`で、ambiguous時は全candidate IDを返す。parse valid、単一match、coverage preservedを全て満たすcandidateだけacceptedとする。新規Unknown/frontier、coverage低下、parse failure、ambiguous/missingは理由付きrejectedとする。任意Python意味保存、external write、gesture意味論、runtime照合、visual validationは責務外である。
+
 ## 9. cache と並列性
 
 MVP はまず逐次で正しさを確立した。10k-LOC cold measurement で lifecycle が支配的と確認した後、cache-v1 は call graph の同じ bottom-up layer にある非再帰 summary、独立な Scene lifecycle、独立な rule を bounded worker pool で並列実行する。再帰 SCC は依存順の逐次 fixpoint のままにし、Scene と rule の結果は宣言順にcollectして最後に必ず安定sortする。worker数が変わってもdiagnostic / JSONはbyte-stableでなければならない。module parse / project index はまだ逐次であり、追加の並列化は測定後に行う。
@@ -1052,7 +1096,7 @@ tool/schema/build version
 + sorted relative source paths + source content hashes
 ```
 
-第二層はwhole-project miss時のincremental component entryである。全sourceをdecode / parseし、module tree、exports、import edge、class hierarchy、qualified callsを再構築してから、project-localのimport、qualified call、resolved base class、module-name collision edgeを無向に見た弱連結componentを作る。cross-file helperの診断がcallee側spanへanchorされ得るため、primary pathだけを単独のcache shardにはしない。一つでも静的な意味依存edgeがあれば同じcomponentとして無効化する。
+第二層はwhole-project miss時のincremental component entryである。全sourceをdecode / parseし、module tree、exports、class hierarchy、qualified callsと`SemanticDependencyGraph`のfrontend部分を再構築してから、そのgraphのproject-local import、qualified call、resolved base class、module-name collision edgeを無向に見た弱連結componentを作る。cache module自身はこれらの意味依存を再発見しない。cross-file helperの診断がcallee側spanへanchorされ得るため、primary pathだけを単独のcache shardにはしない。一つでも静的な意味依存edgeがあれば同じcomponentとして無効化する。
 
 component entryに保存するもの:
 
@@ -1135,9 +1179,12 @@ src/manim_lint/
   cache.py
 
 docs/rules/
+docs/rfcs/
+  0001-static-facts-v0.md
 schemas/
   diagnostics-v1.json
   baseline-v1.json
+  static-facts-v0.json
 tools/
   sync_manim_knowledge.py
 tests/
@@ -1173,6 +1220,7 @@ tests/fixtures/rules/MLC108/
 5. 各 rule の golden diagnostic
 6. config precedence と suppression
 7. JSON / SARIF schema validation
+   - StaticFacts v0はrepresentative fixtureと実producer出力をDraft 2020-12 validatorで検証し、理由なしUnknownと未知fieldをrejectする
 8. fix 後の parse、二回目が no-op になる idempotence
 9. knowledge profile と対象 Manim source の drift check
 10. 実 corpus の false-positive regression
@@ -1263,6 +1311,22 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - SQLite cache
 - safe autofix
 - 必要になった時点だけ LibCST fixer
+
+### Phase 6: static semantic toolchain
+
+P0:
+
+1. `rfc(static-facts)`: snapshot内ID、source anchor、Unknown taxonomy、責務境界を固定する。
+2. `feat(static-facts)`: rule selection非依存のversioned projectionと決定的JSON producerを公開する。
+3. `feat(dependency-graph)`: cache partitionから独立したsemantic forward/reverse edgeとreason pathを公開する。
+4. `feat(impact)`: before/after snapshotを比較し、削除・renameを含む保守的なScene/play/object候補を返す。
+
+P1:
+
+5. `feat(source-bridge)`: literal引数、既存`.shift(...)`、明確なmethod chain、一意bindingに限定してhash-guarded patch候補を生成する。
+6. `feat(rematch)`: patch後に再parse・再解析し、`Match | Ambiguous | Missing`とcoverage低下を返す。
+
+受入条件: 同一helperの複数call context、loop allocationのnon-singleton、`Transform` / `ReplacementTransform`の区別、理由付きdynamic-call Unknown、shared helperの全caller Sceneへの波及、before graphからの削除/rename追跡、incremental/full一致、worker数間byte一致、Shift-JIS/日本語anchor、rule selection非依存、Manim/user code非実行をfixtureで固定する。
 
 catalog entry はすべて `implementation_phase` をmetadataに持つ。まだそのphaseへ到達していないIDは `reserved/deferred` として `manim-lint rules` に表示しても、checkでは登録しない。未実装ruleを「検査済み」と見せない。
 

@@ -80,6 +80,7 @@ manim-lint rules                        # 全ルール ID・フェーズ・実�
 manim-lint config                       # 解決済みの有効な設定
 manim-lint cost scenes/demo.py          # シーンごとのコスト内訳
 manim-lint coverage .                   # 解析が解決できなかったものの一覧
+manim-lint static-facts . > facts.json  # StaticFacts v0の意味projection
 ```
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
@@ -390,7 +391,7 @@ suppressions, supersedes, baseline
 output ................... concise | full | json | sarif | github, fixes, cost report
 ```
 
-[docs/architecture.md](docs/architecture.md)(英語)は新しいコントリビューター向けにこのパイプラインを解説します: 各事実レイヤーが何を提供しどこにあるか、knowledge profile システム、そして 1 つの診断がエンドツーエンドでどう流れるか。意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。出力は決定的で、同じ入力に対して byte 単位で安定です。
+[docs/architecture.md](docs/architecture.md)(英語)は新しいコントリビューター向けにこのパイプラインを解説します: 各事実レイヤーが何を提供しどこにあるか、knowledge profile システム、そして 1 つの診断がエンドツーエンドでどう流れるか。意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。`manim-lint static-facts`が出力するPoietra / fast-manim向け意味bridgeは[`StaticFacts v0 RFC`](docs/rfcs/0001-static-facts-v0.md)とその[`JSON Schema`](schemas/static-facts-v0.json)に従います。snapshot内のScene/object/play/animation/updater ID、encoding-awareなsource anchor、理由付きUnknown、renderer risk、coverage frontierを公開しますが、描画省略やforkの許可は出しません。出力は決定的で、同じ入力に対して byte 単位で安定です。
 
 ## 既知の制限
 
