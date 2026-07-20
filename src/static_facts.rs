@@ -7,12 +7,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::model::ResolvedConfig;
-use crate::frontend::index::{ProjectIndex, QualifiedCall, QualifiedCallFacts};
+use crate::frontend::cfg::{CfgStmt, ControlFlowGraph};
+use crate::frontend::index::{LiteralFact, ProjectIndex, QualifiedCall, QualifiedCallFacts};
+use crate::frontend::statements::each_statement;
 use crate::knowledge::KnowledgeProfile;
 use crate::render_order::{DisplayOrder, OrderUnknownReason, RenderOrderInputs};
 use crate::semantic::dependency::DependencyNode;
@@ -20,7 +23,7 @@ use crate::semantic::heap::AbstractHeap;
 use crate::semantic::interpreter::{
     FallbackReason, LifecycleFacts, PlayFact, PlayKind, SceneLifecycle, UpdaterHost,
 };
-use crate::semantic::state::{CallbackRef, MobjectState, WriteChannel};
+use crate::semantic::state::{CallbackRef, MobjectState, PlayGroupId, WriteChannel};
 use crate::semantic::values::{
     AllocationSite, Cardinality, CopyKind, KindSet, Num, NumLit, ObjectId, Presence, Truth,
 };
@@ -101,6 +104,12 @@ impl ProjectionIndex {
             DependencyNode::File(_) | DependencyNode::Definition(_) => None,
         }
     }
+
+    pub(crate) fn object_location(&self, public_id: &str) -> Option<(&str, &ObjectId)> {
+        self.objects
+            .iter()
+            .find_map(|((scene, object), id)| (id == public_id).then_some((scene.as_str(), object)))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +127,205 @@ struct SceneIds {
     updaters: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ProjectedField {
+    AnimationArguments,
+    Duration,
+    ExecutionCertainty,
+    Repetitions,
+}
+
+#[derive(Debug, Default)]
+struct ProjectionProvenance {
+    reasons: BTreeMap<(String, PlayGroupId, ProjectedField), BTreeSet<&'static str>>,
+}
+
+impl ProjectionProvenance {
+    fn collect(input: &ProjectionInput<'_>) -> Self {
+        let mut sidecar = Self::default();
+        for scene in &input.lifecycle.scenes {
+            for play in &scene.plays {
+                if play.star_args {
+                    sidecar.insert(
+                        scene,
+                        play,
+                        ProjectedField::AnimationArguments,
+                        "star-arguments",
+                    );
+                }
+                if play.certainty == Presence::Maybe
+                    && !scene.summary_derived_plays.contains(&play.play_group)
+                {
+                    for reason in play_control_flow_reasons(input, play) {
+                        sidecar.insert(scene, play, ProjectedField::ExecutionCertainty, reason);
+                    }
+                }
+                if matches!(play.duration, Num::Unknown) {
+                    for reason in play_duration_unknown_reasons(input, play) {
+                        sidecar.insert(scene, play, ProjectedField::Duration, reason);
+                    }
+                }
+                if matches!(
+                    play.repetitions,
+                    Num::Unknown | Num::Interval { lo: None, .. }
+                ) {
+                    for reason in play_control_flow_reasons(input, play) {
+                        if reason == "loop-widening" {
+                            sidecar.insert(scene, play, ProjectedField::Repetitions, reason);
+                        }
+                    }
+                }
+            }
+        }
+        sidecar
+    }
+
+    fn insert(
+        &mut self,
+        scene: &SceneLifecycle,
+        play: &PlayFact,
+        field: ProjectedField,
+        reason: &'static str,
+    ) {
+        self.reasons
+            .entry((scene.qualified_name.clone(), play.play_group, field))
+            .or_default()
+            .insert(reason);
+    }
+
+    fn reason(
+        &self,
+        scene: &SceneLifecycle,
+        play: &PlayFact,
+        field: ProjectedField,
+    ) -> Vec<&'static str> {
+        self.reasons
+            .get(&(scene.qualified_name.clone(), play.play_group, field))
+            .map_or_else(
+                || vec!["unsupported-semantics"],
+                |reasons| reasons.iter().copied().collect(),
+            )
+    }
+}
+
+fn play_duration_unknown_reasons(
+    input: &ProjectionInput<'_>,
+    play: &PlayFact,
+) -> BTreeSet<&'static str> {
+    let mut reasons = BTreeSet::new();
+    if play.star_args {
+        reasons.insert("star-arguments");
+    }
+    let calls: Vec<&QualifiedCall> = input
+        .calls
+        .calls
+        .iter()
+        .filter(|call| {
+            call.file == play.site.file
+                && u32::from(call.call_range.start()) == play.site.start
+                && u32::from(call.call_range.end()) == play.site.end
+        })
+        .collect();
+    if let [call] = calls.as_slice() {
+        collect_duration_call_reasons(call, &mut reasons);
+    }
+    for animation in &play.animations {
+        for call in input.calls.calls.iter().filter(|call| {
+            call.file == animation.site.file
+                && u32::from(call.call_range.start()) == animation.site.start
+                && u32::from(call.call_range.end()) == animation.site.end
+        }) {
+            collect_duration_call_reasons(call, &mut reasons);
+        }
+    }
+    if play
+        .animations
+        .iter()
+        .any(|animation| animation.state.is_none() || animation.convertible != Truth::Yes)
+    {
+        reasons.insert("unknown-animation-target");
+    }
+    reasons
+}
+
+fn collect_duration_call_reasons(call: &QualifiedCall, reasons: &mut BTreeSet<&'static str>) {
+    if call.keyword("run_time").is_some_and(|argument| {
+        !matches!(
+            argument.literal,
+            Some(LiteralFact::Int(_) | LiteralFact::Float(_))
+        )
+    }) {
+        reasons.insert("non-literal-expression");
+    }
+    if call.has_star_star_kwargs {
+        reasons.insert("star-arguments");
+    }
+}
+
+fn play_control_flow_reasons(
+    input: &ProjectionInput<'_>,
+    play: &PlayFact,
+) -> BTreeSet<&'static str> {
+    let mut reasons = BTreeSet::new();
+    for site in std::iter::once(&play.site).chain(play.call_path.iter()) {
+        let Some(block) = enclosing_cfg_block(input.sources, site) else {
+            continue;
+        };
+        if block.loop_depth > 0 {
+            reasons.insert("loop-widening");
+        }
+        if block.cond_depth > block.loop_depth {
+            reasons.insert("branch-join");
+        }
+    }
+    reasons
+}
+
+fn enclosing_cfg_block<'a>(
+    sources: &'a SourceManager,
+    site: &AllocationSite,
+) -> Option<crate::frontend::cfg::BasicBlock<'a>> {
+    let module = sources.file(site.file).ast()?;
+    let mut body = None;
+    let mut body_span = u32::MAX;
+    each_statement(&module.body, &mut |statement| {
+        let range = statement.range();
+        if !range_contains_site(range, site) {
+            return;
+        }
+        let candidate = match statement {
+            ast::Stmt::FunctionDef(def) => Some(def.body.as_slice()),
+            ast::Stmt::AsyncFunctionDef(def) => Some(def.body.as_slice()),
+            _ => None,
+        };
+        let span = u32::from(range.end()) - u32::from(range.start());
+        if candidate.is_some() && span < body_span {
+            body = candidate;
+            body_span = span;
+        }
+    });
+    let cfg = ControlFlowGraph::build(body?);
+    cfg.blocks.into_iter().find(|block| {
+        block
+            .stmts
+            .iter()
+            .any(|statement| range_contains_site(cfg_statement_range(statement), site))
+    })
+}
+
+fn cfg_statement_range(statement: &CfgStmt<'_>) -> TextRange {
+    match statement {
+        CfgStmt::Stmt(statement) => statement.range(),
+        CfgStmt::Eval(expression) | CfgStmt::LoopTarget(expression) => expression.range(),
+        CfgStmt::WithEnter(item) => item.context_expr.range(),
+        CfgStmt::PatternBind(pattern) => pattern.range(),
+    }
+}
+
+fn range_contains_site(range: TextRange, site: &AllocationSite) -> bool {
+    u32::from(range.start()) <= site.start && site.end <= u32::from(range.end())
+}
+
 struct Projector<'a> {
     input: ProjectionInput<'a>,
     files: BTreeMap<FileId, FileMeta>,
@@ -126,6 +334,7 @@ struct Projector<'a> {
     source_manifest_hash: String,
     snapshot_id: String,
     ids: Vec<SceneIds>,
+    provenance: ProjectionProvenance,
 }
 
 #[allow(
@@ -174,6 +383,7 @@ impl<'a> Projector<'a> {
         ]);
         let snapshot_id = format!("snapshot:sf0:{}", hex_hash(&snapshot_preimage));
         let ids = build_ids(&input, &files, &snapshot_id);
+        let provenance = ProjectionProvenance::collect(&input);
         Self {
             input,
             files,
@@ -182,6 +392,7 @@ impl<'a> Projector<'a> {
             source_manifest_hash,
             snapshot_id,
             ids,
+            provenance,
         }
     }
 
@@ -532,9 +743,30 @@ impl<'a> Projector<'a> {
     ) -> Value {
         let anchor = self.anchor(play.site);
         let related = vec![ids.plays[ordinal].clone()];
-        let certainty = presence_fact(play.certainty, "branch-join", &anchor, related.clone());
-        let repetitions = number_fact(&play.repetitions, "loop-widening", &anchor, related.clone());
-        let duration = number_fact(&play.duration, "non-literal-expression", &anchor, related);
+        let certainty_reasons =
+            self.provenance
+                .reason(scene, play, ProjectedField::ExecutionCertainty);
+        let certainty = presence_fact_many(play.certainty, &certainty_reasons, &anchor, &related);
+        let repetition_reasons = self
+            .provenance
+            .reason(scene, play, ProjectedField::Repetitions);
+        let repetitions = number_fact(&play.repetitions, &repetition_reasons, &anchor, &related);
+        let duration_reasons = self
+            .provenance
+            .reason(scene, play, ProjectedField::Duration);
+        let duration = number_fact(&play.duration, &duration_reasons, &anchor, &related);
+        let animation_arguments_complete = if play.star_args {
+            let reasons = self
+                .provenance
+                .reason(scene, play, ProjectedField::AnimationArguments);
+            unknown_status_many(
+                &reasons,
+                Some(&anchor),
+                Some(std::slice::from_ref(&ids.plays[ordinal])),
+            )
+        } else {
+            known_truth(true)
+        };
         let helper_call_path: Vec<Value> = play
             .call_path
             .iter()
@@ -552,6 +784,7 @@ impl<'a> Projector<'a> {
             "execution_certainty": certainty,
             "repetitions": repetitions,
             "duration": duration,
+            "animation_arguments_complete": animation_arguments_complete,
             "animation_ids": ids.animations[ordinal],
             "membership": membership,
             "render_order": render_order,
@@ -671,7 +904,7 @@ impl<'a> Projector<'a> {
         if uncertain {
             unknown_membership(
                 entries,
-                "branch-join",
+                "unsupported-semantics",
                 anchor.clone(),
                 ids.objects.values().cloned().collect(),
             )
@@ -701,7 +934,7 @@ impl<'a> Projector<'a> {
                     "family": known_presence(true),
                     "foreground": truth_fact(
                         member.foreground,
-                        "branch-join",
+                        "unsupported-semantics",
                         anchor,
                         vec![public_id.clone()],
                     ),
@@ -712,7 +945,7 @@ impl<'a> Projector<'a> {
         if uncertain {
             unknown_membership(
                 entries,
-                "branch-join",
+                "unsupported-semantics",
                 anchor.clone(),
                 ids.objects.values().cloned().collect(),
             )
@@ -885,7 +1118,7 @@ impl<'a> Projector<'a> {
                                     .cloned()
                                     .into_iter()
                                     .collect(),
-                                "branch-join",
+                                "unsupported-semantics",
                                 anchor.clone(),
                                 related.clone(),
                             ),
@@ -893,13 +1126,13 @@ impl<'a> Projector<'a> {
                         json!({
                             "introducer": truth_fact(
                                 state.introducer,
-                                "branch-join",
+                                "unsupported-semantics",
                                 &anchor,
                                 related.clone(),
                             ),
                             "remover": truth_fact(
                                 state.remover,
-                                "branch-join",
+                                "unsupported-semantics",
                                 &anchor,
                                 related.clone(),
                             ),
@@ -1060,6 +1293,17 @@ impl<'a> Projector<'a> {
                         &self.snapshot_id,
                         "active-updater",
                         certainty_name(play.always_update_mobjects == Truth::Yes),
+                        anchor.clone(),
+                        vec![play_id.clone()],
+                        &profiles,
+                    );
+                }
+                if play.star_args {
+                    insert_risk(
+                        &mut risks,
+                        &self.snapshot_id,
+                        "unknown-animation-target",
+                        "possible",
                         anchor.clone(),
                         vec![play_id.clone()],
                         &profiles,
@@ -1436,7 +1680,7 @@ impl<'a> Projector<'a> {
             }),
             KindSet::Unknown => unknown_candidates(
                 Vec::new(),
-                "candidate-cap",
+                "unsupported-semantics",
                 anchor.clone(),
                 vec![related.to_owned()],
             ),
@@ -1447,19 +1691,19 @@ impl<'a> Projector<'a> {
         json!({
             "scene_root": presence_fact(
                 state.scene_root_membership,
-                "branch-join",
+                "unsupported-semantics",
                 anchor,
                 vec![related.to_owned()],
             ),
             "family": presence_fact(
                 state.family_membership,
-                "branch-join",
+                "unsupported-semantics",
                 anchor,
                 vec![related.to_owned()],
             ),
             "foreground": truth_fact(
                 state.foreground,
-                "branch-join",
+                "unsupported-semantics",
                 anchor,
                 vec![related.to_owned()],
             ),
@@ -1914,7 +2158,20 @@ fn presence_fact(presence: Presence, reason: &str, anchor: &Value, related: Vec<
     }
 }
 
-fn number_fact(number: &Num, reason: &str, anchor: &Value, related: Vec<String>) -> Value {
+fn presence_fact_many(
+    presence: Presence,
+    reasons: &[&str],
+    anchor: &Value,
+    related: &[String],
+) -> Value {
+    match presence {
+        Presence::Present => known_presence(true),
+        Presence::Absent => known_presence(false),
+        Presence::Maybe => unknown_status_many(reasons, Some(anchor), Some(related)),
+    }
+}
+
+fn number_fact(number: &Num, reasons: &[&str], anchor: &Value, related: &[String]) -> Value {
     match number {
         Num::Exact(NumLit::Int(value)) => json!({ "status": "exact", "value": value }),
         Num::Exact(NumLit::Float(value)) if value.is_finite() => {
@@ -1924,7 +2181,7 @@ fn number_fact(number: &Num, reason: &str, anchor: &Value, related: Vec<String>)
             let lo = lo.filter(|value| value.is_finite());
             let hi = hi.filter(|value| value.is_finite());
             if lo.is_none() && hi.is_none() {
-                return unknown_status(reason, Some(anchor.clone()), Some(related));
+                return unknown_status_many(reasons, Some(anchor), Some(related));
             }
             let mut fact = Map::new();
             fact.insert("status".to_owned(), Value::String("interval".to_owned()));
@@ -1938,7 +2195,7 @@ fn number_fact(number: &Num, reason: &str, anchor: &Value, related: Vec<String>)
         }
         Num::Symbol(name) => json!({ "status": "symbolic", "name": name }),
         Num::Exact(NumLit::Float(_)) | Num::Unknown => {
-            unknown_status(reason, Some(anchor.clone()), Some(related))
+            unknown_status_many(reasons, Some(anchor), Some(related))
         }
     }
 }
@@ -1947,6 +2204,21 @@ fn unknown_status(kind: &str, anchor: Option<Value>, related: Option<Vec<String>
     json!({
         "status": "unknown",
         "reasons": [reason_value(kind, anchor, related, None)],
+    })
+}
+
+fn unknown_status_many(
+    kinds: &[&str],
+    anchor: Option<&Value>,
+    related: Option<&[String]>,
+) -> Value {
+    let reasons: Vec<Value> = kinds
+        .iter()
+        .map(|kind| reason_value(kind, anchor.cloned(), related.map(<[String]>::to_vec), None))
+        .collect();
+    json!({
+        "status": "unknown",
+        "reasons": reasons,
     })
 }
 

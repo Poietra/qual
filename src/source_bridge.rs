@@ -15,6 +15,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::frontend::index::{CallArgument, QualifiedCall, QualifiedCallFacts};
+use crate::semantic::interpreter::{LifecycleFacts, SceneLifecycle};
+use crate::semantic::values::ObjectId;
 use crate::source::{FileId, SourceManager};
 use crate::static_facts::{StaticFactsOutput, project_source_anchor};
 
@@ -164,6 +166,8 @@ pub struct GenerationInput<'a> {
     pub raw_sources: &'a [Vec<u8>],
     /// Qualified calls from the same snapshot.
     pub calls: &'a QualifiedCallFacts,
+    /// Lifecycle state snapshots used to prove receiver identity at a call.
+    pub lifecycle: &'a LifecycleFacts,
     /// Public `StaticFacts` document and ID index.
     pub static_facts: &'a StaticFactsOutput,
 }
@@ -334,30 +338,38 @@ fn shift_candidates(input: &GenerationInput<'_>, target_id: &str, argument: &str
             object.get("allocation_anchor").cloned(),
         );
     }
-    let allocation_context = &allocation_calls[0].context;
-    let mut matches: Vec<&CallArgument> = input
-        .calls
-        .calls
-        .iter()
-        .filter(|call| {
-            call.file == file
-                && call.context == *allocation_context
-                && usize::from(call.call_range.start()) >= allocation_range.end
-                && is_binding_shift(call, binding)
-        })
-        .filter_map(|call| {
-            (call.positional_count == 1
-                && call.keyword_names.is_empty()
-                && !call.has_star_args
-                && !call.has_star_star_kwargs)
-                .then(|| call.positional(0))
-                .flatten()
-        })
-        .collect();
-    matches.sort_by_key(|argument| argument.range.start());
+    let Some((scene_name, target_object)) = input.static_facts.index.object_location(target_id)
+    else {
+        return unavailable(
+            "target-object-identity-unavailable",
+            object.get("allocation_anchor").cloned(),
+        );
+    };
+    let Some(scene) = input.lifecycle.scene(scene_name) else {
+        return unavailable(
+            "target-object-identity-unavailable",
+            object.get("allocation_anchor").cloned(),
+        );
+    };
+    let checked = receiver_checked_shift_arguments(
+        input.calls,
+        scene,
+        target_object,
+        file,
+        allocation_range,
+        allocation_calls[0],
+        binding,
+    );
+    let matches = checked.arguments;
     if matches.is_empty() {
         return unavailable(
-            "existing-shift-not-found",
+            if checked.receiver_reassigned {
+                "binding-reassigned-before-shift"
+            } else if checked.receiver_unknown {
+                "shift-receiver-identity-unknown"
+            } else {
+                "existing-shift-not-found"
+            },
             object.get("allocation_anchor").cloned(),
         );
     }
@@ -370,6 +382,59 @@ fn shift_candidates(input: &GenerationInput<'_>, target_id: &str, argument: &str
         candidates,
         unknowns: Vec::new(),
     }
+}
+
+struct ReceiverCheckedShiftArguments<'a> {
+    arguments: Vec<&'a CallArgument>,
+    receiver_reassigned: bool,
+    receiver_unknown: bool,
+}
+
+fn receiver_checked_shift_arguments<'a>(
+    calls: &'a QualifiedCallFacts,
+    scene: &SceneLifecycle,
+    target_object: &ObjectId,
+    file: FileId,
+    allocation_range: ByteRange,
+    allocation_call: &QualifiedCall,
+    binding: &str,
+) -> ReceiverCheckedShiftArguments<'a> {
+    let mut checked = ReceiverCheckedShiftArguments {
+        arguments: Vec::new(),
+        receiver_reassigned: false,
+        receiver_unknown: false,
+    };
+    for call in calls.calls.iter().filter(|call| {
+        call.file == file
+            && call.context == allocation_call.context
+            && usize::from(call.call_range.start()) >= allocation_range.end
+            && is_binding_shift(call, binding)
+            && call.positional_count == 1
+            && call.keyword_names.is_empty()
+            && !call.has_star_args
+            && !call.has_star_star_kwargs
+    }) {
+        let Some(argument) = call.positional(0) else {
+            continue;
+        };
+        let Some(snapshot) = scene.state_at(call.file, call.call_range.start().into()) else {
+            checked.receiver_unknown = true;
+            continue;
+        };
+        let Some(receiver) = snapshot.object_bindings.get(binding) else {
+            checked.receiver_unknown = true;
+            continue;
+        };
+        if snapshot.heap.resolve(receiver) == snapshot.heap.resolve(target_object) {
+            checked.arguments.push(argument);
+        } else {
+            checked.receiver_reassigned = true;
+        }
+    }
+    checked
+        .arguments
+        .sort_by_key(|argument| argument.range.start());
+    checked
 }
 
 fn insert_shift_candidate(

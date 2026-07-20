@@ -1047,6 +1047,8 @@ v0の範囲はScene、reachable object、play/animation、updater、play境界�
 
 source anchorはraw bytesのSHA-256、正規化encoding、BOM有無、decoded UTF-8 text上のend-exclusive byte range、1-based line / Unicode scalar columnを持つ。Unknownは`null`にせず、必ず非空の`reasons`配列を持つ。内部の`Num` / `Truth` / `Presence`を全面変更する必要はなく、projection生成時のprovenance sidecarで理由を合成してよい。
 
+provenance sidecarはCFG/call/lifecycle factから実際に確認できた原因だけを記録する。`Maybe`や`Unknown`というlattice値だけから`branch-join`、`loop-widening`、candidate cap等を推測してはならない。branchとloopのように複数原因が実在する場合はdeduplicateしたreason集合を保持し、原因factを保持していないfieldは`unsupported-semantics`へ落とす。
+
 StaticFacts producerはrule selection / suppression / baselineから独立して必要なfact capabilityを全て計算する。初期producerはcacheを経由しないfull analysisとして同じraw byte snapshotをparseとhashへ渡す。semantic dependency graphを接続してincremental producerを追加する時も、同一snapshotについてfull / incremental、cache状態、worker数が異なるJSONはbyte-identicalでなければならない。renderer riskはdynamic call、unknown animation target、active updater、`always_redraw`、dynamic wait / stop condition、camera mutation、external state / I/O、randomness、unknown write channel、unknown render orderを報告するが、`safe_to_skip_render`や`safe_to_fork`などの最適化許可は公開しない。
 
 semantic dependency graphはcacheではなくfact layerとして所有し、[`docs/rfcs/0002-semantic-dependency-graph-v0.md`](docs/rfcs/0002-semantic-dependency-graph-v0.md) を契約とする。辺の正規方向は常にdependentからdependency（callerからcallee、Sceneからentrypoint、対象objectからplay）とし、同じ辺から決定的なforward/reverse indexを構築する。解決不能なdynamic call、base、import、definition attributionは推測した辺にせず、所有node・reason・anchorを持つUnknown frontierとして残す。cache component partitionはfile間edgeを無向に見た弱連結成分だけを利用し、ChangeImpactはbefore/after snapshotのreverse edgeを利用し、外部JSONは内部handleではなくStaticFactsのsnapshot IDとsource anchorへprojectionする。Runtime ID、Static/Runtime最終照合、gesture意味論、TracePlan、checkpoint、visual validationは本repositoryの責務外とする。
@@ -1058,6 +1060,8 @@ semantic dependency graphはcacheではなくfact layerとして所有し、[`do
 changed file/definitionをbase/target各graphのreverse traversal originとし、base側は削除済みedge、target側は新規edgeを保持する。出力候補は`base | target`を明記したStaticFacts Scene/play/object ID、source anchor、originからのreason pathを持つ。異なるsnapshotのIDを同一視せず、cross-snapshot rematchingはP1へ残す。
 
 到達したdynamic call、unresolved base/import、definition attribution不能、decode/parse failureは非空`reasons`配列を持つUnknown frontierとして投影する。semantic configまたはknowledge profileが異なる場合は両snapshotの全source semanticsをoriginに広げ、`semantic-config-changed` frontierを返す。frontierがなければ`completeness=complete`、一つでもあれば`candidates`とする。これは候補集合の静的coverageであり、編集意図や描画最適化許可ではない。
+
+`self.play(*animations)`はanimation/target列を完全とは扱わず、Playに`star-arguments` frontierを付ける。dependency graphでは同じPlayから所有Sceneの全reachable objectへ`starred-animation-target`候補辺を張り、ChangeImpactを`candidates`へ落とす。
 
 ### 8.6 SourceBridge / rematching v0 public contract
 

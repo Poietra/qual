@@ -168,7 +168,13 @@ Play `repetitions` separately retains exact, interval, or symbolic numeric
 information. `execution_certainty` says whether the source operation executes
 on all analyzed paths. A branch-dependent operation therefore has unknown
 execution certainty with a `branch-join` reason even if its candidate identity
-and repetition interval are otherwise known.
+and repetition interval are otherwise known. A loop-dependent play instead
+uses `loop-widening`; a play nested in both may retain both reasons.
+
+`animation_arguments_complete` is known `yes` only when every written play
+argument was compiled individually. A `self.play(*animations)` splat makes it
+Unknown with `star-arguments` provenance, creates a call-resolution frontier,
+and prevents the projected `animation_ids` from being read as exhaustive.
 
 ## Unknown values and provenance
 
@@ -204,10 +210,13 @@ status into a proof.
 
 The producer may keep the existing internal `Num`, `Truth`, and `Presence`
 lattices. It records provenance in a sidecar keyed by internal fact identity
-and field, then joins/deduplicates reasons during projection. Reasons are
-sorted by kind, anchor, and related IDs. If provenance is unexpectedly absent,
-the projection uses `unsupported-semantics` at the owning source anchor; it
-never emits a reason-less unknown.
+and field, then joins/deduplicates reasons during projection. The v0 sidecar
+records causes that are explicit in CFG, call, and lifecycle facts (including
+branch-dependent plays, non-literal duration overrides, and starred play
+arguments). A lattice value alone is never treated as causal evidence. Reasons
+are joined and sorted by kind, anchor, and related IDs. If provenance is
+unexpectedly absent, the projection uses `unsupported-semantics` at the owning
+source anchor; it never emits a reason-less unknown.
 
 The v0 reason taxonomy is closed by the JSON Schema. A new reason kind is a
 contract change and requires a schema-version decision.

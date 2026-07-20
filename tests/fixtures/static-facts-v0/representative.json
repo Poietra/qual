@@ -246,6 +246,7 @@
       "execution_certainty": { "status": "known", "value": "present" },
       "repetitions": { "status": "exact", "value": 1 },
       "duration": { "status": "exact", "value": 1.5 },
+      "animation_arguments_complete": { "status": "known", "value": "yes" },
       "animation_ids": [
         "animation:sf0:3333333333333333333333333333333333333333333333333333333333333333",
         "animation:sf0:4444444444444444444444444444444444444444444444444444444444444444"

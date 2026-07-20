@@ -84,7 +84,9 @@ that two independent edits both reach one candidate.
 `unknown_frontiers` is an array of structured frontier records. Every frontier
 has an owning node and a non-empty `reasons` array. v0 reasons are dynamic call
 target, unresolved base/import, unavailable lifecycle attribution, decode or
-parse failure, and semantic configuration/profile change.
+parse failure, starred play arguments, and semantic configuration/profile
+change. A reached `star-arguments` frontier keeps completeness at `candidates`;
+`starred-animation-target` edges widen affected objects to the owning Scene.
 
 `completeness` is `complete` only when no relevant frontier was reached.
 Otherwise it is `candidates`: the listed entities remain valid conservative

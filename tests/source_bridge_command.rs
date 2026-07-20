@@ -152,6 +152,51 @@ fn existing_shift_search_stays_in_the_allocation_context() {
 }
 
 #[test]
+fn existing_shift_refuses_a_receiver_reassigned_to_another_object() {
+    let source = "from manim import Circle, LEFT, RIGHT, Scene, Square\n\nclass Demo(Scene):\n    def construct(self):\n        square = Square()\n        self.add(square)\n        square = Circle()\n        square.shift(LEFT)\n";
+    let directory = project(source);
+    let facts = facts(directory.path());
+    let object = facts.document["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|object| {
+            object["binding_candidates"]["values"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value == "square"))
+                && object["kind_candidates"]["values"]
+                    .as_array()
+                    .is_some_and(|values| {
+                        values.iter().any(|value| {
+                            value.as_str().is_some_and(|kind| kind.ends_with(".Square"))
+                        })
+                    })
+        })
+        .unwrap();
+    let request = object_request(
+        &facts.document,
+        object,
+        &json!({ "kind": "modify-existing-shift", "argument": "RIGHT" }),
+    );
+    let report = run(directory.path(), &request);
+    assert_eq!(
+        report.document["status"], "unavailable",
+        "{}",
+        report.output
+    );
+    assert!(report.document["candidates"].as_array().unwrap().is_empty());
+    assert_eq!(
+        report.document["unknowns"][0]["reasons"][0]["kind"],
+        "binding-reassigned-before-shift"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("scene.py")).unwrap(),
+        source
+    );
+    assert!(schema_errors(OUTPUT_SCHEMA, &report.document).is_empty());
+}
+
+#[test]
 fn replaces_only_a_statically_literal_argument() {
     let source = "from manim import Scene, Square\n\nclass Demo(Scene):\n    def construct(self):\n        square = Square(1)\n        self.add(square)\n";
     let directory = project(source);

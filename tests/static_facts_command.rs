@@ -190,6 +190,115 @@ class Demo(Scene):
 }
 
 #[test]
+fn starred_play_arguments_make_the_animation_list_incomplete() {
+    let source = br"from manim import Circle, FadeIn, Scene, Square
+
+class Demo(Scene):
+    def construct(self):
+        square = Square()
+        circle = Circle()
+        animations = [FadeIn(square)]
+        self.play(*animations)
+";
+    let directory = project(source, None);
+    let report = facts(directory.path());
+    let play = &report.document["plays"][0];
+    assert_eq!(play["animation_arguments_complete"]["status"], "unknown");
+    assert_eq!(
+        play["animation_arguments_complete"]["reasons"][0]["kind"],
+        "star-arguments"
+    );
+    assert!(
+        report.document["coverage"]["frontiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|frontier| {
+                frontier["kind"] == "call-resolution"
+                    && frontier["related_entity_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id == &play["id"]))
+                    && frontier["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason["kind"] == "star-arguments")
+                    })
+            })
+    );
+    assert!(
+        report.document["renderer_risks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|risk| {
+                risk["kind"] == "unknown-animation-target"
+                    && risk["related_entity_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id == &play["id"]))
+            })
+    );
+    assert!(schema_errors(&report.document).is_empty());
+}
+
+#[test]
+fn projection_reasons_come_from_provenance_or_fall_back_to_unsupported() {
+    let source = br"from manim import FadeIn, Scene, Square, always_redraw
+
+class Demo(Scene):
+    def construct(self):
+        mystery = always_redraw(lambda: Square())
+        square = Square()
+        if condition:
+            self.play(FadeIn(square), run_time=duration)
+        for _ in range(2):
+            self.play(FadeIn(square), run_time=1)
+";
+    let directory = project(source, None);
+    let report = facts(directory.path());
+    let plays = report.document["plays"].as_array().unwrap();
+    let branch_play = plays
+        .iter()
+        .find(|play| play["duration"]["status"] == "unknown")
+        .unwrap();
+    assert_eq!(branch_play["execution_certainty"]["status"], "unknown");
+    assert_eq!(
+        branch_play["execution_certainty"]["reasons"][0]["kind"],
+        "branch-join"
+    );
+    assert_eq!(branch_play["duration"]["status"], "unknown");
+    assert_eq!(
+        branch_play["duration"]["reasons"][0]["kind"],
+        "non-literal-expression"
+    );
+    let loop_play = plays
+        .iter()
+        .find(|play| play["duration"]["status"] == "exact")
+        .unwrap();
+    assert_eq!(loop_play["execution_certainty"]["status"], "unknown");
+    assert_eq!(
+        loop_play["execution_certainty"]["reasons"][0]["kind"],
+        "loop-widening"
+    );
+
+    let mystery = report.document["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|object| {
+            object["binding_candidates"]["values"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value == "mystery"))
+        })
+        .unwrap();
+    assert_eq!(mystery["kind_candidates"]["status"], "unknown");
+    assert_eq!(
+        mystery["kind_candidates"]["reasons"][0]["kind"],
+        "unsupported-semantics"
+    );
+    assert!(schema_errors(&report.document).is_empty());
+}
+
+#[test]
 fn renderer_risk_projection_reports_blockers_without_permissions() {
     let source = br#"import random
 from pathlib import Path

@@ -27,8 +27,10 @@ v0 supports exactly three operations:
    must both be static literals. Dynamic current expressions are unavailable.
 2. `modify-existing-shift`: require one known binding for the target object,
    find existing `binding.shift(ARG)` calls with one unsplatted positional
-   argument, and produce one candidate per call. Multiple calls remain
-   `ambiguous`; SourceBridge does not choose one.
+   argument, prove from the lifecycle snapshot that the receiver still maps
+   to the requested ObjectId at each call, and produce one candidate per
+   proven call. A reassigned or unresolved receiver is refused. Multiple
+   proven calls remain `ambiguous`; SourceBridge does not choose one.
 3. `insert-shift-chain`: require one known binding and a clear allocation-call
    anchor, then insert `.shift(ARG)` directly after that call.
 
@@ -129,6 +131,7 @@ patch IDs, rematching, and JSON across worker counts. Acceptance tests cover:
 - positional and keyword literal selection;
 - multiple shift candidates without selection;
 - lexical-context isolation for same-named bindings;
+- receiver-identity refusal after a binding is reassigned;
 - dynamic literal and hash mismatch refusal;
 - target/call association and request-contract validation;
 - in-memory reparse/reanalysis and `match`;

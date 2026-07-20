@@ -290,6 +290,12 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Fixed
 
+- Static semantic-toolchain review hardening: SourceBridge now proves that an
+  existing `.shift(...)` receiver still denotes the requested object before
+  proposing a patch; starred `play` arguments publish an incomplete-animation
+  frontier and conservatively connect every reachable Scene object; and
+  StaticFacts unknown reasons now come from explicit projection provenance,
+  falling back to `unsupported-semantics` when no cause fact was retained.
 - A literal play-level `run_time` kwarg now decides the whole-play
   duration exactly regardless of animation identity (scene.py
   `compile_animations` `setattr`s the kwarg onto every animation): a

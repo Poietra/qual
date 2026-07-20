@@ -18,7 +18,7 @@ use crate::frontend::imports::{ImportTarget, ImportedNames, import_from_names};
 use crate::frontend::index::{BaseRef, ProjectIndex, QualifiedCall, QualifiedCallFacts};
 use crate::frontend::names::Binding;
 use crate::frontend::parser::{ModuleIdentity, module_identity};
-use crate::semantic::interpreter::{DefMap, LifecycleFacts, SceneLifecycle, UpdaterHost};
+use crate::semantic::interpreter::{DefMap, LifecycleFacts, PlayFact, SceneLifecycle, UpdaterHost};
 use crate::semantic::values::{AllocationSite, ObjectId};
 use crate::source::{FileId, SourceManager};
 
@@ -121,6 +121,9 @@ pub enum DependencyReason {
     SceneOwnership,
     /// An object may be targeted by an animation in this play.
     AnimationTarget,
+    /// A starred play argument may contain an animation targeting any object
+    /// in the owning Scene.
+    StarredAnimationTarget,
     /// An object may host an updater registered by this Scene execution.
     UpdaterHost,
 }
@@ -142,6 +145,7 @@ impl DependencyReason {
             Self::ObjectDefinition => "object-definition",
             Self::SceneOwnership => "scene-ownership",
             Self::AnimationTarget => "animation-target",
+            Self::StarredAnimationTarget => "starred-animation-target",
             Self::UpdaterHost => "updater-host",
         }
     }
@@ -182,6 +186,8 @@ pub enum DependencyUnknownKind {
     UnresolvedImport,
     /// A lifecycle entity could not be attributed to a project definition.
     UnavailableDefinition,
+    /// A starred `Scene.play` argument hides animation identities and targets.
+    StarArguments,
 }
 
 impl DependencyUnknownKind {
@@ -193,6 +199,7 @@ impl DependencyUnknownKind {
             Self::UnresolvedBase => "unresolved-base",
             Self::UnresolvedImport => "unresolved-import",
             Self::UnavailableDefinition => "unavailable-definition",
+            Self::StarArguments => "star-arguments",
         }
     }
 }
@@ -621,6 +628,13 @@ impl SemanticDependencyGraph {
                     anchor: play.site,
                 });
             }
+            if play.star_args {
+                self.unknowns.insert(DependencyUnknown {
+                    dependent: play_node.clone(),
+                    kind: DependencyUnknownKind::StarArguments,
+                    anchor: play.site,
+                });
+            }
             play_nodes.push(play_node);
         }
 
@@ -649,6 +663,7 @@ impl SemanticDependencyGraph {
             object_nodes.insert(object, object_node);
         }
         for (ordinal, play) in scene.plays.iter().enumerate() {
+            self.attach_starred_play_targets(play, &play_nodes[ordinal], &object_nodes);
             for animation in &play.animations {
                 if let Some(state) = &animation.state {
                     for target in &state.targets {
@@ -675,6 +690,25 @@ impl SemanticDependencyGraph {
             }
         }
         self.attach_updater_hosts(scene, defs, &object_nodes);
+    }
+
+    fn attach_starred_play_targets(
+        &mut self,
+        play: &PlayFact,
+        play_node: &DependencyNode,
+        object_nodes: &BTreeMap<ObjectId, DependencyNode>,
+    ) {
+        if !play.star_args {
+            return;
+        }
+        for object_node in object_nodes.values() {
+            self.add_edge(DependencyEdge {
+                dependent: object_node.clone(),
+                dependency: play_node.clone(),
+                reason: DependencyReason::StarredAnimationTarget,
+                anchor: Some(play.site),
+            });
+        }
     }
 
     fn attach_updater_hosts(
@@ -1196,6 +1230,33 @@ mod tests {
         assert!(graph.dependencies_of(&construct).iter().all(|edge| {
             edge.reason != DependencyReason::Call
                 || matches!(edge.dependency, DependencyNode::Definition(_))
+        }));
+    }
+
+    #[test]
+    fn starred_play_arguments_frontier_widens_targets_to_every_scene_object() {
+        let graph = analyzed_graph(&[(
+            "scene.py",
+            "from manim import Circle, Scene, Square\n\nclass Demo(Scene):\n    def construct(self):\n        square = Square()\n        circle = Circle()\n        animations = []\n        self.play(*animations)\n",
+        )]);
+        let play = graph
+            .nodes()
+            .find(|node| matches!(node, DependencyNode::Play(_)))
+            .cloned()
+            .expect("play node");
+        assert!(graph.unknowns().any(|unknown| {
+            unknown.dependent == play && unknown.kind == DependencyUnknownKind::StarArguments
+        }));
+        let objects: Vec<DependencyNode> = graph
+            .nodes()
+            .filter(|node| matches!(node, DependencyNode::Object(_)))
+            .cloned()
+            .collect();
+        assert_eq!(objects.len(), 2);
+        assert!(objects.iter().all(|object| {
+            graph.dependencies_of(object).iter().any(|edge| {
+                edge.dependency == play && edge.reason == DependencyReason::StarredAnimationTarget
+            })
         }));
     }
 

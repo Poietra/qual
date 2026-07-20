@@ -154,6 +154,47 @@ fn schema_rejects_empty_unknown_reasons_and_extra_fields() {
 }
 
 #[test]
+fn reached_starred_play_is_incomplete_and_widens_object_candidates() {
+    let before = tempfile::tempdir().unwrap();
+    let after = tempfile::tempdir().unwrap();
+    let scene = |shape: &str| {
+        format!(
+            "from manim import Circle, FadeIn, Scene, Square\n\nclass Demo(Scene):\n    def construct(self):\n        square = Square()\n        circle = Circle()\n        animations = [FadeIn({shape})]\n        self.play(*animations)\n"
+        )
+    };
+    std::fs::write(before.path().join("scene.py"), scene("square")).unwrap();
+    std::fs::write(after.path().join("scene.py"), scene("circle")).unwrap();
+    let report = impact(before.path(), after.path());
+    assert_eq!(report.document["completeness"], "candidates");
+    assert!(
+        report.document["unknown_frontiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|frontier| {
+                frontier["dependent"]["kind"] == "play"
+                    && frontier["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason["kind"] == "star-arguments")
+                    })
+            })
+    );
+    for snapshot in ["base", "target"] {
+        assert_eq!(
+            report.document["affected_objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|object| object["snapshot"] == snapshot)
+                .count(),
+            2
+        );
+    }
+    assert!(schema_errors(&report.document).is_empty());
+}
+
+#[test]
 fn output_is_byte_identical_across_worker_counts() {
     let before = tempfile::tempdir().unwrap();
     let after = tempfile::tempdir().unwrap();

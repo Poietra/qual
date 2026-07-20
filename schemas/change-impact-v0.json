@@ -304,6 +304,7 @@
         "object-definition",
         "scene-ownership",
         "animation-target",
+        "starred-animation-target",
         "updater-host"
       ]
     },
@@ -346,6 +347,7 @@
         "unresolved-base",
         "unresolved-import",
         "unavailable-definition",
+        "star-arguments",
         "decode-error",
         "parse-error",
         "semantic-config-changed"

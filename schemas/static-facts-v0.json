@@ -191,7 +191,6 @@
             "parse-error",
             "unsupported-syntax",
             "unsupported-semantics",
-            "candidate-cap",
             "non-literal-expression",
             "untracked-value",
             "unknown-callback"
@@ -777,6 +776,7 @@
         "execution_certainty",
         "repetitions",
         "duration",
+        "animation_arguments_complete",
         "animation_ids",
         "membership",
         "render_order"
@@ -791,6 +791,7 @@
         "execution_certainty": { "$ref": "#/$defs/presenceFact" },
         "repetitions": { "$ref": "#/$defs/numericFact" },
         "duration": { "$ref": "#/$defs/numericFact" },
+        "animation_arguments_complete": { "$ref": "#/$defs/truthFact" },
         "animation_ids": {
           "type": "array",
           "uniqueItems": true,

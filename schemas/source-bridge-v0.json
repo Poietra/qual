@@ -239,7 +239,9 @@
         "unsupported-request-version", "snapshot-mismatch", "missing-target", "replacement-not-literal",
         "source-precondition-failed", "call-anchor-not-unique", "call-not-target-anchor", "argument-not-found", "dynamic-existing-argument",
         "invalid-replacement-expression", "target-not-object", "binding-not-unique", "object-kind-unknown",
-        "allocation-call-not-unique", "existing-shift-not-found", "invalid-source-anchor", "allocation-not-clear-call"
+        "allocation-call-not-unique", "existing-shift-not-found", "binding-reassigned-before-shift",
+        "shift-receiver-identity-unknown", "target-object-identity-unavailable",
+        "invalid-source-anchor", "allocation-not-clear-call"
       ]
     },
     "unknownReason": {

@@ -62,7 +62,12 @@ are:
 - `module-collision`, `import`, `namespace-binding`, `base-class`, and `call`;
 - `defined-in`, `scene-class`, and `scene-entrypoint`;
 - `play-definition`, `object-definition`, and `scene-ownership`; and
-- `animation-target` and `updater-host`.
+- `animation-target`, `starred-animation-target`, and `updater-host`.
+
+`starred-animation-target` conservatively connects every reachable object in
+the owning Scene to a play whose `*args` hides animation targets. The play also
+owns a `star-arguments` Unknown frontier; the broad edge is a candidate set,
+not a claim that every object is actually animated.
 
 Module-collision edges are symmetric because either competing module can
 affect ownership. All other edges retain their natural dependent-to-dependency
@@ -82,8 +87,9 @@ and one of these stable reason labels:
 
 - `dynamic-call-target`;
 - `unresolved-base`;
-- `unresolved-import`; or
-- `unavailable-definition`.
+- `unresolved-import`;
+- `unavailable-definition`; or
+- `star-arguments`.
 
 ChangeImpact must carry reachable frontiers into its completeness result and
 reason paths. A consumer may widen candidates or request runtime evidence; it
