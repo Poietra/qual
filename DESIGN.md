@@ -934,6 +934,7 @@ manim-lint cost PATH [--scene NAME]
 manim-lint coverage [PATH...] [--format text|json]
 manim-lint static-facts [PATH...] [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
 manim-lint change-impact --before PATH --after PATH [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+manim-lint source-bridge PATH --request REQUEST.json [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
 ```
 
 `check` options:
@@ -966,6 +967,8 @@ JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なし�
 `static-facts`は診断を実行せず、`schemas/static-facts-v0.json`準拠の静的意味projectionをstdoutへ出力する。rule selector、suppression、baseline、confidence/fail levelは意味入力ではないため、このcommandにはそれらのoptionを持たせない。成功は常にexit 0、path/config/IO errorはexit 2とする。
 
 `change-impact`はbefore/after双方をfull解析し、`schemas/change-impact-v0.json`準拠の保守的な影響候補をstdoutへ出力する。cacheとruleは実行せず、削除・rename前のedgeをbase graphから保持する。成功はexit 0、入力/config/IO errorはexit 2とする。
+
+`source-bridge`は`schemas/source-bridge-request-v0.json`準拠requestから限定的なpatch候補を生成し、diskへ書かずに仮想適用・full再解析・rematchingを行い、`schemas/source-bridge-v0.json`準拠結果をstdoutへ出力する。成功はexit 0、request JSON/config/IO errorはexit 2とする。候補がunavailable/rejectedでもcontract上の正常結果なのでexit 0である。
 
 `--no-cache` は analysis cache の read / write と cache directory 作成をすべて無効にする。`--fix`、`--baseline`、`--write-baseline`、`--analysis-summary` は source / index state を後段でも必要とするため、cache-v2 では自動的に full analysis を行う。
 
@@ -1055,6 +1058,14 @@ semantic dependency graphはcacheではなくfact layerとして所有し、[`do
 changed file/definitionをbase/target各graphのreverse traversal originとし、base側は削除済みedge、target側は新規edgeを保持する。出力候補は`base | target`を明記したStaticFacts Scene/play/object ID、source anchor、originからのreason pathを持つ。異なるsnapshotのIDを同一視せず、cross-snapshot rematchingはP1へ残す。
 
 到達したdynamic call、unresolved base/import、definition attribution不能、decode/parse failureは非空`reasons`配列を持つUnknown frontierとして投影する。semantic configまたはknowledge profileが異なる場合は両snapshotの全source semanticsをoriginに広げ、`semantic-config-changed` frontierを返す。frontierがなければ`completeness=complete`、一つでもあれば`candidates`とする。これは候補集合の静的coverageであり、編集意図や描画最適化許可ではない。
+
+### 8.6 SourceBridge / rematching v0 public contract
+
+[`docs/rfcs/0004-source-bridge-v0.md`](docs/rfcs/0004-source-bridge-v0.md)、[`schemas/source-bridge-request-v0.json`](schemas/source-bridge-request-v0.json)、[`schemas/source-bridge-v0.json`](schemas/source-bridge-v0.json)を外部契約とする。v0 templateはliteral call argument置換、一意bindingの既存`.shift(ARG)`引数置換、allocation call直後の`.shift(ARG)`挿入に限定する。dynamic existing argument、複数binding、不明allocation、hash/snapshot不一致では推測しない。複数source候補はmedium confidenceで全件を返し、自動選択しない。
+
+各editはpath、raw source hash precondition、encoding-aware anchor、`original_text`、replacementを持つ。command自身はdiskへ書かず、`original_text`をapplication guardとrollback payloadの双方に使う。候補ごとにmemory上で適用し、元encodingへ再encode、全sourceを再parse・frontend/lifecycle/StaticFactsまで再解析する。
+
+rematchingは編集前後IDの一致を要求せず、Scene identity、entity kind、edit-adjusted source range、bounded call path、cardinality、kind/binding候補を使う。結果は`match | ambiguous | missing`で、ambiguous時は全candidate IDを返す。parse valid、単一match、coverage preservedを全て満たすcandidateだけacceptedとする。新規Unknown/frontier、coverage低下、parse failure、ambiguous/missingは理由付きrejectedとする。任意Python意味保存、external write、gesture意味論、runtime照合、visual validationは責務外である。
 
 ## 9. cache と並列性
 

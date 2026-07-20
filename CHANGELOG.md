@@ -18,6 +18,13 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **SourceBridge/rematching v0 (RFC 0004)**: `manim-lint source-bridge`
+  generates non-writing, hash-guarded literal/shift patch candidates with
+  rollback text, virtually reparses and fully reanalyzes each edit, reports
+  `match | ambiguous | missing`, and rejects parse failures or new coverage
+  frontiers. Request/output schemas cover ambiguity, preconditions, structured
+  Unknowns, and accepted/rejected validation.
+
 - **ChangeImpact v0 (RFC 0003)**: `manim-lint change-impact --before OLD
   --after NEW` compares two full source snapshots and emits schema-validated
   added/removed/modified definitions, conservative Scene/play/object

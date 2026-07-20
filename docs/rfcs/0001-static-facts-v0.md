@@ -327,10 +327,10 @@ reverse edges and projects reason paths through StaticFacts IDs and anchors.
 ChangeImpact compares two source snapshots so deleted and renamed definitions
 remain discoverable from the base graph.
 
-Source patching and rematching are P1. They will consume these anchors and raw
-hash preconditions but will define a separate schema. Arbitrary Python
-rewrites, complete CST preservation, and dynamic-call rewrites are not implied
-by this RFC.
+Source patching and rematching are defined by RFC 0004. They consume these
+anchors and raw hash preconditions through separate request/output schemas.
+Arbitrary Python rewrites, complete CST preservation, and dynamic-call
+rewrites are not implied by either contract.
 
 ## Acceptance and rollout
 

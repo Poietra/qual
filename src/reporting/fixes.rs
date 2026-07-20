@@ -348,7 +348,7 @@ fn feature_counts(violations: &[features::Violation]) -> BTreeMap<features::Feat
 }
 
 /// Re-encodes the fixed text in the file's original source encoding.
-fn encode(file: &SourceFile, text: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(file: &SourceFile, text: &str) -> Result<Vec<u8>, String> {
     const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
     let encoding_info = file.encoding();
     let mut bytes = Vec::with_capacity(text.len() + UTF8_BOM.len());

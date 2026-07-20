@@ -165,7 +165,15 @@ each graph, preserving deleted edges on the base side and added edges on the
 target side. `src/change_impact.rs` projects reached Scene/play/object nodes
 through each snapshot's StaticFacts IDs and emits reason paths plus relevant
 Unknown frontiers. RFC 0003 and `schemas/change-impact-v0.json` define the
-external contract; cross-snapshot rematching remains a separate P1 feature.
+external contract; the bounded patch/rematching layer is described next.
+
+`src/source_bridge.rs` completes that P1 boundary for three bounded local
+templates. The command verifies a StaticFacts snapshot/entity request,
+generates rollback-carrying hash-guarded edits, and leaves the working tree
+untouched. `src/application.rs` applies each candidate to an in-memory raw
+snapshot, reruns the full semantic stack, then accepts it only after one
+semantic rematch and no coverage regression. RFC 0004 plus the request/output
+schemas define the external contract.
 
 ### Cost model (`src/cost/` and `src/render_order.rs`)
 

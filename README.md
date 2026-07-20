@@ -125,6 +125,7 @@ manim-lint cost scenes/demo.py          # per-scene cost breakdown
 manim-lint coverage .                   # what the analysis could not resolve
 manim-lint static-facts . > facts.json  # StaticFacts v0 semantic projection
 manim-lint change-impact --before old --after new > impact.json
+manim-lint source-bridge . --request patch.json > candidates.json
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -576,6 +577,9 @@ guessing dynamic dependency edges.
 [`ChangeImpact v0`](docs/rfcs/0003-change-impact-v0.md) compares two source
 snapshots and emits schema-validated, reason-carrying Scene/play/object impact
 candidates, including relations deleted from the target tree.
+[`SourceBridge v0`](docs/rfcs/0004-source-bridge-v0.md) generates hash-guarded
+local patch candidates, validates them against an in-memory reanalysis, and
+reports `match | ambiguous | missing` without writing project files.
 
 ## Known limitations
 

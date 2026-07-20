@@ -64,8 +64,8 @@ Affected Scene, play, and object records contain:
 
 IDs are never compared across snapshots. Base candidates preserve evidence
 for deleted relations; target candidates describe relations present after the
-edit. Cross-snapshot identity and patch-result rematching belong to the later
-rematching contract.
+edit. Cross-snapshot identity and patch-result rematching belong to the
+[`SourceBridge v0`](0004-source-bridge-v0.md) rematching contract.
 
 ## Reason paths
 
