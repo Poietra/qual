@@ -8,7 +8,7 @@ use manim_lint::cache::CacheStatus;
 use manim_lint::cli::CheckArgs;
 use manim_lint::reporting::OutputFormat;
 
-const CACHE_DATABASE: &str = ".manim-lint-cache/cache-v1.sqlite3";
+const CACHE_DATABASE: &str = ".manim-lint-cache/cache-v2.sqlite3";
 
 fn write_project(root: &Path, source: &str) {
     std::fs::write(root.join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
@@ -170,7 +170,108 @@ fn incompatible_schema_version_is_reinitialized() {
 }
 
 #[test]
-fn old_entries_are_pruned_to_the_bounded_working_set() {
+fn corrupt_component_summary_is_rebuilt_without_affecting_results() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(
+        project.path(),
+        "from manim import Scene\nclass Demo(Scene):\n    def construct(self):\n        self.play()\n",
+    );
+    let args = args_for(project.path());
+    let cold = check(&args).unwrap();
+    assert_eq!(cold.cache_status, CacheStatus::Miss);
+
+    let connection = rusqlite::Connection::open(database(project.path())).unwrap();
+    connection
+        .execute("DELETE FROM analysis_entries", [])
+        .unwrap();
+    connection
+        .execute("UPDATE component_entries SET summaries_json = '{'", [])
+        .unwrap();
+    drop(connection);
+
+    let rebuilt = check(&args).unwrap();
+    assert_eq!(rebuilt.cache_status, CacheStatus::Miss);
+    assert_eq!(rebuilt.output, cold.output);
+    assert!(
+        rebuilt
+            .cache_warnings
+            .iter()
+            .any(|warning| warning.contains("corrupt") && warning.contains("rebuilt"))
+    );
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+}
+
+#[test]
+fn out_of_component_nested_summary_site_is_rejected_and_rebuilt() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(
+        project.path(),
+        "from manim import Scene\nclass Demo(Scene):\n    def construct(self):\n        self.play()\n",
+    );
+    let args = args_for(project.path());
+    let cold = check(&args).unwrap();
+    assert_eq!(cold.cache_status, CacheStatus::Miss);
+
+    let connection = rusqlite::Connection::open(database(project.path())).unwrap();
+    let summaries_json: String = connection
+        .query_row(
+            "SELECT summaries_json FROM component_entries LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut summaries: serde_json::Value = serde_json::from_str(&summaries_json).unwrap();
+    assert!(replace_first_nested_site_file(&mut summaries, 99));
+    connection
+        .execute("DELETE FROM analysis_entries", [])
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE component_entries SET summaries_json = ?1",
+            [serde_json::to_string(&summaries).unwrap()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let rebuilt = check(&args).unwrap();
+    assert_eq!(rebuilt.cache_status, CacheStatus::Miss);
+    assert_eq!(rebuilt.output, cold.output);
+    assert!(
+        rebuilt.cache_warnings.iter().any(|warning| {
+            warning.contains("corrupt") && warning.contains("another component")
+        }),
+        "unexpected warnings: {:?}",
+        rebuilt.cache_warnings
+    );
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+}
+
+fn replace_first_nested_site_file(value: &mut serde_json::Value, replacement: u64) -> bool {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if fields.contains_key("file")
+                && fields.contains_key("start")
+                && fields.contains_key("end")
+            {
+                fields.insert("file".to_owned(), replacement.into());
+                return true;
+            }
+            fields
+                .values_mut()
+                .any(|value| replace_first_nested_site_file(value, replacement))
+        }
+        serde_json::Value::Array(values) => values
+            .iter_mut()
+            .any(|value| replace_first_nested_site_file(value, replacement)),
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => false,
+    }
+}
+
+#[test]
+fn whole_project_entries_are_pruned_while_component_fallback_remains() {
     let project = tempfile::tempdir().unwrap();
     write_project(project.path(), "value = 0\n");
     let args = args_for(project.path());
@@ -201,7 +302,132 @@ fn old_entries_are_pruned_to_the_bounded_working_set() {
     std::fs::write(project.path().join("scene.py"), "value = 0\n").unwrap();
     assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
     std::fs::write(project.path().join("scene.py"), "value = 1\n").unwrap();
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+}
+
+#[test]
+fn component_entries_are_bounded() {
+    let project = tempfile::tempdir().unwrap();
+    write_project(project.path(), "value = 0\n");
+    let args = args_for(project.path());
+
+    for revision in 0..260 {
+        std::fs::write(
+            project.path().join("scene.py"),
+            format!("value = {revision}\n"),
+        )
+        .unwrap();
+        assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+    }
+    let connection = rusqlite::Connection::open(database(project.path())).unwrap();
+    let entries: i64 = connection
+        .query_row("SELECT COUNT(*) FROM component_entries", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(entries, 256);
+    drop(connection);
+
+    std::fs::write(project.path().join("scene.py"), "value = 0\n").unwrap();
     assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+}
+
+#[test]
+fn independent_source_change_reuses_unchanged_component() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(
+        project.path().join("a.py"),
+        "from manim import Scene\nclass A(Scene):\n    def construct(self):\n        self.play()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("b.py"),
+        "from manim import Scene\nclass B(Scene):\n    def construct(self):\n        self.wait(0)\n",
+    )
+    .unwrap();
+    let args = args_for(project.path());
+
+    let cold = check(&args).unwrap();
+    assert_eq!(cold.cache_status, CacheStatus::Miss);
+    assert!(cold.cache_warnings.is_empty());
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Hit);
+
+    std::fs::write(
+        project.path().join("a.py"),
+        "from manim import Scene\nclass A(Scene):\n    def construct(self):\n        pass\n",
+    )
+    .unwrap();
+    let incremental = check(&args).unwrap();
+    assert_eq!(incremental.cache_status, CacheStatus::Partial);
+    assert!(incremental.cache_warnings.is_empty());
+
+    let mut uncached_args = args_for(project.path());
+    uncached_args.no_cache = true;
+    let uncached = check(&uncached_args).unwrap();
+    assert_eq!(incremental.diagnostics, uncached.diagnostics);
+    assert_eq!(incremental.output, uncached.output);
+}
+
+#[test]
+fn source_layout_change_invalidates_every_component_file_id() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(project.path().join("a.py"), "value = 1\n").unwrap();
+    std::fs::write(project.path().join("b.py"), "value = 2\n").unwrap();
+    let args = args_for(project.path());
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+
+    // FileIds are assigned from the sorted project layout. Adding even an
+    // independent path therefore invalidates every component key instead of
+    // applying old summaries against shifted numeric handles.
+    std::fs::write(project.path().join("00_new.py"), "value = 0\n").unwrap();
+    let changed = check(&args).unwrap();
+    assert_eq!(changed.cache_status, CacheStatus::Miss);
+
+    let mut uncached_args = args_for(project.path());
+    uncached_args.no_cache = true;
+    assert_eq!(changed.output, check(&uncached_args).unwrap().output);
+}
+
+#[test]
+fn changing_shared_helper_invalidates_its_whole_dependency_component() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(
+        project.path().join("shared.py"),
+        "def animate(scene):\n    scene.play()\n",
+    )
+    .unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(
+            project.path().join(format!("{name}.py")),
+            format!(
+                "from manim import Scene\nfrom shared import animate\nclass {}(Scene):\n    def construct(self):\n        animate(self)\n",
+                name.to_uppercase()
+            ),
+        )
+        .unwrap();
+    }
+    let args = args_for(project.path());
+    assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
+
+    std::fs::write(
+        project.path().join("shared.py"),
+        "def animate(scene):\n    scene.wait(0)\n",
+    )
+    .unwrap();
+    let incremental = check(&args).unwrap();
+    assert_eq!(incremental.cache_status, CacheStatus::Miss);
+    assert!(incremental.cache_warnings.is_empty());
+
+    let mut uncached_args = args_for(project.path());
+    uncached_args.no_cache = true;
+    assert_eq!(
+        incremental.output,
+        check(&uncached_args).unwrap().output,
+        "dependency-component recomputation must match a full analysis"
+    );
 }
 
 #[test]

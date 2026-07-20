@@ -189,16 +189,22 @@ and byte-stable for identical input.
 
 ### Persistent cache (`src/cache.rs`)
 
-Cache v1 is a disposable `SQLite` WAL database containing JSON diagnostics
-and JSON filesystem-dependency manifests. Its project key covers the build
-fingerprint emitted by `build.rs`, schema/tool version, resolved semantic
-configuration, serialized knowledge profile, sorted source paths, and the
-exact source bytes fed to `SourceManager`. Asset files, missing candidates,
-and case-scan directory listings are re-stamped before a hit is accepted.
-WAL permits concurrent cold writers, while a monotonic access sequence and
-store-time pruning retain the 16 most recently used project snapshots.
-Corruption rebuilds with a warning; any other cache failure disables caching
-for that run and leaves full analysis available.
+Cache v2 is a disposable `SQLite` WAL database with two layers. The exact
+whole-project entry contains filtered diagnostic JSON for the no-frontend
+warm path. On a project miss, the freshly rebuilt frontend graph partitions
+files by resolved import/call/base/collision edges; dependency-closed entries
+contain JSON method summaries, diagnostics, and filesystem manifests. Hit
+summaries seed the project table and only miss-component definitions and
+Scenes are interpreted. Component ownership avoids reusing helper-anchored
+diagnostics independently from their callers. ASTs are never persisted.
+
+Keys cover the `build.rs` fingerprint, schema/tool version, resolved semantic
+configuration, knowledge profile, full source layout, and the relevant exact
+source bytes. Asset files, missing candidates, and case-scan directory
+listings are re-stamped per entry. WAL permits concurrent cold writers; one
+transaction stores a cold component batch. Access-sequence pruning retains
+16 project and 256 component snapshots. Corruption rebuilds with a warning;
+other cache failures leave full analysis available.
 
 ## One diagnostic, end to end
 

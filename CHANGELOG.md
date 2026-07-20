@@ -18,6 +18,18 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Added
 
+- **Incremental analysis cache v2**: an exact whole-project SQLite/WAL entry
+  remains the fastest unchanged warm path; after a source edit, the frontend
+  rebuilds the static project graph and reuses JSON method summaries and
+  filtered diagnostics from unaffected weak dependency components. Only
+  changed components rerun summaries, Scene lifecycle, and cost analysis.
+  Component keys cover the analyzer build, semantic config, knowledge
+  profile, complete source layout, and component source bytes; asset
+  manifests are validated per component. Entries are bounded to 16 project
+  snapshots and 256 component snapshots, concurrent writers use one atomic
+  batch transaction, and partial output is tested byte-for-byte against a
+  cache-disabled full analysis.
+
 - Phase-2 lifecycle completion: `MLC114` models project-local and curated
   `@override_animate` methods and rejects unsupported chains; `MLC116`
   follows normal Transform source/target membership into a later auto-add;

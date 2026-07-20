@@ -1,6 +1,7 @@
-//! Cold / warm benchmark gate over a pinned 10k-LOC corpus
-//! (DESIGN §11.4: cold ≤ 2 s, warm ≤ 0.5 s, peak RSS < 300 MiB on the
-//! reference machine in `benchmarks/reference-machine.json`).
+//! Cold / warm / incremental benchmark gate over a pinned 10k-LOC corpus
+//! (DESIGN §11.4: cold ≤ 2 s, warm ≤ 0.5 s, one-of-20 incremental
+//! ≤ 0.5 s, peak RSS < 300 MiB on the reference machine in
+//! `benchmarks/reference-machine.json`).
 //!
 //! The fixture under `tests/corpus/benchmark_10kloc/` is committed AND
 //! reproducible: `generated_files()` below is a deterministic generator
@@ -289,15 +290,20 @@ fn isolated_fixture() -> tempfile::TempDir {
 }
 
 /// DESIGN §11.4 benchmark gate. `cold` starts with no cache database; `warm`
-/// is the immediately following identical check and must use its `SQLite` entry.
+/// is the immediately following identical check; `incremental` changes one
+/// of twenty independent source components and must reuse the other nineteen.
 #[test]
 #[ignore = "wall-clock benchmark; run in --release on a quiet machine"]
-fn benchmark_cold_and_warm_within_reference_budget() {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear cold/warm/incremental measurement and assertion pipeline"
+)]
+fn benchmark_cold_warm_and_incremental_within_reference_budget() {
     // Fail fast if the input drifted: timings over a different corpus
     // would be meaningless.
     benchmark_fixture_matches_generator();
     let project = isolated_fixture();
-    let cache_database = project.path().join(".manim-lint-cache/cache-v1.sqlite3");
+    let cache_database = project.path().join(".manim-lint-cache/cache-v2.sqlite3");
     assert!(
         !cache_database.exists(),
         "cold run must start without a cache"
@@ -314,15 +320,29 @@ fn benchmark_cold_and_warm_within_reference_budget() {
     let warm = warm_start.elapsed().as_secs_f64();
     assert_eq!(warm_status, CacheStatus::Hit);
 
+    let changed_path = project.path().join("scenes_00.py");
+    let mut changed = std::fs::read_to_string(&changed_path).expect("read changed component");
+    changed.push_str("\n# incremental benchmark edit\n");
+    std::fs::write(&changed_path, changed).expect("write changed component");
+    let incremental_start = Instant::now();
+    let (diagnostics_incremental, incremental_status) = run_check_over_fixture(project.path());
+    let incremental = incremental_start.elapsed().as_secs_f64();
+    assert_eq!(incremental_status, CacheStatus::Partial);
+
     assert_eq!(
         diagnostics_cold, diagnostics_warm,
         "cold and warm runs must produce identical results"
+    );
+    assert_eq!(
+        diagnostics_cold, diagnostics_incremental,
+        "a semantics-neutral incremental edit must preserve results"
     );
 
     let rss = peak_rss_mib();
     println!("benchmark_10kloc: {diagnostics_cold} diagnostics");
     println!("cold: {cold:.3} s (budget 2.0 s)");
     println!("warm: {warm:.3} s (budget 0.5 s)");
+    println!("incremental 1/20: {incremental:.3} s (budget 0.5 s)");
     match rss {
         Some(mib) => println!("peak RSS (VmHWM): {mib:.1} MiB (budget 300 MiB)"),
         None => println!("peak RSS: unavailable on this platform (informational)"),
@@ -355,6 +375,9 @@ fn benchmark_cold_and_warm_within_reference_budget() {
     let warm_budget = reference["thresholds"]["warm_seconds"]
         .as_f64()
         .expect("thresholds.warm_seconds");
+    let incremental_budget = reference["thresholds"]["incremental_seconds"]
+        .as_f64()
+        .expect("thresholds.incremental_seconds");
     let rss_budget = reference["thresholds"]["peak_rss_mib"]
         .as_f64()
         .expect("thresholds.peak_rss_mib");
@@ -370,6 +393,17 @@ fn benchmark_cold_and_warm_within_reference_budget() {
     } else {
         println!(
             "warm budget ({warm_budget} s) is disabled in \
+             benchmarks/reference-machine.json"
+        );
+    }
+    if reference["enforced"]["incremental_seconds"] == true {
+        assert!(
+            incremental <= incremental_budget,
+            "incremental 1/20 check took {incremental:.3} s, budget {incremental_budget} s"
+        );
+    } else {
+        println!(
+            "incremental budget ({incremental_budget} s) is disabled in \
              benchmarks/reference-machine.json"
         );
     }

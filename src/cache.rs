@@ -1,12 +1,14 @@
 //! Persistent project-level analysis cache (DESIGN §9).
 //!
-//! Cache v1 stores the final pre-baseline diagnostic set as JSON in `SQLite`.
-//! Its key covers the analyzer build, cache schema, resolved semantic config,
-//! knowledge profile, selected source paths, and source bytes. Filesystem
-//! dependencies discovered during the cold analysis (asset candidates and
-//! their case-sensitive parent directories) are re-stamped before a hit is
-//! accepted. A miss always falls back to the full analyzer: cache state is
-//! never required for correctness.
+//! Cache v2 keeps an exact whole-project entry for the fastest warm path and
+//! dependency-closed component entries for incremental reuse after one source
+//! component changes. Diagnostics, method summaries, and filesystem manifests
+//! are JSON; ASTs and analyzed code are never serialized or executed. Cache
+//! state remains disposable and is never required for correctness.
+
+mod components;
+
+pub(crate) use components::{AnalysisComponent, build as build_analysis_components};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -19,12 +21,16 @@ use sha2::{Digest, Sha256};
 use crate::config::model::ResolvedConfig;
 use crate::diagnostic::Diagnostic;
 use crate::knowledge::KnowledgeProfile;
+use crate::semantic::summaries::SummaryTable;
 
 const CACHE_DIRECTORY: &str = ".manim-lint-cache";
-const CACHE_DATABASE: &str = "cache-v1.sqlite3";
-const CACHE_SCHEMA_VERSION: u32 = 2;
+const CACHE_DATABASE: &str = "cache-v2.sqlite3";
+const CACHE_SCHEMA_VERSION: u32 = 1;
 const CACHE_MAGIC: &[u8] = b"manim-lint/project-analysis-cache";
-const MAX_CACHE_ENTRIES: usize = 16;
+const PROJECT_KEY_MAGIC: &[u8] = b"whole-project";
+const COMPONENT_KEY_MAGIC: &[u8] = b"dependency-component";
+const MAX_PROJECT_ENTRIES: usize = 16;
+const MAX_COMPONENT_ENTRIES: usize = 256;
 
 /// Whether a check used, populated, or deliberately bypassed the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +40,9 @@ pub enum CacheStatus {
     Disabled,
     /// No valid entry existed; the full analysis ran.
     Miss,
+    /// Some dependency components were reused and the changed components
+    /// were analyzed again.
+    Partial,
     /// A dependency-validated entry supplied the diagnostics.
     Hit,
 }
@@ -41,6 +50,13 @@ pub enum CacheStatus {
 /// Stable SHA-256 key for one complete project analysis input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheKey([u8; 32]);
+
+/// Reusable facts owned by one dependency-closed source component.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ComponentCacheEntry {
+    pub diagnostics: Vec<Diagnostic>,
+    pub summaries: SummaryTable,
+}
 
 /// One filesystem path whose state can affect an otherwise source-identical
 /// result (currently literal asset resolution and SVG content inspection).
@@ -94,6 +110,7 @@ pub struct AnalysisCache {
     connection: Option<Connection>,
     status: CacheStatus,
     warnings: Vec<String>,
+    pending_component_touches: Vec<CacheKey>,
 }
 
 impl AnalysisCache {
@@ -105,10 +122,11 @@ impl AnalysisCache {
             connection: None,
             status: CacheStatus::Disabled,
             warnings: Vec::new(),
+            pending_component_touches: Vec::new(),
         }
     }
 
-    /// Opens (or creates) `.manim-lint-cache/cache-v1.sqlite3` under the
+    /// Opens (or creates) `.manim-lint-cache/cache-v2.sqlite3` under the
     /// project root. Corrupt derivative state is removed and rebuilt once.
     #[must_use]
     pub fn open(project_root: &Path) -> Self {
@@ -119,6 +137,7 @@ impl AnalysisCache {
                 connection: Some(connection),
                 status: CacheStatus::Miss,
                 warnings: Vec::new(),
+                pending_component_touches: Vec::new(),
             },
             Err(error) if error.is_corruption() => {
                 let mut warnings = vec![format!(
@@ -133,6 +152,7 @@ impl AnalysisCache {
                         connection: None,
                         status: CacheStatus::Disabled,
                         warnings,
+                        pending_component_touches: Vec::new(),
                     };
                 }
                 match open_connection(&path) {
@@ -141,6 +161,7 @@ impl AnalysisCache {
                         connection: Some(connection),
                         status: CacheStatus::Miss,
                         warnings,
+                        pending_component_touches: Vec::new(),
                     },
                     Err(reopen_error) => {
                         warnings.push(format!(
@@ -151,6 +172,7 @@ impl AnalysisCache {
                             connection: None,
                             status: CacheStatus::Disabled,
                             warnings,
+                            pending_component_touches: Vec::new(),
                         }
                     }
                 }
@@ -160,6 +182,7 @@ impl AnalysisCache {
                 connection: None,
                 status: CacheStatus::Disabled,
                 warnings: vec![format!("analysis cache is disabled: {error}")],
+                pending_component_touches: Vec::new(),
             },
         }
     }
@@ -198,6 +221,68 @@ impl AnalysisCache {
         }
     }
 
+    /// Returns one dependency-validated incremental component entry.
+    pub(crate) fn lookup_component(&mut self, key: &CacheKey) -> Option<ComponentCacheEntry> {
+        match self.lookup_component_inner(key) {
+            Ok(Some(entry)) => {
+                self.pending_component_touches.push(key.clone());
+                Some(entry)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                self.handle_error(&error);
+                None
+            }
+        }
+    }
+
+    /// Drops one structurally invalid component entry while keeping the rest
+    /// of the disposable cache usable. The caller recomputes and stores this
+    /// component again during the same check.
+    pub(crate) fn reject_component(&mut self, key: &CacheKey, reason: &str) {
+        let Some(connection) = &self.connection else {
+            return;
+        };
+        match connection.execute(
+            "DELETE FROM component_entries WHERE cache_key = ?1",
+            params![key.0.as_slice()],
+        ) {
+            Ok(_) => self.warnings.push(format!(
+                "analysis cache entry was corrupt and is being rebuilt: {reason}"
+            )),
+            Err(error) => self.handle_error(&CacheError::Sqlite(error)),
+        }
+    }
+
+    /// Stores all cache-miss components in one `SQLite` transaction. A cold
+    /// project with many independent modules pays one commit, not one per
+    /// module; failure rolls back the complete batch.
+    pub(crate) fn store_components(
+        &mut self,
+        entries: &[(CacheKey, ComponentCacheEntry, DependencyManifest)],
+    ) {
+        if let Err(error) = self.store_components_inner(entries) {
+            self.handle_error(&error);
+        }
+    }
+
+    /// Records whether component fallback reused none, some, or all shards.
+    pub(crate) fn record_component_outcome(&mut self, hits: usize, total: usize) {
+        if let Err(error) = self.touch_components() {
+            self.handle_error(&error);
+        }
+        if self.connection.is_none() {
+            return;
+        }
+        self.status = if total > 0 && hits == total {
+            CacheStatus::Hit
+        } else if hits > 0 {
+            CacheStatus::Partial
+        } else {
+            CacheStatus::Miss
+        };
+    }
+
     #[must_use]
     pub const fn status(&self) -> CacheStatus {
         self.status
@@ -215,8 +300,8 @@ impl AnalysisCache {
         self.warnings.push(warning);
     }
 
-    fn lookup_inner(&self, key: &CacheKey) -> Result<Option<Vec<Diagnostic>>, CacheError> {
-        let Some(connection) = &self.connection else {
+    fn lookup_inner(&mut self, key: &CacheKey) -> Result<Option<Vec<Diagnostic>>, CacheError> {
+        let Some(connection) = &mut self.connection else {
             return Ok(None);
         };
         let cached: Option<(String, String)> = connection
@@ -239,27 +324,30 @@ impl AnalysisCache {
             return Ok(None);
         }
         let diagnostics = serde_json::from_str(&diagnostics_json)?;
-        let last_access = next_access(connection)?;
-        connection.execute(
+        let transaction = connection.transaction()?;
+        let last_access = next_access(&transaction)?;
+        transaction.execute(
             "UPDATE analysis_entries SET last_access = ?2 WHERE cache_key = ?1",
             params![key.0.as_slice(), last_access],
         )?;
+        transaction.commit()?;
         Ok(Some(diagnostics))
     }
 
     fn store_inner(
-        &self,
+        &mut self,
         key: &CacheKey,
         diagnostics: &[Diagnostic],
         dependencies: &DependencyManifest,
     ) -> Result<(), CacheError> {
-        let Some(connection) = &self.connection else {
-            return Ok(());
-        };
         let diagnostics_json = serde_json::to_string(diagnostics)?;
         let dependencies_json = serde_json::to_string(dependencies)?;
-        let last_access = next_access(connection)?;
-        connection.execute(
+        let Some(connection) = &mut self.connection else {
+            return Ok(());
+        };
+        let transaction = connection.transaction()?;
+        let last_access = next_access(&transaction)?;
+        transaction.execute(
             "INSERT INTO analysis_entries(
                  cache_key, diagnostics_json, dependencies_json, last_access
              ) VALUES (?1, ?2, ?3, ?4)
@@ -274,20 +362,133 @@ impl AnalysisCache {
                 last_access
             ],
         )?;
-        connection.execute(
+        transaction.execute(
             "DELETE FROM analysis_entries
              WHERE cache_key IN (
                  SELECT cache_key FROM analysis_entries
                  ORDER BY last_access DESC, cache_key DESC
                  LIMIT -1 OFFSET ?1
-             )",
-            params![i64::try_from(MAX_CACHE_ENTRIES).expect("cache entry bound fits i64")],
+            )",
+            params![i64::try_from(MAX_PROJECT_ENTRIES).expect("cache entry bound fits i64")],
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn lookup_component_inner(
+        &self,
+        key: &CacheKey,
+    ) -> Result<Option<ComponentCacheEntry>, CacheError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+        let cached: Option<(String, String, String)> = connection
+            .query_row(
+                "SELECT diagnostics_json, summaries_json, dependencies_json
+                 FROM component_entries WHERE cache_key = ?1",
+                params![key.0.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((diagnostics_json, summaries_json, dependencies_json)) = cached else {
+            return Ok(None);
+        };
+        let dependencies: DependencyManifest = serde_json::from_str(&dependencies_json)?;
+        if !dependencies.is_current()? {
+            connection.execute(
+                "DELETE FROM component_entries WHERE cache_key = ?1",
+                params![key.0.as_slice()],
+            )?;
+            return Ok(None);
+        }
+        let entry = ComponentCacheEntry {
+            diagnostics: serde_json::from_str(&diagnostics_json)?,
+            summaries: serde_json::from_str(&summaries_json)?,
+        };
+        Ok(Some(entry))
+    }
+
+    fn touch_components(&mut self) -> Result<(), CacheError> {
+        if self.pending_component_touches.is_empty() {
+            return Ok(());
+        }
+        let Some(connection) = &mut self.connection else {
+            self.pending_component_touches.clear();
+            return Ok(());
+        };
+        let transaction = connection.transaction()?;
+        // Components read by one project check form one LRU generation; their
+        // order within that generation has no semantic value.
+        let last_access = next_access(&transaction)?;
+        for key in self.pending_component_touches.drain(..) {
+            transaction.execute(
+                "UPDATE component_entries SET last_access = ?2 WHERE cache_key = ?1",
+                params![key.0.as_slice(), last_access],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn store_components_inner(
+        &mut self,
+        entries: &[(CacheKey, ComponentCacheEntry, DependencyManifest)],
+    ) -> Result<(), CacheError> {
+        if entries.is_empty() || self.connection.is_none() {
+            return Ok(());
+        }
+        let serialized: Vec<(&CacheKey, String, String, String)> = entries
+            .iter()
+            .map(|(key, entry, dependencies)| {
+                Ok((
+                    key,
+                    serde_json::to_string(&entry.diagnostics)?,
+                    serde_json::to_string(&entry.summaries)?,
+                    serde_json::to_string(dependencies)?,
+                ))
+            })
+            .collect::<Result<_, CacheError>>()?;
+        let Some(connection) = &mut self.connection else {
+            return Ok(());
+        };
+        let transaction = connection.transaction()?;
+        let last_access = next_access(&transaction)?;
+        for (key, diagnostics_json, summaries_json, dependencies_json) in serialized {
+            transaction.execute(
+                "INSERT INTO component_entries(
+                     cache_key, diagnostics_json, summaries_json,
+                     dependencies_json, last_access
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(cache_key) DO UPDATE SET
+                     diagnostics_json = excluded.diagnostics_json,
+                     summaries_json = excluded.summaries_json,
+                     dependencies_json = excluded.dependencies_json,
+                     last_access = excluded.last_access",
+                params![
+                    key.0.as_slice(),
+                    diagnostics_json,
+                    summaries_json,
+                    dependencies_json,
+                    last_access
+                ],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM component_entries
+             WHERE cache_key IN (
+                 SELECT cache_key FROM component_entries
+                 ORDER BY last_access DESC, cache_key DESC
+                 LIMIT -1 OFFSET ?1
+             )",
+            params![i64::try_from(MAX_COMPONENT_ENTRIES).expect("component cache bound fits i64")],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
     fn handle_error(&mut self, error: &CacheError) {
         self.connection.take();
+        self.pending_component_touches.clear();
         if error.is_corruption() {
             self.warnings.push(format!(
                 "analysis cache was corrupt and is being rebuilt: {error}"
@@ -327,29 +528,71 @@ pub fn build_key(
     sources: &[(&Path, &[u8])],
 ) -> Result<CacheKey, CacheError> {
     let mut digest = Sha256::new();
-    update_field(&mut digest, CACHE_MAGIC);
-    update_field(&mut digest, &CACHE_SCHEMA_VERSION.to_le_bytes());
-    update_field(&mut digest, crate::VERSION.as_bytes());
+    update_key_prefix(&mut digest, PROJECT_KEY_MAGIC, config, profile)?;
+    update_sources(&mut digest, project_root, sources);
+    Ok(CacheKey(digest.finalize().into()))
+}
+
+/// Builds the stable key for one dependency-closed component. The complete
+/// sorted project layout protects serialized `FileId`s and module ownership;
+/// only the component members contribute source bytes, allowing unrelated
+/// edits to reuse this entry.
+pub(crate) fn build_component_key(
+    project_root: &Path,
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+    project_layout: &[&Path],
+    sources: &[(&Path, &[u8])],
+) -> Result<CacheKey, CacheError> {
+    let mut digest = Sha256::new();
+    update_key_prefix(&mut digest, COMPONENT_KEY_MAGIC, config, profile)?;
     update_field(
         &mut digest,
+        &u64::try_from(project_layout.len())
+            .expect("source layout count fits u64")
+            .to_le_bytes(),
+    );
+    for path in project_layout {
+        let relative = crate::source::relative_posix_path(project_root, path);
+        update_field(&mut digest, relative.as_bytes());
+    }
+    update_sources(&mut digest, project_root, sources);
+    Ok(CacheKey(digest.finalize().into()))
+}
+
+fn update_key_prefix(
+    digest: &mut Sha256,
+    kind: &[u8],
+    config: &ResolvedConfig,
+    profile: &KnowledgeProfile,
+) -> Result<(), CacheError> {
+    update_field(digest, CACHE_MAGIC);
+    update_field(digest, kind);
+    update_field(digest, &CACHE_SCHEMA_VERSION.to_le_bytes());
+    update_field(digest, crate::VERSION.as_bytes());
+    update_field(
+        digest,
         option_env!("MANIM_LINT_BUILD_ID")
             .unwrap_or(crate::VERSION)
             .as_bytes(),
     );
-    update_field(&mut digest, &serde_json::to_vec(config)?);
-    update_field(&mut digest, &serde_json::to_vec(profile)?);
+    update_field(digest, &serde_json::to_vec(config)?);
+    update_field(digest, &serde_json::to_vec(profile)?);
+    Ok(())
+}
+
+fn update_sources(digest: &mut Sha256, project_root: &Path, sources: &[(&Path, &[u8])]) {
     update_field(
-        &mut digest,
+        digest,
         &u64::try_from(sources.len())
             .expect("source count fits u64")
             .to_le_bytes(),
     );
     for (path, bytes) in sources {
         let relative = crate::source::relative_posix_path(project_root, path);
-        update_field(&mut digest, relative.as_bytes());
-        update_field(&mut digest, bytes);
+        update_field(digest, relative.as_bytes());
+        update_field(digest, bytes);
     }
-    Ok(CacheKey(digest.finalize().into()))
 }
 
 fn update_field(digest: &mut Sha256, bytes: &[u8]) {
@@ -375,6 +618,7 @@ fn open_connection(path: &Path) -> Result<Connection, CacheError> {
     if version != CACHE_SCHEMA_VERSION {
         connection.execute_batch(
             "DROP TABLE IF EXISTS analysis_entries;
+             DROP TABLE IF EXISTS component_entries;
              DROP TABLE IF EXISTS cache_metadata;",
         )?;
     }
@@ -382,6 +626,13 @@ fn open_connection(path: &Path) -> Result<Connection, CacheError> {
         "CREATE TABLE IF NOT EXISTS analysis_entries (
              cache_key BLOB PRIMARY KEY NOT NULL,
              diagnostics_json TEXT NOT NULL,
+             dependencies_json TEXT NOT NULL,
+             last_access INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS component_entries (
+             cache_key BLOB PRIMARY KEY NOT NULL,
+             diagnostics_json TEXT NOT NULL,
+             summaries_json TEXT NOT NULL,
              dependencies_json TEXT NOT NULL,
              last_access INTEGER NOT NULL
          ) WITHOUT ROWID;

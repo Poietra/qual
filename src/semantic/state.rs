@@ -12,6 +12,8 @@
 
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::model::RenderProfile;
 use crate::semantic::events::InvocationContext;
 use crate::semantic::values::{
@@ -19,7 +21,7 @@ use crate::semantic::values::{
 };
 
 /// Reference to an updater / frame-callback callable.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CallbackRef {
     /// A named project function or method (qualified name).
     Named(String),
@@ -34,7 +36,7 @@ pub enum CallbackRef {
 /// Manim decides between `(mobject)` and `(mobject, dt)` calls by checking
 /// whether the signature has a parameter *named* `dt` (DESIGN §3.3); a
 /// two-parameter signature alone does not make an updater time-based.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SignatureSummary {
     /// Number of positional parameters, when known.
     pub positional_params: Option<u8>,
@@ -61,7 +63,7 @@ impl SignatureSummary {
 
 /// One registered updater: callback, signature facts, and whether it is
 /// time-based.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct UpdaterFact {
     /// The registered callback.
     pub callback: CallbackRef,
@@ -283,7 +285,7 @@ impl MobjectState {
 
 /// Which channel of a live mobject an animation writes or reads
 /// (DESIGN §7.1, `MLC108`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum WriteChannel {
     /// Geometry points.
     Points,
@@ -298,7 +300,7 @@ pub enum WriteChannel {
 }
 
 /// Whether an animation suspends its live targets' updaters while playing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SuspendBehavior {
     /// Suspends live-target updaters during the play (the usual behavior).
     SuspendsLiveTargets,
@@ -317,11 +319,11 @@ impl SuspendBehavior {
 }
 
 /// Identifier shared by all animations of the same `play` call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlayGroupId(pub u64);
 
 /// Abstract state of one animation (DESIGN §5.5).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnimationState {
     /// Candidate animation classes.
     pub kind: KindSet,

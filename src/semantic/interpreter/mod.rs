@@ -110,12 +110,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use rayon::prelude::*;
 use rustpython_parser::ast::{self, Ranged};
 use rustpython_parser::text_size::TextRange;
+use serde::{Deserialize, Serialize};
 
 use crate::frontend::index::{ProjectIndex, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::events::Event;
 use crate::semantic::heap::AbstractHeap;
 use crate::semantic::state::{AnimationState, CallbackRef, PlayGroupId, UpdaterFact, WriteChannel};
+use crate::semantic::summaries::SummaryTable;
 use crate::semantic::values::{AllocationSite, Num, ObjectId, Presence, Truth};
 use crate::source::{FileId, SourceManager};
 
@@ -173,7 +175,7 @@ pub struct FallbackFact {
 }
 
 /// Whether a play fact came from `Scene.play` or `Scene.wait` / `pause`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayKind {
     /// A `Scene.play(...)` call.
     Play,
@@ -463,7 +465,7 @@ pub struct SceneRemovalFact {
 /// `ApplyFunction` invokes its callback)? A bare `return` or a
 /// fall-off-the-end path is a definite `No`; a path returning an
 /// untracked value is `Maybe` — the two are never conflated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnFact {
     /// Every normal return path yields a (parameter-derived or freshly
     /// allocated) mobject. `No` as soon as one path definitely does not.
@@ -853,8 +855,71 @@ pub fn analyze(
     calls: &QualifiedCallFacts,
     knowledge: Option<&KnowledgeProfile>,
 ) -> LifecycleFacts {
+    analyze_inner(
+        sources,
+        index,
+        calls,
+        knowledge,
+        None,
+        None,
+        SummaryTable::default(),
+    )
+    .0
+}
+
+/// Incremental lifecycle entry point used after a whole-project cache miss.
+/// Cached summaries seed unchanged graph components; only definitions and
+/// Scene classes owned by `recompute_files` are interpreted again. The
+/// frontend remains project-wide so resolution and Unknown propagation are
+/// identical to a cold analysis.
+#[must_use]
+pub(crate) fn analyze_incremental(
+    sources: &SourceManager,
+    index: &ProjectIndex,
+    calls: &QualifiedCallFacts,
+    knowledge: Option<&KnowledgeProfile>,
+    recompute_files: &BTreeSet<FileId>,
+    summary_seed: SummaryTable,
+) -> (LifecycleFacts, SummaryTable) {
+    analyze_inner(
+        sources,
+        index,
+        calls,
+        knowledge,
+        Some(recompute_files),
+        Some(recompute_files),
+        summary_seed,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the incremental entry point adds independent Scene and summary selections"
+)]
+fn analyze_inner(
+    sources: &SourceManager,
+    index: &ProjectIndex,
+    calls: &QualifiedCallFacts,
+    knowledge: Option<&KnowledgeProfile>,
+    scene_files: Option<&BTreeSet<FileId>>,
+    summary_files: Option<&BTreeSet<FileId>>,
+    summary_seed: SummaryTable,
+) -> (LifecycleFacts, SummaryTable) {
     let defs = DefMap::build(sources, index);
-    let summaries = crate::semantic::summaries::build(sources, index, calls, knowledge, &defs);
+    let summaries = summary_files.map_or_else(
+        || crate::semantic::summaries::build(sources, index, calls, knowledge, &defs),
+        |files| {
+            crate::semantic::summaries::build_incremental(
+                sources,
+                index,
+                calls,
+                knowledge,
+                &defs,
+                files,
+                summary_seed,
+            )
+        },
+    );
     let ctx = Ctx::new(index, calls, knowledge, &defs, &summaries);
 
     // Every lambda of the project, keyed by its source span: resolves
@@ -869,7 +934,16 @@ pub fn analyze(
         }
     }
 
-    let scene_ids: Vec<&String> = index.scene_classes.iter().collect();
+    let scene_ids: Vec<&String> = index
+        .scene_classes
+        .iter()
+        .filter(|class_id| {
+            index
+                .classes
+                .get(*class_id)
+                .is_some_and(|record| scene_files.is_none_or(|files| files.contains(&record.file)))
+        })
+        .collect();
     let scene_runs: Vec<Option<_>> = scene_ids
         .par_iter()
         .map(|class_id| {
@@ -919,11 +993,14 @@ pub fn analyze(
     inline_fallbacks.sort();
     inline_fallbacks.dedup();
 
-    LifecycleFacts {
-        scenes,
-        callback_returns,
-        inline_fallbacks,
-    }
+    (
+        LifecycleFacts {
+            scenes,
+            callback_returns,
+            inline_fallbacks,
+        },
+        summaries,
+    )
 }
 
 // ---------------------------------------------------------------------------

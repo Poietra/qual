@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use rustpython_parser::lexer::lex;
 use rustpython_parser::text_size::TextRange;
 use rustpython_parser::{Mode, Tok, ast, parse};
+use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, SourcePosition, SourceSpan};
 use crate::rules::registry;
 
 /// Stable handle for a file registered in a [`SourceManager`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FileId(usize);
 
 impl FileId {

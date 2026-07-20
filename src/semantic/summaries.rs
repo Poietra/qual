@@ -39,6 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::frontend::index::{ProjectIndex, QualifiedCallFacts};
 use crate::knowledge::KnowledgeProfile;
@@ -52,7 +53,7 @@ use crate::source::SourceManager;
 pub const MAX_SCC_ITERATIONS: usize = 3;
 
 /// What a summary effect operates on, relative to the summarized callable.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SummaryOperand {
     /// The `self` receiver of the summarized method.
     SelfRef,
@@ -71,7 +72,7 @@ pub enum SummaryOperand {
 }
 
 /// One effect of the summarized callable.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SummaryEffect {
     /// A mobject (or animation) allocation inside the body.
     Alloc {
@@ -192,7 +193,7 @@ pub enum SummaryEffect {
 }
 
 /// One recorded effect with its path certainty.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SummaryEvent {
     /// [`Presence::Present`] when the effect happens on every path through
     /// the callable, [`Presence::Maybe`] when only on some paths.
@@ -224,7 +225,7 @@ pub struct SummaryEvent {
 /// re-derived. Records exist so recursion and the inline depth cap do not
 /// lose plays entirely; each site appears once per kind (executions are
 /// unbounded, so per-site multiplicity carries no information).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SummaryPlay {
     /// Source range of the whole `play` / `wait` call inside the helper.
     pub site: AllocationSite,
@@ -249,7 +250,7 @@ pub struct SummaryPlay {
 }
 
 /// What the callable's return value aliases (DESIGN §5.6 `ReturnAlias`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SummaryReturn {
     /// Returns `self` on every return path.
     SelfValue,
@@ -263,10 +264,13 @@ pub enum SummaryReturn {
 }
 
 /// Effect summary of one project callable.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MethodSummary {
     /// Qualified name (`module.helper` / `module.Class.method`).
     pub qualified_name: String,
+    /// File that owns the callable. Cached summaries use this stable
+    /// source-layout index to shard entries by incremental component.
+    pub file: Option<crate::source::FileId>,
     /// Declared parameter names in order (`self` included for methods).
     pub params: Vec<String>,
     /// Effects in body order.
@@ -288,9 +292,14 @@ pub struct MethodSummary {
 impl MethodSummary {
     /// A summary with nothing known (used as the fixpoint seed).
     #[must_use]
-    pub fn seed(qualified_name: &str, params: Vec<String>) -> Self {
+    pub fn seed(
+        qualified_name: &str,
+        file: Option<crate::source::FileId>,
+        params: Vec<String>,
+    ) -> Self {
         Self {
             qualified_name: qualified_name.to_owned(),
+            file,
             params,
             events: Vec::new(),
             plays: Vec::new(),
@@ -302,7 +311,7 @@ impl MethodSummary {
 }
 
 /// All computed summaries, keyed by qualified callable name.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SummaryTable {
     /// Summaries keyed by qualified name.
     pub summaries: BTreeMap<String, MethodSummary>,
@@ -314,6 +323,114 @@ impl SummaryTable {
     pub fn get(&self, qualified_name: &str) -> Option<&MethodSummary> {
         self.summaries.get(qualified_name)
     }
+
+    /// Whether every source handle nested anywhere in these summaries is
+    /// owned by `files`. Incremental cache lookup uses this linear typed walk
+    /// instead of reserializing a hit through `serde_json::Value`.
+    #[must_use]
+    pub(crate) fn belongs_to_files(&self, files: &BTreeSet<crate::source::FileId>) -> bool {
+        self.summaries
+            .values()
+            .all(|summary| method_summary_belongs_to(summary, files))
+    }
+}
+
+fn method_summary_belongs_to(
+    summary: &MethodSummary,
+    files: &BTreeSet<crate::source::FileId>,
+) -> bool {
+    summary.file.is_some_and(|file| files.contains(&file))
+        && summary.events.iter().all(|event| {
+            site_belongs_to(event.site, files) && effect_belongs_to(&event.effect, files)
+        })
+        && summary.plays.iter().all(|play| {
+            site_belongs_to(play.site, files)
+                && play
+                    .animation_sites
+                    .iter()
+                    .all(|site| site_belongs_to(*site, files))
+        })
+        && match summary.returns {
+            SummaryReturn::Fresh(site) => site_belongs_to(site, files),
+            SummaryReturn::SelfValue | SummaryReturn::Param(_) | SummaryReturn::Unknown => true,
+        }
+}
+
+fn effect_belongs_to(effect: &SummaryEffect, files: &BTreeSet<crate::source::FileId>) -> bool {
+    match effect {
+        SummaryEffect::Alloc { site, .. } => site_belongs_to(*site, files),
+        SummaryEffect::SceneAdd { objects, .. }
+        | SummaryEffect::SceneRemove { objects }
+        | SummaryEffect::UnknownMutation {
+            values: objects, ..
+        } => operands_belong_to(objects, files),
+        SummaryEffect::AddChild { parent, child }
+        | SummaryEffect::RemoveChild { parent, child } => {
+            operand_belongs_to(parent, files) && operand_belongs_to(child, files)
+        }
+        SummaryEffect::RegisterUpdater {
+            target, updater, ..
+        } => operand_belongs_to(target, files) && callback_belongs_to(&updater.callback, files),
+        SummaryEffect::RemoveUpdater {
+            target, callback, ..
+        } => operand_belongs_to(target, files) && callback_belongs_to(callback, files),
+        SummaryEffect::ClearUpdaters { target }
+        | SummaryEffect::Mutate { target, .. }
+        | SummaryEffect::GenerateTarget { target }
+        | SummaryEffect::SaveState { target } => operand_belongs_to(target, files),
+        SummaryEffect::CreateAnimation {
+            site,
+            state,
+            targets,
+            replacement_target,
+            ..
+        } => {
+            site_belongs_to(*site, files)
+                && state.targets.iter().all(|object| {
+                    site_belongs_to(object.site, files)
+                        && object
+                            .context
+                            .frames()
+                            .iter()
+                            .all(|site| site_belongs_to(*site, files))
+                })
+                && operands_belong_to(targets, files)
+                && replacement_target
+                    .as_ref()
+                    .is_none_or(|target| operand_belongs_to(target, files))
+        }
+        SummaryEffect::SetSelfAttr { value, .. } => operand_belongs_to(value, files),
+    }
+}
+
+fn operands_belong_to(
+    operands: &[SummaryOperand],
+    files: &BTreeSet<crate::source::FileId>,
+) -> bool {
+    operands
+        .iter()
+        .all(|operand| operand_belongs_to(operand, files))
+}
+
+fn operand_belongs_to(operand: &SummaryOperand, files: &BTreeSet<crate::source::FileId>) -> bool {
+    match operand {
+        SummaryOperand::Fresh(site) => site_belongs_to(*site, files),
+        SummaryOperand::SelfRef
+        | SummaryOperand::Param(_)
+        | SummaryOperand::LiteralBool(_)
+        | SummaryOperand::Opaque => true,
+    }
+}
+
+fn callback_belongs_to(callback: &CallbackRef, files: &BTreeSet<crate::source::FileId>) -> bool {
+    match callback {
+        CallbackRef::Lambda(site) => site_belongs_to(*site, files),
+        CallbackRef::Named(_) | CallbackRef::Unknown => true,
+    }
+}
+
+fn site_belongs_to(site: AllocationSite, files: &BTreeSet<crate::source::FileId>) -> bool {
+    files.contains(&site.file)
 }
 
 /// Builds summaries for every project callable in the definition map.
@@ -332,13 +449,73 @@ pub fn build(
     knowledge: Option<&KnowledgeProfile>,
     defs: &DefMap<'_>,
 ) -> SummaryTable {
-    let nodes: Vec<String> = defs.defs.keys().cloned().collect();
+    build_with_seed(
+        sources,
+        index,
+        calls,
+        knowledge,
+        defs,
+        None,
+        SummaryTable::default(),
+    )
+}
+
+/// Recomputes summaries whose definitions live in `recompute_files`, while
+/// retaining dependency-validated summaries from the other incremental
+/// components. Callers must ensure the seed was built under the same cache
+/// schema, analyzer build, resolved configuration, knowledge profile, and
+/// source layout; the persistent cache key enforces that contract.
+#[must_use]
+pub fn build_incremental(
+    sources: &SourceManager,
+    index: &ProjectIndex,
+    calls: &QualifiedCallFacts,
+    knowledge: Option<&KnowledgeProfile>,
+    defs: &DefMap<'_>,
+    recompute_files: &BTreeSet<crate::source::FileId>,
+    seed: SummaryTable,
+) -> SummaryTable {
+    build_with_seed(
+        sources,
+        index,
+        calls,
+        knowledge,
+        defs,
+        Some(recompute_files),
+        seed,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the incremental builder extends the immutable summary inputs with selection and seed"
+)]
+fn build_with_seed(
+    sources: &SourceManager,
+    index: &ProjectIndex,
+    calls: &QualifiedCallFacts,
+    knowledge: Option<&KnowledgeProfile>,
+    defs: &DefMap<'_>,
+    recompute_files: Option<&BTreeSet<crate::source::FileId>>,
+    mut table: SummaryTable,
+) -> SummaryTable {
+    table
+        .summaries
+        .retain(|name, _| defs.defs.contains_key(name));
+    let nodes: Vec<String> = defs
+        .defs
+        .iter()
+        .filter(|(_, def)| recompute_files.is_none_or(|files| files.contains(&def.file)))
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in &nodes {
+        table.summaries.remove(name);
+    }
     let node_set: BTreeSet<&str> = nodes.iter().map(String::as_str).collect();
     let edges = call_edges(calls, &node_set);
     let components = strongly_connected_components(&nodes, &edges);
     let dependencies = component_dependencies(&components, &edges);
 
-    let mut table = SummaryTable::default();
     let mut remaining: BTreeSet<usize> = (0..components.len()).collect();
     while !remaining.is_empty() {
         let ready: Vec<usize> = remaining
@@ -410,9 +587,10 @@ fn summarize_recursive_component(
             .get(name)
             .map(FnDef::param_names)
             .unwrap_or_default();
-        table
-            .summaries
-            .insert(name.clone(), MethodSummary::seed(name, params));
+        table.summaries.insert(
+            name.clone(),
+            MethodSummary::seed(name, Some(defs.defs[name].file), params),
+        );
     }
     let mut converged = false;
     for _ in 0..MAX_SCC_ITERATIONS {
