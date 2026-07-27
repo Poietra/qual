@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Frames are read lazily from disk, so a cache hit still answers without
   building a `SourceManager`. A file that changed or vanished since the
   analysis renders without its frame rather than failing.
+- `THIRD-PARTY-LICENSES.md` — dependency license survey, including the
+  LGPL-3.0-only `malachite` family that `rustpython-parser` links statically
+  and what it obliges when distributing a prebuilt binary.
 
 ### Fixed
 
@@ -52,12 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package metadata is publishable: repository, homepage, keywords, categories,
   and an `exclude` that keeps fixture corpora out of the crate. The README
   install step names the actual repository.
-
-### Added
-
-- `THIRD-PARTY-LICENSES.md` — dependency license survey, including the
-  LGPL-3.0-only `malachite` family that `rustpython-parser` links statically
-  and what it obliges when distributing a prebuilt binary.
 
 ## [0.2.0] - 2026-07-28
 
