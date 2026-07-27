@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, SourcePosition, SourceSpan};
 use crate::rules::registry;
+use crate::source_limits::{check_source_bytes, check_token_nesting};
 
 /// Stable handle for a file registered in a [`SourceManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -271,7 +272,13 @@ impl SourceManager {
     }
 
     /// Registers an in-memory byte stream as if it had been read from `path`.
+    ///
+    /// A source that exceeds an admission limit is recorded as `MLC000` and
+    /// never reaches the parser.
     pub fn load_bytes(&mut self, path: &Path, bytes: &[u8]) -> FileId {
+        if let Err(violation) = check_source_bytes(bytes) {
+            return self.register_failure(path, &violation.message());
+        }
         match decode_python_source(bytes) {
             Ok((text, encoding)) => self.register_text(path, text, encoding),
             Err(message) => self.register_failure(path, &message),
@@ -311,6 +318,22 @@ impl SourceManager {
             comments,
             diagnostic: None,
         };
+        if let Err(violation) = check_token_nesting(&file.tokens) {
+            // Parsing this file would recurse past the native stack and abort
+            // the process, so the file is skipped while every other file is
+            // still analyzed.
+            let position = SourcePosition { line: 1, column: 1 };
+            file.diagnostic = Some(syntax_error_diagnostic(
+                &file.relative_path,
+                SourceSpan {
+                    start: position,
+                    end: position,
+                },
+                &violation.message(),
+            ));
+            self.files.push(file);
+            return id;
+        }
         match parse(&file.text, Mode::Module, &file.path.display().to_string()) {
             Ok(ast::Mod::Module(module)) => file.ast = Some(module),
             Ok(_) => unreachable!("Mode::Module always produces Mod::Module"),
