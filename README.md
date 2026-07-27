@@ -105,10 +105,14 @@ Requires a Rust toolchain (1.85+). There is no crates.io release yet;
 install from source:
 
 ```bash
-git clone <this repository>
+git clone https://github.com/Poietra/manim-lint.git
 cd manim-lint
 cargo install --path .
 ```
+
+No Python, Manim, or LaTeX installation is needed: the analyzer parses
+source and consults versioned knowledge profiles, and never imports or
+executes Manim or the code it analyzes.
 
 ## Quickstart
 
@@ -738,3 +742,12 @@ together.
 ## License
 
 [MIT](LICENSE).
+
+Dependency licenses, and one consequence worth knowing before you ship a
+prebuilt binary — the Python parser pulls in an LGPL-3.0-only big-integer
+crate, which Rust links statically — are documented in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). Installing from source
+(`cargo install`) is unaffected.
+
+`manim-lint` is an independent project. Manim Community is not affiliated
+with it and does not endorse it.
