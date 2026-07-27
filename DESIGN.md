@@ -1,8 +1,8 @@
 # manim-lint 設計書
 
-- 状態: 実装着手可能
-- 対象: Manim Community 0.20 系（この設計の実地参照は `/home/hosi/manim` の 2026-07-17 時点、`0.20.1`、基底コミット `4d25c031` と未コミット高速化を含む）
-- 想定実装言語: Python 3.11 以上
+- 状態: 実装済み（v0.2.0、ルール 92/92）
+- 対象: Manim Community 0.20 系（実地参照は 2026-07-17 時点の `0.20.1`、基底コミット `4d25c031`。ローカルフォークの未コミット高速化を含む作業ツリーは `local_0_20_1_4d25c031` オーバーレイ側にのみ反映する）
+- 実装言語: Rust 2024 edition（rustc 1.85 以上）。本書が Python 実装を前提に書かれた箇所は歴史的経緯であり、現行の実装配置は `docs/architecture.md` と `CONTRIBUTING.md` が正典
 - CLI / package 名: `manim-lint` / `manim_lint`
 
 ## 1. 結論
@@ -1226,7 +1226,7 @@ tests/fixtures/rules/MLC108/
 10. 実 corpus の false-positive regression
 11. cold / warm linter benchmark
 
-corpus には Manim 公式 example / test に加え、許可を得て `/mnt/c/Users/takuy/Downloads/Bayes.py` と `Algorithm.py` の匿名化または固定 snapshot を入れる価値がある。特に Text / MathTex、Graph、短い多数 play、updater の性能 rule を現実的に検証できる。
+corpus には Manim 公式 example / test に加え、提供者の許可を得た実プロジェクトの匿名化 snapshot を入れる価値がある。特に Text / MathTex、Graph、短い多数 play、updater の性能 rule を現実的に検証できる。ただし公開リポジトリの証跡としては、再配布可能なソースのみを収録する。
 
 ### 11.3 rule 仮説の動的検証
 

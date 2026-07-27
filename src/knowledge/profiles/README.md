@@ -12,7 +12,7 @@ embedded into the binary at compile time and loaded via
   to match the `knowledge-profile` config examples in DESIGN §8.2.
   **Provenance:** the clean upstream base commit `4d25c031`
   (`v0.20.1-49-g4d25c031`, 0.20.1 lineage) of the sibling checkout at
-  `/home/hosi/manim`, materialized read-only via `git archive 4d25c031` —
+  a local Manim checkout, materialized read-only via `git archive 4d25c031` —
   never the working tree, which carries uncommitted fork changes. Verified
   drift-free against that clean tree by
   `sync_manim_knowledge --manim-ref 4d25c031 --diff`: 0 missing symbols,
@@ -112,10 +112,10 @@ all `manim/**/*.py` files in byte-wise sorted order. It covers Python
 sources only — no assets, docs, or build metadata.
 
 For `upstream_0_20` the tree is the clean base commit (`git -C
-/home/hosi/manim archive 4d25c031 | tar -x` into an empty directory, or
+<manim-checkout> archive 4d25c031 | tar -x` into an empty directory, or
 equivalently `sync_manim_knowledge --manim-ref 4d25c031`, which reads the
 archive in memory). For `local_0_20_1_4d25c031` the tree is the fork's
-working tree at `/home/hosi/manim`.
+working tree of that checkout.
 
 ## Curated decisions
 

@@ -2,7 +2,7 @@
 //!
 //! The non-ignored tests exercise the extractor on small inline Python
 //! fixtures. The `#[ignore]`d tests are the layer-9 drift gate: they read
-//! the sibling Manim git checkout at `/home/hosi/manim` (statically,
+//! a Manim git checkout — `../manim`, or `MANIM_LINT_MANIM_ROOT` — (statically,
 //! read-only) and check the shipped profiles against both provenances —
 //! the clean upstream base commit (must be contradiction-free) and the
 //! working tree carrying local fork changes (informational, except for
@@ -12,7 +12,7 @@
 //! cargo test --test knowledge_drift -- --ignored
 //! ```
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use manim_lint::knowledge;
 use manim_lint::knowledge::generator::{
@@ -22,7 +22,7 @@ use manim_lint::knowledge::generator::{
 use manim_lint::knowledge::model::ProfileDocument;
 
 /// The clean upstream base commit of the sibling checkout's fork lineage
-/// (v0.20.1 lineage; `git -C /home/hosi/manim describe` names it
+/// (v0.20.1 lineage; `git describe` in that checkout names it
 /// `v0.20.1-49-g4d25c031`). The shipped `upstream_0_20` digest is computed
 /// over this tree; everything the working tree adds on top belongs to the
 /// `local_0_20_1_4d25c031` overlay.
@@ -401,11 +401,17 @@ fn tar_without_the_manim_package_is_an_error() {
 
 // --- layer-9 drift gate (ignored: needs the sibling checkout) --------------
 
-fn sibling_checkout() -> &'static Path {
-    let root = Path::new("/home/hosi/manim");
+/// Path of the Manim checkout the drift gate reads.
+///
+/// `MANIM_LINT_MANIM_ROOT` overrides the default sibling location, so the gate
+/// runs from any working copy and from CI without a machine-specific path.
+fn sibling_checkout() -> PathBuf {
+    let root = std::env::var_os("MANIM_LINT_MANIM_ROOT")
+        .map_or_else(|| PathBuf::from("../manim"), PathBuf::from);
     assert!(
         root.join("manim").join("__init__.py").is_file(),
-        "sibling Manim checkout not found at /home/hosi/manim"
+        "Manim checkout not found at {}; clone it there or set MANIM_LINT_MANIM_ROOT",
+        root.display()
     );
     root
 }
@@ -416,9 +422,9 @@ fn sibling_checkout() -> &'static Path {
 /// upstream facts. Everything must verify: no contradictions, no missing
 /// symbols, and the profile digest must equal the clean-tree digest.
 #[test]
-#[ignore = "requires the sibling Manim git checkout at /home/hosi/manim"]
+#[ignore = "requires a Manim checkout at ../manim or MANIM_LINT_MANIM_ROOT"]
 fn upstream_profile_matches_clean_base_commit() {
-    let candidates = generate_from_git_ref(sibling_checkout(), UPSTREAM_BASE_COMMIT)
+    let candidates = generate_from_git_ref(&sibling_checkout(), UPSTREAM_BASE_COMMIT)
         .expect("archive candidates from the clean base commit");
     let profile = knowledge::load(knowledge::DEFAULT_PROFILE).expect("load upstream profile");
     let report = diff(&candidates, &profile);
@@ -446,12 +452,12 @@ fn upstream_profile_matches_clean_base_commit() {
 /// facts that were never true upstream). The fork overlay itself must be
 /// drift-free against the working tree it describes.
 #[test]
-#[ignore = "requires the sibling Manim git checkout at /home/hosi/manim"]
+#[ignore = "requires a Manim checkout at ../manim or MANIM_LINT_MANIM_ROOT"]
 fn working_tree_drift_is_informational_for_fork_only_changes() {
     let root = sibling_checkout();
-    let clean = generate_from_git_ref(root, UPSTREAM_BASE_COMMIT)
+    let clean = generate_from_git_ref(&root, UPSTREAM_BASE_COMMIT)
         .expect("archive candidates from the clean base commit");
-    let working = generate(root).expect("generate candidates from the working tree");
+    let working = generate(&root).expect("generate candidates from the working tree");
     let upstream = knowledge::load(knowledge::DEFAULT_PROFILE).expect("load upstream profile");
 
     let clean_report = diff(&clean, &upstream);
