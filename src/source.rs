@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, SourcePosition, SourceSpan};
 use crate::rules::registry;
-use crate::source_limits::{check_source_bytes, check_token_nesting};
+use crate::source_limits::{check_source_bytes, check_source_length, check_token_nesting};
 
 /// Stable handle for a file registered in a [`SourceManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -264,7 +264,29 @@ impl SourceManager {
     ///
     /// Read and decode failures are recorded as `MLC000` on the returned
     /// file; they never abort the whole analysis.
+    ///
+    /// The size and file-type admission checks run on the directory entry
+    /// before any read: `fs::read` on a FIFO blocks forever and on a character
+    /// device never ends, so a limit applied to the returned bytes would come
+    /// too late.
     pub fn load_file(&mut self, path: &Path) -> FileId {
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_file() {
+                    return self.register_failure(
+                        path,
+                        "cannot read file: not a regular file (a directory, symlink target, \
+                         socket, device, or FIFO cannot be analyzed)",
+                    );
+                }
+                if let Err(violation) = check_source_length(metadata.len()) {
+                    return self.register_failure(path, &violation.message());
+                }
+            }
+            Err(error) => {
+                return self.register_failure(path, &format!("cannot read file: {error}"));
+            }
+        }
         match std::fs::read(path) {
             Ok(bytes) => self.load_bytes(path, &bytes),
             Err(error) => self.register_failure(path, &format!("cannot read file: {error}")),

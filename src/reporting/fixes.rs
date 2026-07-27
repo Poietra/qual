@@ -183,6 +183,16 @@ pub fn apply_with_target(
     }
 
     for (file, path, bytes) in writes {
+        // Last line of defence before the only write this tool performs: a
+        // path that resolves outside the project is never rewritten, however
+        // it entered the file set.
+        if !crate::application::path_is_inside(sources.project_root(), file.path()) {
+            report.rolled_back.push(RolledBackFile {
+                path: path.clone(),
+                reason: "refusing to write outside the project root".to_owned(),
+            });
+            continue;
+        }
         std::fs::write(file.path(), &bytes).map_err(|source| FixError::Write {
             path: file.path().to_path_buf(),
             source,

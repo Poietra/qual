@@ -1119,8 +1119,20 @@ fn cached_check_report(
 fn read_source_snapshot(files: &[PathBuf]) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     files
         .iter()
-        .map(|path| (path.clone(), std::fs::read(path).ok()))
+        .map(|path| (path.clone(), read_admissible_source(path)))
         .collect()
+}
+
+/// Reads a file only if it passes the same admission checks the source loader
+/// applies. Reading a FIFO blocks forever and a character device never ends,
+/// so both are refused on their metadata before any read starts; the loader
+/// then records the refusal as `MLC000`.
+fn read_admissible_source(path: &Path) -> Option<Vec<u8>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || crate::source_limits::check_source_length(metadata.len()).is_err() {
+        return None;
+    }
+    std::fs::read(path).ok()
 }
 
 /// Operations that need source/index state after diagnostics are produced do
@@ -2134,6 +2146,14 @@ fn walk_directory(
     entries.sort();
 
     for entry in entries {
+        // A symlink is followed only while it stays inside the project. An
+        // analyzed project can come from an untrusted checkout, and `--fix`
+        // writes back to the discovered path: without this, a link committed
+        // to a repository would let `manim-lint check --fix` rewrite an
+        // arbitrary file outside it.
+        if !path_is_inside(project_root, &entry) {
+            continue;
+        }
         let relative = crate::source::relative_posix_path(project_root, &entry);
         if entry.is_dir() {
             let name = entry
@@ -2158,6 +2178,22 @@ fn walk_directory(
         }
     }
     Ok(())
+}
+
+/// Whether `path` resolves inside `project_root`.
+///
+/// Both sides are canonicalized so a symlink is judged by where it actually
+/// leads, not by how it is spelled. A path that cannot be canonicalized (it
+/// was removed between listing and this check, or a component is unreadable)
+/// is treated as outside: refusing to analyze it is the conservative answer.
+pub(crate) fn path_is_inside(project_root: &Path, path: &Path) -> bool {
+    let Ok(root) = project_root.canonicalize() else {
+        return false;
+    };
+    let Ok(resolved) = path.canonicalize() else {
+        return false;
+    };
+    resolved.starts_with(&root)
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet, ApplicationError> {
