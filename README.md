@@ -510,6 +510,40 @@ Or upload SARIF so findings appear in the GitHub code-scanning UI:
           sarif_file: manim-lint.sarif
 ```
 
+## Pre-execution admission checks
+
+Because `manim-lint` never imports or executes the code it reads, a service
+that renders user-supplied scenes can run it *before* spending sandbox,
+CPU, and GPU time — rejecting scenes that provably fail at render, and
+flagging ones whose cost model predicts a blow-up.
+
+Untrusted input needs the whole contract, not just the rules:
+
+- **Limits are enforced, not assumed.** Sources over 4 MiB, nesting deeper
+  than 96, or prefix-operator runs longer than 64 are refused as `MLC000`
+  before parsing, so hostile input cannot exhaust the stack (see
+  [MLC000](docs/rules/MLC000.md)). Everything else remains the caller's
+  budget: impose your own wall-clock and memory bounds on the process.
+- **Start in observe mode.** Record findings alongside the real render
+  outcome instead of blocking on them; promote a rule to blocking only once
+  its prediction has been checked against what rendering actually did.
+- **Block on `certain` only.** Correct source can carry error-severity
+  findings on purpose — a test asserting `VGroup(3.0)` raises is the
+  canonical case. Findings measured on a real corpus are in
+  [docs/research/corpus-evidence.md](docs/research/corpus-evidence.md).
+
+```bash
+# Observe: record everything, never fail the request.
+manim-lint check "$SCENE_DIR" --format json --fail-level error > findings.json || true
+
+# Block: refuse only what the analyzer is certain about.
+manim-lint check "$SCENE_DIR" --format json \
+  --min-confidence certain --fail-level error
+```
+
+Exit code 1 means the threshold was met; exit code 2 is a usage or
+configuration error and must never be treated as a rejected scene.
+
 ## Rule catalog
 
 The catalog contains 92 rule IDs across four families; **all 92 are
