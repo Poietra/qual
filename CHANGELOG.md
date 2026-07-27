@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Untrusted input can no longer abort the process.** The 0.2.0 limits missed
+  every chain that nests without nesting brackets — `a()()()`, `a.b.b.b`,
+  `1 + 1 + 1`, `lambda: lambda:` — each of which overflowed the stack. Tokens
+  per logical line are now bounded (8,192; the largest real logical line
+  measured is 1,361), which bounds tree depth for all of them at once. A FIFO
+  no longer blocks forever and a character device no longer reads without end:
+  file type and size are checked on the directory entry, before opening.
+- **`--fix` can no longer write outside the project.** Symlinks were followed
+  wherever they led, so a link committed to a repository let
+  `manim-lint check --fix` rewrite an arbitrary file elsewhere on the machine.
+  Paths that resolve outside the project root are skipped at discovery and
+  refused again immediately before the write.
+- **`MLC109` no longer claims certainty it does not have.** An empty
+  `AnimationGroup()` is built with run time 0 and is harmless when nested;
+  only reaching `Scene.play` as the whole animation fails. It is now a
+  `warning` at `high` confidence, and the message says what is actually true.
+  On ManimML this converted 29 certain errors into warnings.
+
+### Changed
+
+- The knowledge-drift gate reads `MANIM_LINT_MANIM_ROOT` (default `../manim`)
+  instead of a hardcoded path on the author's machine, which CI had been
+  recreating on the runner with `sudo` and which no contributor could match.
+- Package metadata is publishable: repository, homepage, keywords, categories,
+  and an `exclude` that keeps fixture corpora out of the crate. The README
+  install step names the actual repository.
+
+### Added
+
+- `THIRD-PARTY-LICENSES.md` — dependency license survey, including the
+  LGPL-3.0-only `malachite` family that `rustpython-parser` links statically
+  and what it obliges when distributing a prebuilt binary.
+
 ## [0.2.0] - 2026-07-28
 
 Everything since 0.1.0: two external-review waves verified and fixed
