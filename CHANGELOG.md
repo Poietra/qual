@@ -7,16 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-28
+
 Everything since 0.1.0: two external-review waves verified and fixed
 point-by-point, structural hardening (knowledge provenance split, release
 quality gates, frontend fact promotion, interpreter modularization),
-helper-analysis completion, analysis-coverage reporting, and the
-fork-first analysis layer. Rule catalog now **92 implemented / 0
+helper-analysis completion, analysis-coverage reporting, the fork-first
+analysis layer, and the untrusted-input work that makes the analyzer usable
+as a pre-execution admission check. Rule catalog now **92 implemented / 0
 reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 `MLR109`, `MLR118`, `MLR122`, `MLR123`, `MLP212`, `MLP213`, `MLP214`,
 `MLP217`, `MLP223`, and `MLP225` were implemented.
 
 ### Added
+
+- **Pre-parse admission limits for untrusted sources**: source size (4 MiB),
+  bracket/indentation nesting depth (96), and consecutive prefix-operator runs
+  (64) are checked before parsing and reported as `MLC000`. Deeply nested calls
+  or blocks, long unary/`not` runs (including runs split across line
+  continuations), and multi-megabyte generated files previously aborted the
+  process with a stack overflow, which no per-file error handling can contain;
+  they are now ordinary skipped-file diagnostics while every other file is still
+  analyzed. Bounds sit 6–10× above the Manim Community sources' own maxima, and
+  re-running the corpus produced identical findings with zero `MLC000`.
+
+- **Corpus and adversarial evidence** (`docs/research/corpus-evidence.md`):
+  measured results over 393 third-party Python files (46 findings, no crash, no
+  false positive; every error-severity finding triaged against its source) and
+  the eight adversarial inputs above, before and after the limits. Records what
+  is *not* yet evidenced: corpus breadth, fuzzing, and per-invocation time
+  budgets.
+
+- **Pre-execution admission guidance** (README): how a hosted render service
+  runs the analyzer before spending sandbox and GPU time — observe mode first,
+  block on `--min-confidence certain` only, and why error severity alone is the
+  wrong gate (correct source can assert its own failure cases).
 
 - **SourceBridge/rematching v0 (RFC 0004)**: `manim-lint source-bridge`
   generates non-writing, hash-guarded literal/shift patch candidates with
@@ -236,6 +261,7 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
 
 ### Changed
 
+- `Cargo.toml` now points at the real repository instead of a placeholder URL.
 - The `upstream_0_20` knowledge profile describes only the clean upstream
   base commit `4d25c031`: the three fork-only `manim.constants` names
   (`CAIRO_ANTIALIAS_MODES`, `VIDEO_ENCODERS`, `X264_PRESETS`) moved to

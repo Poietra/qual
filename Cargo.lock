@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "manim-lint"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "encoding_rs",

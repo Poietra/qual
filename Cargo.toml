@@ -1,11 +1,11 @@
 [package]
 name = "manim-lint"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Static lifecycle and performance analysis for Manim scenes"
 license = "MIT"
-repository = "https://github.com/example/manim-lint"
+repository = "https://github.com/Poietra/manim-lint"
 default-run = "manim-lint"
 
 [[bin]]
