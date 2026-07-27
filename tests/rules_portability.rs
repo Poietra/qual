@@ -97,7 +97,7 @@ fn run_fixture_with_profile(
     std::fs::write(project.path().join("pyproject.toml"), pyproject).unwrap();
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         profile: profile.map(str::to_owned),
         ..CheckArgs::default()
     };

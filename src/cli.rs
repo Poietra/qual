@@ -67,6 +67,33 @@ impl std::str::FromStr for Resolution {
     }
 }
 
+/// When terminal styling is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorMode {
+    /// Style only when stdout is a terminal and `NO_COLOR` is unset.
+    #[default]
+    Auto,
+    /// Always style, even when redirected.
+    Always,
+    /// Never style.
+    Never,
+}
+
+impl std::str::FromStr for ColorMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "always" => Ok(Self::Always),
+            "never" => Ok(Self::Never),
+            _ => Err(format!(
+                "unknown color mode: {value} (expected auto|always|never)"
+            )),
+        }
+    }
+}
+
 /// Top-level CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
@@ -221,9 +248,15 @@ pub struct CheckArgs {
     /// Override the resolution as `WIDTHxHEIGHT`.
     #[arg(long)]
     pub resolution: Option<Resolution>,
-    /// Output format (concise|full|json|sarif|github).
-    #[arg(long, default_value = "concise")]
-    pub format: OutputFormat,
+    /// Output format (rich|concise|full|json|sarif|github). Defaults to
+    /// `rich` when stdout is a terminal and `concise` otherwise, so piped
+    /// and redirected output stays machine-readable and unstyled.
+    #[arg(long)]
+    pub format: Option<OutputFormat>,
+    /// When to style terminal output (auto|always|never). `auto` styles only
+    /// a terminal, and `NO_COLOR` disables styling regardless.
+    #[arg(long, default_value = "auto")]
+    pub color: ColorMode,
     /// Apply safe fixes.
     #[arg(long)]
     pub fix: bool,
@@ -324,7 +357,7 @@ mod tests {
                 height: 480
             })
         );
-        assert_eq!(args.format, OutputFormat::Json);
+        assert_eq!(args.format, Some(OutputFormat::Json));
     }
 
     #[test]

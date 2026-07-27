@@ -139,7 +139,7 @@ fn run_fixture_with_profile(
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
         profile: profile.map(str::to_owned),
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline must succeed");
@@ -470,7 +470,7 @@ fn mlr104_absolute_out_of_project_path_declares_environment_dependence() {
     std::fs::write(project.path().join("pyproject.toml"), MLR104_PYPROJECT).unwrap();
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline must succeed");
@@ -710,7 +710,7 @@ fn mlr117_resolves_register_font_through_the_star_export() {
     .unwrap();
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline must succeed");

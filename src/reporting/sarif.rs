@@ -127,11 +127,7 @@ mod tests {
 
     #[test]
     fn severity_levels_map_to_sarif_levels() {
-        let context = RenderContext {
-            tool_version: "0.1.0",
-            project_root: ".",
-            profiles: &[],
-        };
+        let context = RenderContext::without_source("0.1.0", ".", &[]);
         let output = render(
             &[
                 diagnostic("MLC000", Severity::Error),
@@ -149,11 +145,7 @@ mod tests {
 
     #[test]
     fn every_reported_rule_gets_a_descriptor_with_a_short_description() {
-        let context = RenderContext {
-            tool_version: "0.1.0",
-            project_root: ".",
-            profiles: &[],
-        };
+        let context = RenderContext::without_source("0.1.0", ".", &[]);
         let output = render(
             &[
                 diagnostic("MLC001", Severity::Warning),

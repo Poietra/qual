@@ -28,7 +28,7 @@ class TrackerDemo(Scene):
 ```
 
 ```console
-$ manim-lint check .
+$ manim-lint check . --format concise
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
 scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
@@ -70,11 +70,13 @@ cargo install --path .
 ## クイックスタート
 
 ```bash
-manim-lint check .                      # 解析、concise 出力
+manim-lint check .                      # 端末なら rich、パイプなら concise
+manim-lint check . --format rich        # ソースフレームと色を強制
+manim-lint check . --format concise     # 1 診断 1 行
 manim-lint check scenes --format full   # 説明と根拠つき
-manim-lint check . --format json       # schemas/diagnostics-v1.json 準拠
-manim-lint check . --format sarif      # SARIF 2.1.0
-manim-lint check . --format github     # GitHub Actions アノテーション
+manim-lint check . --format json        # schemas/diagnostics-v1.json 準拠
+manim-lint check . --format sarif       # SARIF 2.1.0
+manim-lint check . --format github      # GitHub Actions アノテーション
 manim-lint explain MLC102               # ルールの完全なドキュメント
 manim-lint rules                        # 全ルール ID・フェーズ・実装状態
 manim-lint config                       # 解決済みの有効な設定
@@ -85,7 +87,33 @@ manim-lint static-facts . > facts.json  # StaticFacts v0の意味projection
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
 
-主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。`--no-cache` はキャッシュを読み書きせず、cache directory も作らずに完全解析を強制します。`--select` は解析そのものも絞り込みます: 選択したルールが必要としない事実レイヤー(ライフサイクル解釈器、記号的コストモデル)の計算をスキップするため、狭い select はフル実行より高速です。報告される診断はどちらでも同一です — 選択したルールを supersede するルールは常に実行されるので、狭い select が supersede 済みの診断を復活させることはありません。
+### 出力フォーマット
+
+`--format` を指定しない場合、`check` は出力先を見て形式を決めます。端末に接続していれば `rich` — 診断ごとのバナー、該当行のソースと下線、説明、そして集計 — を表示します。
+
+```text
+✖ MLC104 scene.py:10:42 ───────────────────────────────────────────────
+
+  Use a positive `run_time`: the literal `0` is non-positive and playing
+  it aborts the render.
+
+     8 │         group = AnimationGroup()
+     9 │         self.add(title, eq)
+  > 10 │         self.play(Write(title), run_time=0)
+       │                                          ^
+    11 │         self.wait()
+
+  ℹ Manim validates durations when a play executes, not when an animation
+    is constructed …
+
+✖ 2 errors  ⚠ 1 warning  in 1 file
+```
+
+ファイルやパイプへリダイレクトした場合は `concise` — 1 診断 1 行、エスケープシーケンスなし — になるため、既存のスクリプトや CI が解析している形式はそのまま保たれます。`--format` を渡せばどちらの方向にも上書きできます。
+
+色は `--color auto|always|never` に従います。`auto` は端末のときだけ着色し、`NO_COLOR`(値は何でも可)が設定されていれば着色しません。`--color always` はリダイレクト時も着色します。着色されるのは `rich` だけです。`COLUMNS` はバナー幅と折り返し幅に使われます。
+
+主な `check` オプション: `--select` / `--ignore`、`--min-confidence`、`--fail-level`、`--profile`、`--renderer`、`--fps`、`--resolution WIDTHxHEIGHT`、`--color`、`--statistics`、`--analysis-summary`(後述の解析カバレッジレポートを診断の後に stderr へ出力。stdout と終了コードは変化しない)、および後述の baseline / fix オプション。`--no-cache` はキャッシュを読み書きせず、cache directory も作らずに完全解析を強制します。`--select` は解析そのものも絞り込みます: 選択したルールが必要としない事実レイヤー(ライフサイクル解釈器、記号的コストモデル)の計算をスキップするため、狭い select はフル実行より高速です。報告される診断はどちらでも同一です — 選択したルールを supersede するルールは常に実行されるので、狭い select が supersede 済みの診断を復活させることはありません。
 
 `--format full` は各診断の下に説明と機械可読な根拠を表示します。
 

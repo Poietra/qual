@@ -18,7 +18,7 @@ fn write_project(root: &Path, source: &str) {
 fn args_for(root: &Path) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Json,
+        format: Some(OutputFormat::Json),
         ..CheckArgs::default()
     }
 }

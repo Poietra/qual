@@ -59,11 +59,8 @@ mod tests {
             applicable_profiles: Vec::new(),
             fix: None,
         };
-        let context = RenderContext {
-            tool_version: "0.1.0",
-            project_root: ".",
-            profiles: &["default".to_owned()],
-        };
+        let profiles = ["default".to_owned()];
+        let context = RenderContext::without_source("0.1.0", ".", &profiles);
         let output = render(&[diagnostic], &context);
         let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
 

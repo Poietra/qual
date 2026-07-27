@@ -272,7 +272,7 @@ fn machine_fingerprint() -> Option<(String, String)> {
 fn run_check_over_fixture(root: &Path) -> (usize, CacheStatus) {
     let args = CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Json,
+        format: Some(OutputFormat::Json),
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline over benchmark fixture");

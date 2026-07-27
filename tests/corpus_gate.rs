@@ -51,7 +51,7 @@ fn observed_rows(case_path: &Path) -> Vec<String> {
     std::fs::copy(case_path, project.path().join(file_name)).expect("copy case");
     let args = CheckArgs {
         paths: vec![project.path().to_path_buf()],
-        format: OutputFormat::Json,
+        format: Some(OutputFormat::Json),
         ..CheckArgs::default()
     };
     let report = check(&args).expect("check pipeline");
@@ -197,7 +197,7 @@ fn corpus_check_output_is_byte_stable() {
         std::fs::copy(&basic, project.path().join("basic.py")).expect("copy case");
         let args = CheckArgs {
             paths: vec![project.path().to_path_buf()],
-            format: OutputFormat::Json,
+            format: Some(OutputFormat::Json),
             ..CheckArgs::default()
         };
         check(&args).expect("check pipeline").output

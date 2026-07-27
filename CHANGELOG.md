@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A `rich` output format, and it is the default in a terminal.** Each finding
+  gets a severity banner, the offending source line with its span underlined,
+  two lines of context, the explanation, and a run summary
+  (`✖ 2 errors  ⚠ 1 warning  in 1 file`). Redirected or piped output stays
+  `concise` — one stable line per diagnostic, no escape sequences — so scripts
+  and CI keep parsing what they parse today. `--format` overrides the choice
+  either way.
+- **`--color auto|always|never`.** `auto` styles only a terminal, `NO_COLOR`
+  disables styling regardless, and `--color always` styles even when
+  redirected. Only `rich` is ever styled. `COLUMNS` sets the rendered width.
+
+  Frames are read lazily from disk, so a cache hit still answers without
+  building a `SourceManager`. A file that changed or vanished since the
+  analysis renders without its frame rather than failing.
+
 ### Fixed
 
 - **Untrusted input can no longer abort the process.** The 0.2.0 limits missed

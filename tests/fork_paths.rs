@@ -85,7 +85,7 @@ fn cost_output(root: &Path) -> String {
 fn check_args(root: &Path, select: &[&str]) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         select: select
             .iter()
             .map(|selector| (*selector).to_owned())
