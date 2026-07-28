@@ -692,11 +692,17 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut suppression_indexes = BTreeMap::new();
 
-    for (path, bytes) in &source_snapshot {
-        let id = match bytes {
-            Some(bytes) => sources.load_bytes(path, bytes),
-            None => sources.load_file(path),
-        };
+    // Decoding, tokenizing, and parsing each file depends only on that file's
+    // bytes, so the whole set is loaded in parallel. Registration order — and
+    // therefore every FileId and every ordering derived from one — is
+    // unchanged.
+    let ids = sources.load_all(
+        source_snapshot
+            .iter()
+            .map(|(path, bytes)| (path.as_path(), bytes.as_deref())),
+    );
+
+    for id in ids {
         let file = sources.file(id);
         if let Some(diagnostic) = file.parse_diagnostic() {
             let mut diagnostic = diagnostic.clone();
