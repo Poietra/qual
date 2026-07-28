@@ -34,7 +34,7 @@ fn write_project(root: &Path, knowledge_profile: Option<&str>) {
 fn args_for(root: &Path) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         ..CheckArgs::default()
     }
 }

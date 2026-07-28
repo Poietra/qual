@@ -1,7 +1,7 @@
 //! Curated static geometry knowledge (DESIGN §4.1 `P` / `C` dimensions).
 //!
 //! Every entry is proven against the sibling Manim checkout
-//! (`/home/hosi/manim`, upstream 0.20 line); the source anchors are cited
+//! (upstream 0.20 line); the source anchors are cited
 //! per entry. The counts describe the object **as constructed with the
 //! default point-generation path**; each entry therefore carries guards
 //! (banned kwargs / maximum positional arity) so a constructor call that

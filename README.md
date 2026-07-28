@@ -35,7 +35,7 @@ class TrackerDemo(Scene):
 ```
 
 ```console
-$ manim-lint check .
+$ manim-lint check . --format concise
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
 scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
@@ -105,19 +105,25 @@ Requires a Rust toolchain (1.85+). There is no crates.io release yet;
 install from source:
 
 ```bash
-git clone <this repository>
+git clone https://github.com/Poietra/manim-lint.git
 cd manim-lint
 cargo install --path .
 ```
 
+No Python, Manim, or LaTeX installation is needed: the analyzer parses
+source and consults versioned knowledge profiles, and never imports or
+executes Manim or the code it analyzes.
+
 ## Quickstart
 
 ```bash
-manim-lint check .                      # analyze, concise output
+manim-lint check .                      # analyze; rich in a terminal, concise when piped
+manim-lint check . --format rich        # force source frames and colour
+manim-lint check . --format concise     # one line per diagnostic
 manim-lint check scenes --format full   # explanations + evidence
-manim-lint check . --format json       # schemas/diagnostics-v1.json
-manim-lint check . --format sarif      # SARIF 2.1.0
-manim-lint check . --format github     # GitHub Actions annotations
+manim-lint check . --format json        # schemas/diagnostics-v1.json
+manim-lint check . --format sarif       # SARIF 2.1.0
+manim-lint check . --format github      # GitHub Actions annotations
 manim-lint explain MLC102               # full documentation for a rule
 manim-lint rules                        # every rule ID, phase, and status
 manim-lint config                       # resolved effective configuration
@@ -131,9 +137,43 @@ manim-lint source-bridge . --request patch.json > candidates.json
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
 least one does; `2` — command-line, configuration, or internal error.
 
+### Output formats
+
+Without `--format`, `check` picks its output from where it is writing.
+Attached to a terminal it prints `rich`: a banner per finding, the offending
+source line with the span underlined, the explanation, and a summary.
+
+```text
+✖ MLC104 scene.py:10:42 ───────────────────────────────────────────────
+
+  Use a positive `run_time`: the literal `0` is non-positive and playing
+  it aborts the render.
+
+     8 │         group = AnimationGroup()
+     9 │         self.add(title, eq)
+  > 10 │         self.play(Write(title), run_time=0)
+       │                                          ^
+    11 │         self.wait()
+
+  ℹ Manim validates durations when a play executes, not when an animation
+    is constructed …
+
+✖ 2 errors  ⚠ 1 warning  in 1 file
+```
+
+Redirected to a file or a pipe it prints `concise` — one stable line per
+diagnostic, with no escape sequences — so scripts and CI keep the format
+they parse today. Pass `--format` to override the choice in either
+direction.
+
+Colour follows `--color auto|always|never`. `auto` styles only a terminal,
+`NO_COLOR` (any value) disables styling, and `--color always` styles even
+when redirected. Only `rich` is ever styled. `COLUMNS` sets the width the
+banners and wrapping use.
+
 Useful `check` options: `--select` / `--ignore`, `--min-confidence`,
 `--fail-level`, `--profile`, `--renderer`, `--fps`,
-`--resolution WIDTHxHEIGHT`, `--statistics`, `--analysis-summary` (the
+`--resolution WIDTHxHEIGHT`, `--color`, `--statistics`, `--analysis-summary` (the
 coverage report below, printed to stderr after the diagnostics; stdout
 and the exit code are untouched), and the baseline/fix options
 described below. `--no-cache` forces a full analysis without reading,
@@ -738,3 +778,12 @@ together.
 ## License
 
 [MIT](LICENSE).
+
+Dependency licenses, and one consequence worth knowing before you ship a
+prebuilt binary — the Python parser pulls in an LGPL-3.0-only big-integer
+crate, which Rust links statically — are documented in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). Installing from source
+(`cargo install`) is unaffected.
+
+`manim-lint` is an independent project. Manim Community is not affiliated
+with it and does not endorse it.

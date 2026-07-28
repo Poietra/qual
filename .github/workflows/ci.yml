@@ -59,15 +59,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Fetch Manim at the pinned base commit
-        # The drift test reads the sibling checkout path /home/hosi/manim
-        # (tests/knowledge_drift.rs). Shallow-fetch exactly the base commit
-        # the shipped profile is pinned to (src/knowledge/profiles/README.md).
+        # Shallow-fetch exactly the base commit the shipped profile is pinned
+        # to (src/knowledge/profiles/README.md). The drift test reads the
+        # checkout named by MANIM_LINT_MANIM_ROOT (tests/knowledge_drift.rs).
         run: |
-          sudo mkdir -p /home/hosi
-          sudo chown "$(id -u):$(id -g)" /home/hosi
-          git init /home/hosi/manim
-          git -C /home/hosi/manim remote add origin https://github.com/ManimCommunity/manim.git
-          git -C /home/hosi/manim fetch --depth 1 origin 4d25c031ffe71c602e20935afd54a96f33545a6e
-          git -C /home/hosi/manim checkout --detach FETCH_HEAD
+          git init "${RUNNER_TEMP}/manim"
+          git -C "${RUNNER_TEMP}/manim" remote add origin https://github.com/ManimCommunity/manim.git
+          git -C "${RUNNER_TEMP}/manim" fetch --depth 1 origin 4d25c031ffe71c602e20935afd54a96f33545a6e
+          git -C "${RUNNER_TEMP}/manim" checkout --detach FETCH_HEAD
       - name: Knowledge drift gate
+        env:
+          MANIM_LINT_MANIM_ROOT: ${{ runner.temp }}/manim
         run: cargo test --test knowledge_drift -- --ignored

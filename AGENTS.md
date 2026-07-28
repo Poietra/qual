@@ -2,7 +2,7 @@
 
 Before planning or editing implementation code, read `DESIGN.md` completely. It is the authoritative product, semantic-model, rule-catalog and rollout specification for this repository.
 
-The sibling checkout `/home/hosi/manim` is the current Manim source reference. Treat it as read-only while working in this repository unless the user separately asks to change Manim itself. Runtime linting must never import or execute Manim or analyzed user code; use static source and versioned knowledge profiles.
+A local Manim checkout (`../manim`, or the path in `MANIM_LINT_MANIM_ROOT`) is the Manim source reference. Treat it as read-only while working in this repository unless the user separately asks to change Manim itself. Runtime linting must never import or execute Manim or analyzed user code; use static source and versioned knowledge profiles.
 
 Implementation order:
 

@@ -15,7 +15,7 @@ use crate::cache::{
 };
 use crate::change_impact::{self as change_impact_projection, SnapshotInput};
 use crate::cli::{
-    ChangeImpactArgs, CheckArgs, Command, ExitStatus, SourceBridgeArgs, StaticFactsArgs,
+    ChangeImpactArgs, CheckArgs, ColorMode, Command, ExitStatus, SourceBridgeArgs, StaticFactsArgs,
 };
 use crate::config::loader::{self, ProfileSelection, ResolutionInput};
 use crate::config::model::{ConfigFragment, ResolvedConfig};
@@ -26,7 +26,8 @@ use crate::frontend::{self, ManimSurface};
 use crate::knowledge::{self, KnowledgeProfile, SymbolKind};
 use crate::reporting::coverage::{self, CoverageFormat, CoverageReport};
 use crate::reporting::fixes::FixReport;
-use crate::reporting::{self, RenderContext, baseline, fixes, suppressions};
+use crate::reporting::rich::ColorChoice;
+use crate::reporting::{self, OutputFormat, RenderContext, baseline, fixes, suppressions};
 use crate::rules::RuleContext;
 use crate::rules::registry;
 use crate::semantic;
@@ -691,11 +692,17 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut suppression_indexes = BTreeMap::new();
 
-    for (path, bytes) in &source_snapshot {
-        let id = match bytes {
-            Some(bytes) => sources.load_bytes(path, bytes),
-            None => sources.load_file(path),
-        };
+    // Decoding, tokenizing, and parsing each file depends only on that file's
+    // bytes, so the whole set is loaded in parallel. Registration order — and
+    // therefore every FileId and every ordering derived from one — is
+    // unchanged.
+    let ids = sources.load_all(
+        source_snapshot
+            .iter()
+            .map(|(path, bytes)| (path.as_path(), bytes.as_deref())),
+    );
+
+    for id in ids {
         let file = sources.file(id);
         if let Some(diagnostic) = file.parse_diagnostic() {
             let mut diagnostic = diagnostic.clone();
@@ -1048,12 +1055,16 @@ pub fn check(args: &CheckArgs) -> Result<CheckReport, ApplicationError> {
     };
 
     let profiles = config.active_profile_names();
+    let format = resolve_format(args);
     let render_context = RenderContext {
         tool_version: crate::VERSION,
         project_root: ".",
         profiles: &profiles,
+        root: &config.project_root,
+        files_analyzed: sources.files().len(),
+        color: resolve_color(args, format),
     };
-    let output = reporting::render(args.format, &diagnostics, &render_context);
+    let output = reporting::render(format, &diagnostics, &render_context);
 
     let exit = if diagnostics
         .iter()
@@ -1086,12 +1097,19 @@ fn cached_check_report(
     analysis_cache: &mut AnalysisCache,
 ) -> CheckReport {
     let profiles = config.active_profile_names();
+    let format = resolve_format(args);
     let render_context = RenderContext {
         tool_version: crate::VERSION,
         project_root: ".",
         profiles: &profiles,
+        root: &config.project_root,
+        // A cache hit never rebuilds the file list, so the summary reports
+        // the files the cached diagnostics came from rather than inventing a
+        // count the run did not observe.
+        files_analyzed: cached_file_count(&diagnostics),
+        color: resolve_color(args, format),
     };
-    let output = reporting::render(args.format, &diagnostics, &render_context);
+    let output = reporting::render(format, &diagnostics, &render_context);
     let exit = if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.reaches(config.fail_level))
@@ -1112,6 +1130,50 @@ fn cached_check_report(
     }
 }
 
+/// Chooses the output format when `--format` was not given.
+///
+/// `rich` is for a person reading a terminal, so it is the default only when
+/// stdout is one. A pipe, a redirect, or CI keeps the stable one-line
+/// `concise` output that scripts and the existing tests parse.
+fn resolve_format(args: &CheckArgs) -> OutputFormat {
+    args.format.unwrap_or_else(|| {
+        if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            OutputFormat::Rich
+        } else {
+            OutputFormat::Concise
+        }
+    })
+}
+
+/// Decides whether the `rich` renderer emits ANSI styling.
+///
+/// `--color always` wins over everything, including a redirect, so styled
+/// output can be captured deliberately. Otherwise `NO_COLOR` (any value, per
+/// the informal standard) disables styling, and `auto` styles only a
+/// terminal. No other format is styled.
+fn resolve_color(args: &CheckArgs, format: OutputFormat) -> ColorChoice {
+    if args.color == ColorMode::Always {
+        return ColorChoice::Always;
+    }
+    if format != OutputFormat::Rich
+        || args.color == ColorMode::Never
+        || std::env::var_os("NO_COLOR").is_some()
+        || !std::io::IsTerminal::is_terminal(&std::io::stdout())
+    {
+        return ColorChoice::Never;
+    }
+    ColorChoice::Always
+}
+
+/// Files represented in a cached diagnostic set.
+fn cached_file_count(diagnostics: &[Diagnostic]) -> usize {
+    diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
 /// Reads source bytes once so the cache key and the cold analyzer consume the
 /// exact same snapshot. An unreadable file remains a normal per-file MLC000;
 /// that run simply bypasses caching because its read error is environment
@@ -1119,8 +1181,20 @@ fn cached_check_report(
 fn read_source_snapshot(files: &[PathBuf]) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     files
         .iter()
-        .map(|path| (path.clone(), std::fs::read(path).ok()))
+        .map(|path| (path.clone(), read_admissible_source(path)))
         .collect()
+}
+
+/// Reads a file only if it passes the same admission checks the source loader
+/// applies. Reading a FIFO blocks forever and a character device never ends,
+/// so both are refused on their metadata before any read starts; the loader
+/// then records the refusal as `MLC000`.
+fn read_admissible_source(path: &Path) -> Option<Vec<u8>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || crate::source_limits::check_source_length(metadata.len()).is_err() {
+        return None;
+    }
+    std::fs::read(path).ok()
 }
 
 /// Operations that need source/index state after diagnostics are produced do
@@ -2134,6 +2208,14 @@ fn walk_directory(
     entries.sort();
 
     for entry in entries {
+        // A symlink is followed only while it stays inside the project. An
+        // analyzed project can come from an untrusted checkout, and `--fix`
+        // writes back to the discovered path: without this, a link committed
+        // to a repository would let `manim-lint check --fix` rewrite an
+        // arbitrary file outside it.
+        if !path_is_inside(project_root, &entry) {
+            continue;
+        }
         let relative = crate::source::relative_posix_path(project_root, &entry);
         if entry.is_dir() {
             let name = entry
@@ -2158,6 +2240,22 @@ fn walk_directory(
         }
     }
     Ok(())
+}
+
+/// Whether `path` resolves inside `project_root`.
+///
+/// Both sides are canonicalized so a symlink is judged by where it actually
+/// leads, not by how it is spelled. A path that cannot be canonicalized (it
+/// was removed between listing and this check, or a component is unreadable)
+/// is treated as outside: refusing to analyze it is the conservative answer.
+pub(crate) fn path_is_inside(project_root: &Path, path: &Path) -> bool {
+    let Ok(root) = project_root.canonicalize() else {
+        return false;
+    };
+    let Ok(resolved) = path.canonicalize() else {
+        return false;
+    };
+    resolved.starts_with(&root)
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet, ApplicationError> {

@@ -39,7 +39,7 @@ fn copy_fixture(rule: &str) -> tempfile::TempDir {
 fn args_for(root: &Path) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Json,
+        format: Some(OutputFormat::Json),
         ..CheckArgs::default()
     }
 }
@@ -195,9 +195,9 @@ fn mlc109_empty_animation_group_golden() {
     assert_golden(
         "MLC109",
         &[
-            "alias.py:6:17 MLC109 error certain",
-            "invalid.py:6:17 MLC109 error certain",
-            "invalid.py:7:17 MLC109 error certain",
+            "alias.py:6:17 MLC109 warning high",
+            "invalid.py:6:17 MLC109 warning high",
+            "invalid.py:7:17 MLC109 warning high",
         ],
     );
 }
@@ -713,8 +713,8 @@ fn lifecycle_rule_metadata_matches_the_design_catalog() {
         ),
         (
             "MLC109",
-            Severity::Error,
-            Confidence::Certain,
+            Severity::Warning,
+            Confidence::High,
             &["qualified-calls"],
         ),
         (

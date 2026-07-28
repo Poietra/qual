@@ -6,6 +6,14 @@ rust-version = "1.85"
 description = "Static lifecycle and performance analysis for Manim scenes"
 license = "MIT"
 repository = "https://github.com/Poietra/manim-lint"
+homepage = "https://github.com/Poietra/manim-lint"
+documentation = "https://github.com/Poietra/manim-lint#readme"
+readme = "README.md"
+keywords = ["manim", "linter", "static-analysis", "animation", "python"]
+categories = ["development-tools", "command-line-utilities"]
+# The test suite depends on fixture corpora that would triple the package
+# size; run it from a repository checkout, not from the published crate.
+exclude = ["/tests", "/benchmarks", "/.github", "/.claude"]
 default-run = "manim-lint"
 
 [[bin]]
@@ -20,6 +28,9 @@ path = "src/bin/sync_manim_knowledge.rs"
 clap = { version = "4.5", features = ["derive"] }
 encoding_rs = "0.8"
 globset = "0.4"
+# A linter allocates heavily across many threads; the system allocator
+# both costs ~10% wall time here and makes the run far less consistent.
+mimalloc = { version = "0.1", default-features = false }
 pathdiff = "0.2"
 rayon = "1.10"
 rusqlite = { version = "0.32", features = ["bundled"] }

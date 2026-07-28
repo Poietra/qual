@@ -48,7 +48,7 @@ fn write_project(root: &Path) {
 fn args_for(root: &Path, format: OutputFormat) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format,
+        format: Some(format),
         ..CheckArgs::default()
     }
 }

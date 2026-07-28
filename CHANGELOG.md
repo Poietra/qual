@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A `rich` output format, and it is the default in a terminal.** Each finding
+  gets a severity banner, the offending source line with its span underlined,
+  two lines of context, the explanation, and a run summary
+  (`✖ 2 errors  ⚠ 1 warning  in 1 file`). Redirected or piped output stays
+  `concise` — one stable line per diagnostic, no escape sequences — so scripts
+  and CI keep parsing what they parse today. `--format` overrides the choice
+  either way.
+- **`--color auto|always|never`.** `auto` styles only a terminal, `NO_COLOR`
+  disables styling regardless, and `--color always` styles even when
+  redirected. Only `rich` is ever styled. `COLUMNS` sets the rendered width.
+
+  Frames are read lazily from disk, so a cache hit still answers without
+  building a `SourceManager`. A file that changed or vanished since the
+  analysis renders without its frame rather than failing.
+- `THIRD-PARTY-LICENSES.md` — dependency license survey, including the
+  LGPL-3.0-only `malachite` family that `rustpython-parser` links statically
+  and what it obliges when distributing a prebuilt binary.
+
+### Performance
+
+- **Cold analysis of a 393-file project: ~5.9 s to ~4.9 s**, warm cache
+  unchanged at 0.05 s. Source decoding, tokenizing, and parsing ran one file
+  at a time (1.92 s wall at 1.65 s of CPU) and now run in parallel (1.00 s),
+  registering in the same order so `FileId`s and every ordering derived from
+  one are identical. The remaining cost is summarizing ~5,600 callables and is
+  allocation-bound rather than a scheduling problem — the dependency scan is
+  3 ms and the worst-parallelizing rounds are 22 ms of 4,067 ms — so the
+  binary now uses mimalloc, which also cuts the run-to-run spread from 0.91 s
+  to 0.06 s at the same peak memory. Findings are unchanged on all four
+  measured corpora.
+
+### Fixed
+
+- **Untrusted input can no longer abort the process.** The 0.2.0 limits missed
+  every chain that nests without nesting brackets — `a()()()`, `a.b.b.b`,
+  `1 + 1 + 1`, `lambda: lambda:` — each of which overflowed the stack. Tokens
+  per logical line are now bounded (8,192; the largest real logical line
+  measured is 1,361), which bounds tree depth for all of them at once. A FIFO
+  no longer blocks forever and a character device no longer reads without end:
+  file type and size are checked on the directory entry, before opening.
+- **`--fix` can no longer write outside the project.** Symlinks were followed
+  wherever they led, so a link committed to a repository let
+  `manim-lint check --fix` rewrite an arbitrary file elsewhere on the machine.
+  Paths that resolve outside the project root are skipped at discovery and
+  refused again immediately before the write.
+- **`MLC109` no longer claims certainty it does not have.** An empty
+  `AnimationGroup()` is built with run time 0 and is harmless when nested;
+  only reaching `Scene.play` as the whole animation fails. It is now a
+  `warning` at `high` confidence, and the message says what is actually true.
+  On ManimML this converted 29 certain errors into warnings.
+
+### Changed
+
+- The knowledge-drift gate reads `MANIM_LINT_MANIM_ROOT` (default `../manim`)
+  instead of a hardcoded path on the author's machine, which CI had been
+  recreating on the runner with `sudo` and which no contributor could match.
+- Package metadata is publishable: repository, homepage, keywords, categories,
+  and an `exclude` that keeps fixture corpora out of the crate. The README
+  install step names the actual repository.
+
 ## [0.2.0] - 2026-07-28
 
 Everything since 0.1.0: two external-review waves verified and fixed

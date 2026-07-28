@@ -33,7 +33,7 @@ fn write_project_with(pyproject: &str, scene: &str) -> tempfile::TempDir {
 fn args_for(root: &Path) -> CheckArgs {
     CheckArgs {
         paths: vec![root.to_path_buf()],
-        format: OutputFormat::Concise,
+        format: Some(OutputFormat::Concise),
         ..CheckArgs::default()
     }
 }

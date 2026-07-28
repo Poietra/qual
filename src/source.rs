@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
 use rustpython_parser::lexer::lex;
 use rustpython_parser::text_size::TextRange;
 use rustpython_parser::{Mode, Tok, ast, parse};
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, SourcePosition, SourceSpan};
 use crate::rules::registry;
-use crate::source_limits::{check_source_bytes, check_token_nesting};
+use crate::source_limits::{check_source_bytes, check_source_length, check_token_nesting};
 
 /// Stable handle for a file registered in a [`SourceManager`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -264,11 +265,16 @@ impl SourceManager {
     ///
     /// Read and decode failures are recorded as `MLC000` on the returned
     /// file; they never abort the whole analysis.
+    ///
+    /// The size and file-type admission checks run on the directory entry
+    /// before any read: `fs::read` on a FIFO blocks forever and on a character
+    /// device never ends, so a limit applied to the returned bytes would come
+    /// too late.
     pub fn load_file(&mut self, path: &Path) -> FileId {
-        match std::fs::read(path) {
-            Ok(bytes) => self.load_bytes(path, &bytes),
-            Err(error) => self.register_failure(path, &format!("cannot read file: {error}")),
-        }
+        let file = build_from_disk(FileId(self.files.len()), &self.project_root, path);
+        let id = file.id;
+        self.files.push(file);
+        id
     }
 
     /// Registers an in-memory byte stream as if it had been read from `path`.
@@ -276,13 +282,10 @@ impl SourceManager {
     /// A source that exceeds an admission limit is recorded as `MLC000` and
     /// never reaches the parser.
     pub fn load_bytes(&mut self, path: &Path, bytes: &[u8]) -> FileId {
-        if let Err(violation) = check_source_bytes(bytes) {
-            return self.register_failure(path, &violation.message());
-        }
-        match decode_python_source(bytes) {
-            Ok((text, encoding)) => self.register_text(path, text, encoding),
-            Err(message) => self.register_failure(path, &message),
-        }
+        let file = build_from_bytes(FileId(self.files.len()), &self.project_root, path, bytes);
+        let id = file.id;
+        self.files.push(file);
+        id
     }
 
     /// All registered files in load order.
@@ -297,86 +300,165 @@ impl SourceManager {
         &self.files[id.0]
     }
 
-    fn register_text(&mut self, path: &Path, text: String, encoding: SourceEncoding) -> FileId {
-        let id = FileId(self.files.len());
-        let relative_path = relative_posix_path(&self.project_root, path);
-        let line_starts = compute_line_starts(&text);
-        let newline = detect_newline_style(&text);
-        let tokens = collect_tokens(&text);
-        let comments = collect_comments(&text, &tokens, &line_starts);
+    /// Loads many files, decoding and parsing them in parallel.
+    ///
+    /// Files are registered in the order given, so `FileId`s — and every
+    /// ordering derived from them — are identical to loading one at a time.
+    /// Each file is built from its own bytes and the project root alone, which
+    /// is what makes the parallelism sound.
+    pub fn load_all<'a>(
+        &mut self,
+        inputs: impl IntoIterator<Item = (&'a Path, Option<&'a [u8]>)>,
+    ) -> Vec<FileId> {
+        let inputs: Vec<(&Path, Option<&[u8]>)> = inputs.into_iter().collect();
+        let base = self.files.len();
+        let built: Vec<SourceFile> = inputs
+            .par_iter()
+            .enumerate()
+            .map(|(offset, (path, bytes))| {
+                let id = FileId(base + offset);
+                match bytes {
+                    Some(bytes) => build_from_bytes(id, &self.project_root, path, bytes),
+                    None => build_from_disk(id, &self.project_root, path),
+                }
+            })
+            .collect();
+        let ids = built.iter().map(|file| file.id).collect();
+        self.files.extend(built);
+        ids
+    }
+}
 
-        let mut file = SourceFile {
-            id,
-            path: path.to_path_buf(),
-            relative_path,
-            text,
-            encoding,
-            newline,
-            line_starts,
-            ast: None,
-            tokens,
-            comments,
-            diagnostic: None,
-        };
-        if let Err(violation) = check_token_nesting(&file.tokens) {
-            // Parsing this file would recurse past the native stack and abort
-            // the process, so the file is skipped while every other file is
-            // still analyzed.
-            let position = SourcePosition { line: 1, column: 1 };
-            file.diagnostic = Some(syntax_error_diagnostic(
-                &file.relative_path,
-                SourceSpan {
-                    start: position,
-                    end: position,
-                },
-                &violation.message(),
-            ));
-            self.files.push(file);
-            return id;
-        }
-        match parse(&file.text, Mode::Module, &file.path.display().to_string()) {
-            Ok(ast::Mod::Module(module)) => file.ast = Some(module),
-            Ok(_) => unreachable!("Mode::Module always produces Mod::Module"),
-            Err(error) => {
-                let start = file.position_of_byte(error.offset.into());
-                let span = SourceSpan { start, end: start };
-                file.diagnostic = Some(syntax_error_diagnostic(
-                    &file.relative_path,
-                    span,
-                    &format!("syntax error: {}", error.error),
-                ));
+/// Reads, decodes, and parses one file, honoring the admission limits.
+fn build_from_disk(id: FileId, project_root: &Path, path: &Path) -> SourceFile {
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() {
+                return build_failure(
+                    id,
+                    project_root,
+                    path,
+                    "cannot read file: not a regular file (a directory, symlink target, \
+                     socket, device, or FIFO cannot be analyzed)",
+                );
+            }
+            if let Err(violation) = check_source_length(metadata.len()) {
+                return build_failure(id, project_root, path, &violation.message());
             }
         }
-        self.files.push(file);
-        id
+        Err(error) => {
+            return build_failure(
+                id,
+                project_root,
+                path,
+                &format!("cannot read file: {error}"),
+            );
+        }
     }
-
-    fn register_failure(&mut self, path: &Path, message: &str) -> FileId {
-        let id = FileId(self.files.len());
-        let relative_path = relative_posix_path(&self.project_root, path);
-        let position = SourcePosition { line: 1, column: 1 };
-        let span = SourceSpan {
-            start: position,
-            end: position,
-        };
-        let diagnostic = syntax_error_diagnostic(&relative_path, span, message);
-        self.files.push(SourceFile {
+    match std::fs::read(path) {
+        Ok(bytes) => build_from_bytes(id, project_root, path, &bytes),
+        Err(error) => build_failure(
             id,
-            path: path.to_path_buf(),
-            relative_path,
-            text: String::new(),
-            encoding: SourceEncoding {
-                label: "unknown".to_owned(),
-                byte_order_mark: false,
+            project_root,
+            path,
+            &format!("cannot read file: {error}"),
+        ),
+    }
+}
+
+/// Decodes and parses one in-memory byte stream.
+fn build_from_bytes(id: FileId, project_root: &Path, path: &Path, bytes: &[u8]) -> SourceFile {
+    if let Err(violation) = check_source_bytes(bytes) {
+        return build_failure(id, project_root, path, &violation.message());
+    }
+    match decode_python_source(bytes) {
+        Ok((text, encoding)) => build_parsed(id, project_root, path, text, encoding),
+        Err(message) => build_failure(id, project_root, path, &message),
+    }
+}
+
+/// Tokenizes and parses decoded text into a registered file.
+fn build_parsed(
+    id: FileId,
+    project_root: &Path,
+    path: &Path,
+    text: String,
+    encoding: SourceEncoding,
+) -> SourceFile {
+    let relative_path = relative_posix_path(project_root, path);
+    let line_starts = compute_line_starts(&text);
+    let newline = detect_newline_style(&text);
+    let tokens = collect_tokens(&text);
+    let comments = collect_comments(&text, &tokens, &line_starts);
+
+    let mut file = SourceFile {
+        id,
+        path: path.to_path_buf(),
+        relative_path,
+        text,
+        encoding,
+        newline,
+        line_starts,
+        ast: None,
+        tokens,
+        comments,
+        diagnostic: None,
+    };
+    if let Err(violation) = check_token_nesting(&file.tokens) {
+        // Parsing this file would recurse past the native stack and abort
+        // the process, so the file is skipped while every other file is
+        // still analyzed.
+        let position = SourcePosition { line: 1, column: 1 };
+        file.diagnostic = Some(syntax_error_diagnostic(
+            &file.relative_path,
+            SourceSpan {
+                start: position,
+                end: position,
             },
-            newline: NewlineStyle::Lf,
-            line_starts: vec![0],
-            ast: None,
-            tokens: Vec::new(),
-            comments: Vec::new(),
-            diagnostic: Some(diagnostic),
-        });
-        id
+            &violation.message(),
+        ));
+        return file;
+    }
+    match parse(&file.text, Mode::Module, &file.path.display().to_string()) {
+        Ok(ast::Mod::Module(module)) => file.ast = Some(module),
+        Ok(_) => unreachable!("Mode::Module always produces Mod::Module"),
+        Err(error) => {
+            let start = file.position_of_byte(error.offset.into());
+            let span = SourceSpan { start, end: start };
+            file.diagnostic = Some(syntax_error_diagnostic(
+                &file.relative_path,
+                span,
+                &format!("syntax error: {}", error.error),
+            ));
+        }
+    }
+    file
+}
+
+/// Builds a file that carries only an `MLC000` load failure.
+fn build_failure(id: FileId, project_root: &Path, path: &Path, message: &str) -> SourceFile {
+    let relative_path = relative_posix_path(project_root, path);
+    let position = SourcePosition { line: 1, column: 1 };
+    let span = SourceSpan {
+        start: position,
+        end: position,
+    };
+    let diagnostic = syntax_error_diagnostic(&relative_path, span, message);
+    SourceFile {
+        id,
+        path: path.to_path_buf(),
+        relative_path,
+        text: String::new(),
+        encoding: SourceEncoding {
+            label: "unknown".to_owned(),
+            byte_order_mark: false,
+        },
+        newline: NewlineStyle::Lf,
+        line_starts: vec![0],
+        ast: None,
+        tokens: Vec::new(),
+        comments: Vec::new(),
+        diagnostic: Some(diagnostic),
     }
 }
 

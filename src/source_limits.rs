@@ -15,7 +15,7 @@ use rustpython_parser::Tok;
 use rustpython_parser::text_size::TextRange;
 
 /// Largest source accepted for analysis, in bytes.
-pub const MAX_SOURCE_BYTES_V1: usize = 4 * 1024 * 1024;
+pub const MAX_SOURCE_BYTES_V1: u64 = 4 * 1024 * 1024;
 
 /// Largest accepted bracket or indentation nesting depth.
 pub const MAX_NESTING_DEPTH_V1: u32 = 96;
@@ -27,13 +27,27 @@ pub const MAX_NESTING_DEPTH_V1: u32 = 96;
 /// measure.
 pub const MAX_PREFIX_OPERATOR_RUN_V1: u32 = 64;
 
+/// Largest accepted number of tokens in one logical line.
+///
+/// Bracket and indentation depth do not bound how deep the parsed tree gets:
+/// `a()()()...`, `a.b.b.b...`, `1 + 1 + 1 ...`, and `lambda: lambda: ...` each
+/// build one node per repetition while staying at depth one. Every such chain
+/// must fit in a single logical line, so bounding the tokens per logical line
+/// bounds tree depth for all of them at once, including shapes not enumerated
+/// here.
+///
+/// The largest logical line observed across the Manim Community sources and
+/// three third-party Manim projects is 1,361 tokens (a generated data table);
+/// the smallest chain that aborts a debug build is 32,001.
+pub const MAX_LOGICAL_LINE_TOKENS_V1: u32 = 8192;
+
 /// A limit that a source exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceLimitViolation {
     /// The encoded source is larger than [`MAX_SOURCE_BYTES_V1`].
     SourceBytes {
         /// Observed size in bytes.
-        observed: usize,
+        observed: u64,
     },
     /// Bracket nesting is deeper than [`MAX_NESTING_DEPTH_V1`].
     BracketDepth {
@@ -48,6 +62,11 @@ pub enum SourceLimitViolation {
     /// A prefix-operator run is longer than [`MAX_PREFIX_OPERATOR_RUN_V1`].
     PrefixOperatorRun {
         /// Observed run length.
+        observed: u32,
+    },
+    /// A logical line holds more than [`MAX_LOGICAL_LINE_TOKENS_V1`] tokens.
+    LogicalLineTokens {
+        /// Observed token count.
         observed: u32,
     },
 }
@@ -69,19 +88,25 @@ impl SourceLimitViolation {
             Self::PrefixOperatorRun { observed } => format!(
                 "cannot analyze file: a run of {observed} prefix operators exceeds the limit of {MAX_PREFIX_OPERATOR_RUN_V1}"
             ),
+            Self::LogicalLineTokens { observed } => format!(
+                "cannot analyze file: a logical line of {observed} tokens exceeds the limit of {MAX_LOGICAL_LINE_TOKENS_V1}"
+            ),
         }
     }
 }
 
 /// Rejects an encoded source that is too large to analyze.
-///
-/// This runs before decoding so a hostile file is never materialized as a
-/// `String`.
 pub const fn check_source_bytes(bytes: &[u8]) -> Result<(), SourceLimitViolation> {
-    if bytes.len() > MAX_SOURCE_BYTES_V1 {
-        return Err(SourceLimitViolation::SourceBytes {
-            observed: bytes.len(),
-        });
+    check_source_length(bytes.len() as u64)
+}
+
+/// Rejects a file whose reported length is too large to analyze.
+///
+/// Callers use this on directory-entry metadata so an oversized file is never
+/// read into memory at all.
+pub const fn check_source_length(length: u64) -> Result<(), SourceLimitViolation> {
+    if length > MAX_SOURCE_BYTES_V1 {
+        return Err(SourceLimitViolation::SourceBytes { observed: length });
     }
     Ok(())
 }
@@ -94,8 +119,26 @@ pub fn check_token_nesting(tokens: &[(Tok, TextRange)]) -> Result<(), SourceLimi
     let mut bracket_depth: u32 = 0;
     let mut indent_depth: u32 = 0;
     let mut prefix_run: u32 = 0;
+    let mut logical_line_tokens: u32 = 0;
 
     for (token, _) in tokens {
+        // Bracket and indent depth stay at one for chained calls, attributes,
+        // binary operators, and lambdas, so tree depth is bounded here by the
+        // size of the logical line that must contain the whole chain.
+        if matches!(token, Tok::Newline) {
+            logical_line_tokens = 0;
+        } else if !matches!(
+            token,
+            Tok::NonLogicalNewline | Tok::Comment(_) | Tok::Indent | Tok::Dedent
+        ) {
+            logical_line_tokens = logical_line_tokens.saturating_add(1);
+            if logical_line_tokens > MAX_LOGICAL_LINE_TOKENS_V1 {
+                return Err(SourceLimitViolation::LogicalLineTokens {
+                    observed: logical_line_tokens,
+                });
+            }
+        }
+
         match token {
             Tok::Lpar | Tok::Lsqb | Tok::Lbrace => {
                 bracket_depth = bracket_depth.saturating_add(1);
@@ -232,7 +275,8 @@ mod tests {
 
     #[test]
     fn oversized_sources_are_rejected_without_decoding() {
-        let bytes = vec![b'#'; MAX_SOURCE_BYTES_V1 + 1];
+        let over_limit = usize::try_from(MAX_SOURCE_BYTES_V1).expect("limit fits usize") + 1;
+        let bytes = vec![b'#'; over_limit];
         let error = check_source_bytes(&bytes).expect_err("size is over the limit");
         assert!(matches!(error, SourceLimitViolation::SourceBytes { .. }));
     }

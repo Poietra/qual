@@ -559,8 +559,15 @@ pub const MLC109: RuleMetadata = RuleMetadata {
     id: "MLC109",
     summary: "AnimationGroup / Succession constructed without animations",
     default_enabled: true,
-    default_severity: Severity::Error,
-    minimum_confidence: Confidence::Certain,
+    // Constructing an empty group is not itself an error in Manim 0.20:
+    // `build_animations_with_timings` returns early for zero members and
+    // `init_run_time` takes `max(..., default=0)`, so the group is built with
+    // run time 0 and nesting it inside a non-empty parent is harmless. It
+    // fails only when it reaches `Scene.play` as the whole animation, where
+    // run time 0 is rejected. Whether this construction reaches a play is not
+    // decided here, so the finding cannot claim certainty.
+    default_severity: Severity::Warning,
+    minimum_confidence: Confidence::High,
     implementation_phase: 1,
     required_profiles: &[],
     required_capabilities: &["qualified-calls"],
@@ -605,12 +612,16 @@ impl Rule for EmptyAnimationGroup {
                 format!(
                     "Pass at least one animation to `{class_name}(...)`: keyword \
                      arguments such as `lag_ratio` configure timing but provide no \
-                     animations, and an empty group fails at render time."
+                     animations, so this group animates nothing and playing it on \
+                     its own aborts the render."
                 ),
                 format!(
-                    "`{class_name}` derives its run time and interpolation plan from \
-                     its member animations; with zero members the group cannot be \
-                     compiled into a playable animation."
+                    "`{class_name}` derives its run time from its members, and with \
+                     zero members that run time is 0. Nesting the empty group inside \
+                     a non-empty group is harmless — it contributes nothing — but \
+                     passing it to `Scene.play` as the whole animation raises \
+                     `ValueError` in `Scene.validate_run_time`, which rejects a \
+                     duration of 0. Use the group only if something can populate it."
                 ),
                 evidence,
             ));

@@ -206,7 +206,7 @@
         "note": "default.cfg: delayed readback buffer count; enabled values must be >= 2."
       }
     ],
-    "note": "Curated by hand from the fork working tree at /home/hosi/manim (base commit 4d25c031 plus uncommitted optimizations); every fact cites the gate function or config file it was read from and is reviewer-verified, not generator-extracted. Fast-path interpretation is local-fork-overlay only: upstream_0_20 lacks this block entirely, keeping MLP214/MLP225 and cairo_fork_workers / cairo_static_layers fast-path semantics inert there (DESIGN 7.3). Calibration numbers quoted in notes are machine-specific evidence (docs/research/perf-evidence.md), never portable truth."
+    "note": "Curated by hand from a private Manim fork working tree (base commit 4d25c031 plus optimizations that are not published); this overlay is therefore not independently reproducible and is never the default profile; every fact cites the gate function or config file it was read from and is reviewer-verified, not generator-extracted. Fast-path interpretation is local-fork-overlay only: upstream_0_20 lacks this block entirely, keeping MLP214/MLP225 and cairo_fork_workers / cairo_static_layers fast-path semantics inert there (DESIGN 7.3). Calibration numbers quoted in notes are machine-specific evidence (docs/research/perf-evidence.md), never portable truth."
   },
   "symbols": {
     "manim.constants.CAIRO_ANTIALIAS_MODES": {
