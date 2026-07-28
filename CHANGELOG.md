@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LGPL-3.0-only `malachite` family that `rustpython-parser` links statically
   and what it obliges when distributing a prebuilt binary.
 
+### Performance
+
+- **Cold analysis of a 393-file project: ~5.9 s to ~4.9 s**, warm cache
+  unchanged at 0.05 s. Source decoding, tokenizing, and parsing ran one file
+  at a time (1.92 s wall at 1.65 s of CPU) and now run in parallel (1.00 s),
+  registering in the same order so `FileId`s and every ordering derived from
+  one are identical. The remaining cost is summarizing ~5,600 callables and is
+  allocation-bound rather than a scheduling problem — the dependency scan is
+  3 ms and the worst-parallelizing rounds are 22 ms of 4,067 ms — so the
+  binary now uses mimalloc, which also cuts the run-to-run spread from 0.91 s
+  to 0.06 s at the same peak memory. Findings are unchanged on all four
+  measured corpora.
+
 ### Fixed
 
 - **Untrusted input can no longer abort the process.** The 0.2.0 limits missed
