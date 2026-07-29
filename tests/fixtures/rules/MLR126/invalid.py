@@ -11,4 +11,4 @@ class Bad(Scene):
         sq.set_fill(color, 1.2)
         sq.set_stroke(width=-3)
         sq.set_stroke(opacity=1.01)
-        sq.set_opacity(-0.5)  # manim-lint: ignore[MLR126]
+        sq.set_opacity(-0.5)  # qual: ignore[MLR126]

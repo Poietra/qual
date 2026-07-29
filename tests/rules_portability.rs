@@ -11,15 +11,15 @@
 //! `MLD307`).
 //!
 //! The tests copy a fixture into a temp project, run the full
-//! `manim_lint::application::check` pipeline, and assert the exact
+//! `qual::application::check` pipeline, and assert the exact
 //! diagnostic set (rule, line, column, severity, confidence) per file.
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::CheckArgs;
-use manim_lint::diagnostic::{Confidence, Diagnostic, Severity};
-use manim_lint::reporting::OutputFormat;
+use qual::application::check;
+use qual::cli::CheckArgs;
+use qual::diagnostic::{Confidence, Diagnostic, Severity};
+use qual::reporting::OutputFormat;
 
 /// One expected diagnostic, located by a source needle instead of a
 /// hard-coded line/column so the fixtures stay editable.
@@ -190,7 +190,7 @@ fn find<'a>(diagnostics: &'a [Diagnostic], file: &str, rule: &str, index: usize)
 // ---------------------------------------------------------------------------
 
 const MLD301_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD301\"]
 ";
 
@@ -227,7 +227,7 @@ fn mld301_flags_fixed_step_updater_mutations_without_dt() {
 // ---------------------------------------------------------------------------
 
 const MLD302_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD302\"]
 min-confidence = \"low\"
 ";
@@ -267,16 +267,16 @@ fn mld302_flags_unseeded_global_random_in_hot_contexts_only() {
 // ---------------------------------------------------------------------------
 
 const MLD303_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD303\"]
 ";
 
 const MLD303_WINDOWS_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD303\"]
 default-profile = \"win\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"win\"
 platform = \"windows\"
 ";
@@ -328,16 +328,16 @@ fn mld303_flags_posix_absolute_paths_under_a_windows_platform() {
 // ---------------------------------------------------------------------------
 
 const MLD304_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD304\"]
 min-confidence = \"low\"
 default-profile = \"cairo\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"cairo\"
 renderer = \"cairo\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"opengl\"
 renderer = \"opengl\"
 ";
@@ -419,21 +419,21 @@ fn mld304_flags_unguarded_moving_camera_frame_use_in_multi_renderer_runs() {
 // ---------------------------------------------------------------------------
 
 const MLD305_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD305\"]
 default-profile = \"render\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"render\"
 assets-dir = \"assets\"
 ";
 
 const MLD305_WINDOWS_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD305\"]
 default-profile = \"win\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"win\"
 platform = \"windows\"
 assets-dir = \"assets\"
@@ -482,11 +482,11 @@ fn mld305_stays_silent_for_case_insensitive_target_platforms() {
 }
 
 const MLD305_WITH_MLR104_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD305\", \"MLR104\"]
 default-profile = \"render\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"render\"
 assets-dir = \"assets\"
 ";
@@ -556,17 +556,17 @@ fn suppressing_the_specific_rule_does_not_resurrect_the_superseded_generic() {
 // ---------------------------------------------------------------------------
 
 const MLD306_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD306\"]
 default-profile = \"prod\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"prod\"
 allowed-fonts = [\"Noto Sans\", \"Noto Sans CJK JP\"]
 ";
 
 const MLD306_NO_ALLOWLIST_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD306\"]
 ";
 
@@ -605,7 +605,7 @@ fn mld306_stays_silent_without_an_allowlist() {
 // ---------------------------------------------------------------------------
 
 const MLD307_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 select = [\"MLD307\"]
 min-confidence = \"low\"
 ";

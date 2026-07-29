@@ -1,6 +1,6 @@
 # Corpus and adversarial evidence
 
-Measurements taken before promoting manim-lint from a developer tool to a
+Measurements taken before promoting qual from a developer tool to a
 pre-execution admission check for a hosted render service. They record what the
 analyzer actually did on real third-party sources and on inputs chosen to break
 it — not what its own test suite asserts.

@@ -97,7 +97,7 @@ impl std::str::FromStr for ColorMode {
 /// Top-level CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "manim-lint",
+    name = "qual",
     version,
     about = "Static lifecycle and performance analysis for Manim scenes"
 )]
@@ -147,7 +147,7 @@ pub enum Command {
     SourceBridge(SourceBridgeArgs),
 }
 
-/// Options for `manim-lint source-bridge`.
+/// Options for `qual source-bridge`.
 #[derive(Debug, Args)]
 pub struct SourceBridgeArgs {
     /// Source file or project directory to analyze.
@@ -169,7 +169,7 @@ pub struct SourceBridgeArgs {
     pub resolution: Option<Resolution>,
 }
 
-/// Options for `manim-lint change-impact`.
+/// Options for `qual change-impact`.
 #[derive(Debug, Args)]
 pub struct ChangeImpactArgs {
     /// Base source file or project directory (the state before the edit).
@@ -193,7 +193,7 @@ pub struct ChangeImpactArgs {
     pub resolution: Option<Resolution>,
 }
 
-/// Options for `manim-lint static-facts`.
+/// Options for `qual static-facts`.
 ///
 /// Diagnostic selectors are deliberately absent: `StaticFacts` always computes
 /// every fact capability in its public contract.
@@ -215,7 +215,7 @@ pub struct StaticFactsArgs {
     pub resolution: Option<Resolution>,
 }
 
-/// Options for `manim-lint check`.
+/// Options for `qual check`.
 #[derive(Debug, Args, Default)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -294,7 +294,7 @@ pub fn run() -> ExitCode {
             execution.exit.into()
         }
         Err(error) => {
-            eprintln!("manim-lint: error: {error}");
+            eprintln!("qual: error: {error}");
             ExitStatus::Error.into()
         }
     }
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn cli_parses_check_options() {
         let cli = Cli::try_parse_from([
-            "manim-lint",
+            "qual",
             "check",
             "scenes",
             "--select",
@@ -362,22 +362,21 @@ mod tests {
 
     #[test]
     fn cli_rejects_unknown_format() {
-        assert!(Cli::try_parse_from(["manim-lint", "check", "--format", "xml"]).is_err());
+        assert!(Cli::try_parse_from(["qual", "check", "--format", "xml"]).is_err());
     }
 
     #[test]
     fn cli_parses_the_coverage_subcommand_and_analysis_summary_flag() {
-        let cli = Cli::try_parse_from(["manim-lint", "coverage", "scenes", "--format", "json"])
+        let cli = Cli::try_parse_from(["qual", "coverage", "scenes", "--format", "json"])
             .expect("parses");
         let Command::Coverage { paths, format } = cli.command else {
             panic!("expected coverage");
         };
         assert_eq!(paths, vec![PathBuf::from("scenes")]);
         assert_eq!(format, CoverageFormat::Json);
-        assert!(Cli::try_parse_from(["manim-lint", "coverage", "--format", "xml"]).is_err());
+        assert!(Cli::try_parse_from(["qual", "coverage", "--format", "xml"]).is_err());
 
-        let cli =
-            Cli::try_parse_from(["manim-lint", "check", "--analysis-summary"]).expect("parses");
+        let cli = Cli::try_parse_from(["qual", "check", "--analysis-summary"]).expect("parses");
         let Command::Check(args) = cli.command else {
             panic!("expected check");
         };
@@ -387,7 +386,7 @@ mod tests {
     #[test]
     fn cli_parses_static_facts_without_rule_selectors() {
         let cli = Cli::try_parse_from([
-            "manim-lint",
+            "qual",
             "static-facts",
             "scenes",
             "--profile",
@@ -402,32 +401,26 @@ mod tests {
         assert_eq!(args.paths, vec![PathBuf::from("scenes")]);
         assert_eq!(args.profile.as_deref(), Some("production"));
         assert_eq!(args.renderer, Some(Renderer::Cairo));
-        assert!(Cli::try_parse_from(["manim-lint", "static-facts", "--select", "MLC"]).is_err());
+        assert!(Cli::try_parse_from(["qual", "static-facts", "--select", "MLC"]).is_err());
     }
 
     #[test]
     fn cli_requires_both_change_impact_snapshots() {
-        let cli = Cli::try_parse_from([
-            "manim-lint",
-            "change-impact",
-            "--before",
-            "old",
-            "--after",
-            "new",
-        ])
-        .expect("parses");
+        let cli =
+            Cli::try_parse_from(["qual", "change-impact", "--before", "old", "--after", "new"])
+                .expect("parses");
         let Command::ChangeImpact(args) = cli.command else {
             panic!("expected change-impact");
         };
         assert_eq!(args.before, PathBuf::from("old"));
         assert_eq!(args.after, PathBuf::from("new"));
-        assert!(Cli::try_parse_from(["manim-lint", "change-impact", "--before", "old"]).is_err());
+        assert!(Cli::try_parse_from(["qual", "change-impact", "--before", "old"]).is_err());
     }
 
     #[test]
     fn cli_requires_source_bridge_project_and_request() {
         let cli = Cli::try_parse_from([
-            "manim-lint",
+            "qual",
             "source-bridge",
             "project",
             "--request",
@@ -439,6 +432,6 @@ mod tests {
         };
         assert_eq!(args.path, PathBuf::from("project"));
         assert_eq!(args.request, PathBuf::from("patch.json"));
-        assert!(Cli::try_parse_from(["manim-lint", "source-bridge", "project"]).is_err());
+        assert!(Cli::try_parse_from(["qual", "source-bridge", "project"]).is_err());
     }
 }

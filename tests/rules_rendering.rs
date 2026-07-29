@@ -15,15 +15,15 @@
 //! case) instead of `alias.py`.
 //!
 //! The tests copy a fixture into a temp project, run the full
-//! `manim_lint::application::check` pipeline, and assert the exact
+//! `qual::application::check` pipeline, and assert the exact
 //! diagnostic set (rule, line, column, severity, confidence) per file.
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::CheckArgs;
-use manim_lint::diagnostic::{Confidence, Diagnostic, FixApplicability, Severity};
-use manim_lint::reporting::OutputFormat;
+use qual::application::check;
+use qual::cli::CheckArgs;
+use qual::diagnostic::{Confidence, Diagnostic, FixApplicability, Severity};
+use qual::reporting::OutputFormat;
 
 /// One expected diagnostic, located by a source needle instead of a
 /// hard-coded line/column so the fixtures stay editable.
@@ -150,7 +150,7 @@ fn run_fixture(rule: &str, pyproject: &str) -> (tempfile::TempDir, Vec<Diagnosti
     run_fixture_with_profile(rule, pyproject, None)
 }
 
-const DEFAULT_PYPROJECT: &str = "[tool.manim-lint]\n";
+const DEFAULT_PYPROJECT: &str = "[tool.qual]\n";
 
 /// One-based (line, column) of the `occurrence`-th `needle` match plus
 /// `offset` characters.
@@ -359,10 +359,10 @@ fn mlr103_flags_python_escape_tex_collisions_in_non_raw_literals() {
 // ---------------------------------------------------------------------------
 
 const MLR104_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 default-profile = \"render\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"render\"
 assets-dir = \"assets\"
 ";
@@ -425,10 +425,10 @@ fn mlr104_resolves_assets_exactly_like_manim() {
 }
 
 const MLR104_WINDOWS_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 default-profile = \"win\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"win\"
 platform = \"windows\"
 assets-dir = \"assets\"
@@ -464,7 +464,7 @@ fn mlr104_absolute_out_of_project_path_declares_environment_dependence() {
     std::fs::write(
         project.path().join("scene.py"),
         "from manim import *\n\n\nclass Abs(Scene):\n    def construct(self):\n        \
-         a = ImageMobject(\"/nonexistent-manim-lint-probe/pic.png\")\n",
+         a = ImageMobject(\"/nonexistent-qual-probe/pic.png\")\n",
     )
     .unwrap();
     std::fs::write(project.path().join("pyproject.toml"), MLR104_PYPROJECT).unwrap();
@@ -882,15 +882,15 @@ fn dual_renderer_pyproject(rules: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "[tool.manim-lint]\n\
+        "[tool.qual]\n\
          select = [{select}]\n\
          default-profile = \"cairo\"\n\
          \n\
-         [[tool.manim-lint.profile]]\n\
+         [[tool.qual.profile]]\n\
          name = \"cairo\"\n\
          renderer = \"cairo\"\n\
          \n\
-         [[tool.manim-lint.profile]]\n\
+         [[tool.qual.profile]]\n\
          name = \"opengl\"\n\
          renderer = \"opengl\"\n"
     )
@@ -972,8 +972,7 @@ fn mlr108_flags_mutation_after_a_divergent_unfix_under_an_opengl_target() {
 
 #[test]
 fn mlr110_flags_only_structural_tex_errors_in_the_literal_subset() {
-    let (project, diagnostics) =
-        run_fixture("MLR110", "[tool.manim-lint]\nselect = [\"MLR110\"]\n");
+    let (project, diagnostics) = run_fixture("MLR110", "[tool.qual]\nselect = [\"MLR110\"]\n");
     assert_file_diagnostics(
         project.path(),
         &diagnostics,
@@ -1077,8 +1076,7 @@ fn mlr112_flags_literal_per_curve_layout_assumptions_per_renderer() {
 
 #[test]
 fn mlr116_flags_path_edits_on_a_provably_empty_path_only() {
-    let (project, diagnostics) =
-        run_fixture("MLR116", "[tool.manim-lint]\nselect = [\"MLR116\"]\n");
+    let (project, diagnostics) = run_fixture("MLR116", "[tool.qual]\nselect = [\"MLR116\"]\n");
     assert_file_diagnostics(
         project.path(),
         &diagnostics,
@@ -1108,7 +1106,7 @@ fn mlr116_flags_path_edits_on_a_provably_empty_path_only() {
 
 #[test]
 fn mlr109_flags_a_direct_reader_before_its_frame_varying_writer() {
-    let pyproject = "[tool.manim-lint]\nselect = [\"MLR109\"]\nmin-confidence = \"medium\"\n";
+    let pyproject = "[tool.qual]\nselect = [\"MLR109\"]\nmin-confidence = \"medium\"\n";
     let (project, diagnostics) = run_fixture("MLR109", pyproject);
     assert_file_diagnostics(
         project.path(),

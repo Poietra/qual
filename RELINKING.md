@@ -1,6 +1,6 @@
 # Relinking the LGPL components
 
-Official prebuilt `manim-lint` artifacts contain the `malachite` family of
+Official prebuilt `qual` artifacts contain the `malachite` family of
 crates, licensed under LGPL-3.0-only. Rust links those crates statically. This
 file explains how a recipient can rebuild the combined executable with a
 modified version of those libraries. It is provided to support the relinking
@@ -17,10 +17,10 @@ To reproduce the normal executable from a release source archive:
 
 ```console
 $ tar -xzf source.tar.gz
-$ cd manim-lint-<version>
+$ cd qual-<version>
 $ rustup toolchain install stable
 $ cargo build --release --locked
-$ ./target/release/manim-lint --version
+$ ./target/release/qual --version
 ```
 
 To relink against modified `malachite` sources, unpack
@@ -54,7 +54,7 @@ $ cargo update -p malachite -p malachite-base -p malachite-bigint \
 $ cargo build --release
 ```
 
-The resulting `target/release/manim-lint` is a relinked executable containing
+The resulting `target/release/qual` is a relinked executable containing
 the modified libraries. Cargo may require the replacement packages to retain
 the locked package versions or compatible dependency relationships. No keys,
 signatures, or authorization checks prevent a locally rebuilt executable from

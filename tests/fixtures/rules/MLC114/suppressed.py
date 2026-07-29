@@ -13,4 +13,4 @@ class OverrideSquare(Square):
 class SuppressedOverrideChain(Scene):
     def construct(self):
         custom = OverrideSquare()
-        self.play(custom.animate.clear_shape().shift(RIGHT))  # manim-lint: ignore[MLC114]
+        self.play(custom.animate.clear_shape().shift(RIGHT))  # qual: ignore[MLC114]

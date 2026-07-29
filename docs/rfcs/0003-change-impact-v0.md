@@ -1,7 +1,7 @@
 # RFC 0003: ChangeImpact v0
 
 - Status: implemented
-- Command: `manim-lint change-impact --before OLD --after NEW`
+- Command: `qual change-impact --before OLD --after NEW`
 - Schema: `schemas/change-impact-v0.json`
 - Depends on: RFC 0001 StaticFacts v0 and RFC 0002 SemanticDependencyGraph v0
 

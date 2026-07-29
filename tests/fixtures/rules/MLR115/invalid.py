@@ -7,4 +7,4 @@ class Bad(Scene):
         b = MarkupText("plain", font_size=-12)
         c = MathTex("x", font_size=0.0)
         d = Tex("y", font_size=-1.5)
-        e = Text("zero", font_size=0)  # manim-lint: ignore[MLR115]
+        e = Text("zero", font_size=0)  # qual: ignore[MLR115]

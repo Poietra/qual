@@ -1,10 +1,10 @@
-# manim-lint
+# Qual
 
 **Static analysis for [Manim Community](https://www.manim.community/) scenes — catch definite runtime errors, silent mis-rendering, performance multipliers, and non-determinism before you render.**
 
 English | [日本語](README.ja.md)
 
-`manim-lint` is a standalone static analyzer for Manim Community **0.20**
+`qual` is a standalone static analyzer for Manim Community **0.20**
 projects, written in Rust. It parses your Python source and checks it against
 a curated, versioned model of Manim's semantics — it **never imports or
 executes** Manim or your code. Instead of pattern-matching API names, it runs
@@ -35,7 +35,7 @@ class TrackerDemo(Scene):
 ```
 
 ```console
-$ manim-lint check . --format concise
+$ qual check . --format concise
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
 scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
@@ -107,11 +107,11 @@ Python runtime after installation.
 
 ```bash
 # Python tooling
-uv tool install manim-lint
-# or: pipx install manim-lint
+uv tool install qual
+# or: pipx install qual
 
 # Rust tooling (builds from source; Rust 1.85+)
-cargo install manim-lint --locked
+cargo install qual --locked
 ```
 
 Standalone installers and checksummed archives for Linux, macOS, and Windows
@@ -120,15 +120,15 @@ are attached to each GitHub Release:
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Poietra/manim-lint/releases/latest/download/manim-lint-installer.sh | sh
+  https://github.com/Poietra/qual/releases/latest/download/qual-installer.sh | sh
 ```
 
 Until the first registry release, or to install the current checkout, build
 from source:
 
 ```bash
-git clone https://github.com/Poietra/manim-lint.git
-cd manim-lint
+git clone https://github.com/Poietra/qual.git
+cd qual
 cargo install --path .
 ```
 
@@ -139,21 +139,21 @@ executes Manim or the code it analyzes.
 ## Quickstart
 
 ```bash
-manim-lint check .                      # analyze; rich in a terminal, concise when piped
-manim-lint check . --format rich        # force source frames and colour
-manim-lint check . --format concise     # one line per diagnostic
-manim-lint check scenes --format full   # explanations + evidence
-manim-lint check . --format json        # schemas/diagnostics-v1.json
-manim-lint check . --format sarif       # SARIF 2.1.0
-manim-lint check . --format github      # GitHub Actions annotations
-manim-lint explain MLC102               # full documentation for a rule
-manim-lint rules                        # every rule ID, phase, and status
-manim-lint config                       # resolved effective configuration
-manim-lint cost scenes/demo.py          # per-scene cost breakdown
-manim-lint coverage .                   # what the analysis could not resolve
-manim-lint static-facts . > facts.json  # StaticFacts v0 semantic projection
-manim-lint change-impact --before old --after new > impact.json
-manim-lint source-bridge . --request patch.json > candidates.json
+qual check .                      # analyze; rich in a terminal, concise when piped
+qual check . --format rich        # force source frames and colour
+qual check . --format concise     # one line per diagnostic
+qual check scenes --format full   # explanations + evidence
+qual check . --format json        # schemas/diagnostics-v1.json
+qual check . --format sarif       # SARIF 2.1.0
+qual check . --format github      # GitHub Actions annotations
+qual explain MLC102               # full documentation for a rule
+qual rules                        # every rule ID, phase, and status
+qual config                       # resolved effective configuration
+qual cost scenes/demo.py          # per-scene cost breakdown
+qual coverage .                   # what the analysis could not resolve
+qual static-facts . > facts.json  # StaticFacts v0 semantic projection
+qual change-impact --before old --after new > impact.json
+qual source-bridge . --request patch.json > candidates.json
 ```
 
 Exit codes: `0` — no reported diagnostic reaches `fail-level`; `1` — at
@@ -226,7 +226,7 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
 ## Analysis cache
 
 Normal `check` runs keep a disposable SQLite cache at
-`.manim-lint-cache/cache-v2.sqlite3`. An identical second run validates
+`.qual-cache/cache-v2.sqlite3`. An identical second run validates
 filesystem dependencies and reuses the whole-project diagnostic JSON without
 starting the frontend. After a source edit, cache v2 still parses and indexes
 the complete project, then divides project files into weak dependency
@@ -245,7 +245,7 @@ correctness: corruption rebuilds with a warning and other failures continue
 with analysis. `--no-cache` disables all cache filesystem activity. `--fix`,
 baselines, and `--analysis-summary` deliberately run a complete analysis
 because they need live source or index state after diagnostics are produced.
-Add `.manim-lint-cache/` to a project's ignore file. Older
+Add `.qual-cache/` to a project's ignore file. Older
 `cache-v1.sqlite3` files are unused and may be removed.
 
 Cold runs parallelize independent summary components, Scene lifecycle runs,
@@ -255,12 +255,12 @@ stably sorted, with a test proving byte-identical JSON at one and four workers.
 
 ## Configuration
 
-Configuration lives in `[tool.manim-lint]` in `pyproject.toml`, found by
+Configuration lives in `[tool.qual]` in `pyproject.toml`, found by
 walking up from the checked path. Render profiles are
-`[[tool.manim-lint.profile]]` entries:
+`[[tool.qual.profile]]` entries:
 
 ```toml
-[tool.manim-lint]
+[tool.qual]
 manim-version = "0.20"
 target-python = "3.11"
 select = ["MLC", "MLR", "MLP", "MLD"]
@@ -273,7 +273,7 @@ respect-manim-cfg = true
 exclude = [".venv/**", "media/**"]
 per-file-ignores = { "tests/fixtures/**" = ["MLP", "MLD"] }
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 platform = "linux"
@@ -318,29 +318,29 @@ Configuration is validated honestly (exit 2 on violation):
   (3.12). A file the gate passes silently is guaranteed parseable by the
   target's own parser. The gated file is still fully analyzed, and a
   `--fix` that would introduce such syntax is rolled back. See
-  `manim-lint explain MLC000` for the full coverage table.
+  `qual explain MLC000` for the full coverage table.
 - A frame rate that is zero, negative, or non-finite, and a resolution
   with a zero dimension, are rejected wherever they come from (`--fps` /
   `--resolution`, a profile, or `manim.cfg`).
 - `stub-paths` is not implemented yet; a non-empty list is rejected
   instead of being silently ignored.
 
-`manim-lint config` prints the resolved configuration plus an
+`qual config` prints the resolved configuration plus an
 `enforcement` section stating which settings are enforced and which are
 informational.
 
 ## Using the optimized fork profile
 
 Projects rendering with the locally patched Manim fork (profile
-`local_0_20_1_4d25c031`) can tell manim-lint so and unlock the
+`local_0_20_1_4d25c031`) can tell qual so and unlock the
 fork-specific analysis layer:
 
 ```toml
-[tool.manim-lint]
+[tool.qual]
 knowledge-profile = "local_0_20_1_4d25c031"
 default-profile = "production"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 platform = "linux"
@@ -350,7 +350,7 @@ cairo-static-layers = true
 
 This enables, on top of everything the upstream profile provides:
 
-- **A "fork fast paths" section in `manim-lint cost`**: per play, whether
+- **A "fork fast paths" section in `qual cost`**: per play, whether
   the fork-per-play Cairo pipeline (`cairo-fork-workers`), the static-layer
   retention path (`cairo-static-layers`), and packed interpolation apply —
   with the exact blocker and its source span when they do not (e.g. a Scene
@@ -372,12 +372,12 @@ fork section and the three rules never fire, even when selected.
 ## Suppressions
 
 ```python
-self.play(square.shift(RIGHT))  # manim-lint: ignore[MLC102]   # same statement
+self.play(square.shift(RIGHT))  # qual: ignore[MLC102]   # same statement
 
-# manim-lint: ignore[MLP201]                                   # next statement
+# qual: ignore[MLP201]                                   # next statement
 label = always_redraw(...)
 
-# manim-lint: file-ignore[MLP]   # whole file; must appear in the file header
+# qual: file-ignore[MLP]   # whole file; must appear in the file header
 ```
 
 Suppressions target **whole statements**, not single lines: an end-of-line
@@ -403,8 +403,8 @@ above).
 Adopt the linter on an existing project without fixing everything first:
 
 ```bash
-manim-lint check . --write-baseline .manim-lint-baseline.json  # record today's findings
-manim-lint check . --baseline .manim-lint-baseline.json        # report only new findings
+qual check . --write-baseline .qual-baseline.json  # record today's findings
+qual check . --baseline .qual-baseline.json        # report only new findings
 ```
 
 Baseline fingerprints (`schemas/baseline-v1.json`) contain **no line
@@ -422,8 +422,8 @@ file exits 2 with a clear message.
 ## Autofix
 
 ```bash
-manim-lint check . --fix            # apply SAFE fixes only
-manim-lint check . --fix --unsafe-fixes  # also apply UNSAFE fixes
+qual check . --fix            # apply SAFE fixes only
+qual check . --fix --unsafe-fixes  # also apply UNSAFE fixes
 ```
 
 Safe and unsafe fixes are strictly separated: `--fix` alone applies only
@@ -435,21 +435,21 @@ require the explicit extra flag. Every fixed file is re-parsed for
 validation; a file whose fix does not survive re-parsing is rolled back.
 
 ```console
-$ manim-lint check . --fix
+$ qual check . --fix
 scene.py:8:40: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
 fixed 1 issue(s) in 1 file(s)
 ```
 
 ## Cost command
 
-`manim-lint cost` prints the symbolic cost breakdown per scene — play list
+`qual cost` prints the symbolic cost breakdown per scene — play list
 with frame intervals, hot contexts with provenance and the plays where the
 callback provably executes, per-frame constructions, and resource-key
 growth. Unknown durations are printed as unknown, never as fabricated
 numbers:
 
 ```console
-$ manim-lint cost scenes/demo.py
+$ qual cost scenes/demo.py
 profiles: production (cairo, 1920x1080, 60 fps)
 
 scene scenes.demo.TrackerDemo (scenes/demo.py)
@@ -471,7 +471,7 @@ Under the local fork knowledge profile the report gains a per-scene
 `cairo-fork-workers = 4` and `cairo-static-layers = true` in the profile:
 
 ```console
-$ manim-lint cost scene.py
+$ qual cost scene.py
 ...
   fork fast paths (profile production, knowledge local_0_20_1_4d25c031):
     fork-per-play (cairo_fork_workers 4):
@@ -491,8 +491,8 @@ $ manim-lint cost scene.py
 
 The analyzer's conservative silences are correct but invisible: a clean
 run does not tell you whether there were no problems or whether half the
-project could not be analyzed. `manim-lint coverage` (and
-`manim-lint check --analysis-summary`, which prints the same report to
+project could not be analyzed. `qual coverage` (and
+`qual check --analysis-summary`, which prints the same report to
 stderr without touching stdout or the exit code) surfaces everything the
 analysis could **not** resolve:
 
@@ -501,7 +501,7 @@ import escaping the project tree, a `match` statement above
 `target-python = "3.9"`, and a play wrapped in an unresolved helper call:
 
 ```console
-$ manim-lint coverage .
+$ qual coverage .
 analysis coverage (knowledge profile upstream_0_20, target-python 3.9)
 
 scene.py
@@ -549,7 +549,7 @@ byte-stable for identical inputs.
 GitHub Actions annotations directly on the PR diff:
 
 ```yaml
-name: manim-lint
+name: qual
 on: [push, pull_request]
 jobs:
   lint:
@@ -558,23 +558,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install --path . --locked
-        working-directory: manim-lint   # path to your manim-lint checkout
-      - run: manim-lint check . --format github
+        working-directory: qual   # path to your qual checkout
+      - run: qual check . --format github
 ```
 
 Or upload SARIF so findings appear in the GitHub code-scanning UI:
 
 ```yaml
-      - run: manim-lint check . --format sarif > manim-lint.sarif
+      - run: qual check . --format sarif > qual.sarif
         continue-on-error: true
       - uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: manim-lint.sarif
+          sarif_file: qual.sarif
 ```
 
 ## Pre-execution admission checks
 
-Because `manim-lint` never imports or executes the code it reads, a service
+Because `qual` never imports or executes the code it reads, a service
 that renders user-supplied scenes can run it *before* spending sandbox,
 CPU, and GPU time — rejecting scenes that provably fail at render, and
 flagging ones whose cost model predicts a blow-up.
@@ -596,10 +596,10 @@ Untrusted input needs the whole contract, not just the rules:
 
 ```bash
 # Observe: record everything, never fail the request.
-manim-lint check "$SCENE_DIR" --format json --fail-level error > findings.json || true
+qual check "$SCENE_DIR" --format json --fail-level error > findings.json || true
 
 # Block: refuse only what the analyzer is certain about.
-manim-lint check "$SCENE_DIR" --format json \
+qual check "$SCENE_DIR" --format json \
   --min-confidence certain --fail-level error
 ```
 
@@ -624,7 +624,7 @@ local fork profile evaluates it.
 
 The full index with per-rule status, severity, and confidence is in
 [docs/rules/README.md](docs/rules/README.md); each implemented rule has a
-documentation page there, also available via `manim-lint explain <ID>`.
+documentation page there, also available via `qual explain <ID>`.
 
 ## Architecture
 
@@ -655,7 +655,7 @@ knowledge-profile system, and how one diagnostic flows end to end.
 model, the rule catalog, and every public contract. JSON output follows
 [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json); baselines
 follow [`schemas/baseline-v1.json`](schemas/baseline-v1.json). The
-Poietra/fast-manim semantic bridge emitted by `manim-lint static-facts` is
+Poietra/fast-manim semantic bridge emitted by `qual static-facts` is
 specified by
 [`StaticFacts v0`](docs/rfcs/0001-static-facts-v0.md) and its
 [`JSON Schema`](schemas/static-facts-v0.json). It publishes snapshot-scoped
@@ -693,7 +693,7 @@ reports `match | ambiguous | missing` without writing project files.
 - **Source encodings.** PEP 263 declarations resolve through WHATWG labels
   plus a CPython codec-alias table (`latin-1`, `cp932`, `koi8_r`, ...). A
   rare Python codec the linter cannot represent is skipped with an explicit
-  `MLC000` "not supported by manim-lint" notice — never a claim that the
+  `MLC000` "not supported by qual" notice — never a claim that the
   target Python could not decode the file.
 - **Durations come from literals only.** A play whose duration rests on
   Manim's *defaults* (`self.play(m.animate.shift(RIGHT))` with no
@@ -725,7 +725,7 @@ reports `match | ambiguous | missing` without writing project files.
   their documented call shapes only; `MLR102` needs the interpreter to prove
   the played bare builder's target unchanged; `MLR105` validates a verified
   Pango subset (a bare `&` is allowed); `MLD304` implements only the
-  ThreeDScene fixed-object cleanup divergence. `manim-lint explain <RULE>`
+  ThreeDScene fixed-object cleanup divergence. `qual explain <RULE>`
   states each rule's exact scope.
 - **Not yet implemented.** Threshold calibration against rendered baselines;
   a nightly render-comparison CI.
@@ -811,5 +811,5 @@ Prebuilt releases include the LGPL/GPL texts, exact locked source, and the
 [relinking instructions](RELINKING.md) in every distribution format. The
 release gate refuses to publish when that material is missing.
 
-`manim-lint` is an independent project. Manim Community is not affiliated
+`qual` is an independent project. Manim Community is not affiliated
 with it and does not endorse it.

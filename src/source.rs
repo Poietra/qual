@@ -516,7 +516,7 @@ fn decode_python_source(bytes: &[u8]) -> Result<(String, SourceEncoding), String
                 // reported as a linter limitation, not as a decode failure
                 // CPython would raise (DESIGN §15.2 / AGENTS rule 4).
                 return Err(format!(
-                    "source encoding {label} is not supported by manim-lint; the file is skipped"
+                    "source encoding {label} is not supported by qual; the file is skipped"
                 ));
             };
             // CPython refuses a UTF-8 BOM combined with any coding
@@ -647,7 +647,7 @@ fn decode_single_byte_with_c1_controls(
 
 /// Resolves a PEP 263 encoding label to a decoder, accepting both WHATWG
 /// labels and `CPython` codec names/aliases (`latin-1`, `cp932`, ...) for
-/// codecs manim-lint can represent.
+/// codecs qual can represent.
 ///
 /// The declared label is what the *target Python* resolves through its own
 /// codec alias table, so spellings like `latin-1` (WHATWG only knows
@@ -1097,7 +1097,7 @@ mod tests {
         // The message reports a linter limitation, not a decode failure the
         // target Python would raise (DESIGN §7.1, §15.2).
         let diagnostic = file.parse_diagnostic().expect("unsupported encoding");
-        assert!(diagnostic.message.contains("not supported by manim-lint"));
+        assert!(diagnostic.message.contains("not supported by qual"));
     }
 
     #[test]
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(file.encoding().label, "utf-8");
 
         // With a latin-1 byte later on, CPython raises (the file is
-        // decoded as UTF-8); manim-lint reports the decode MLC000.
+        // decoded as UTF-8); qual reports the decode MLC000.
         let mut sources = manager();
         sources.load_bytes(
             Path::new("/project/late.py"),

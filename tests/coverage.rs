@@ -11,11 +11,11 @@
 
 use std::path::Path;
 
-use manim_lint::application::{run_check, run_coverage};
-use manim_lint::cli::CheckArgs;
-use manim_lint::reporting::coverage::CoverageFormat;
+use qual::application::{run_check, run_coverage};
+use qual::cli::CheckArgs;
+use qual::reporting::coverage::CoverageFormat;
 
-const PYPROJECT: &str = "[tool.manim-lint]\ntarget-python = \"3.9\"\n";
+const PYPROJECT: &str = "[tool.qual]\ntarget-python = \"3.9\"\n";
 
 const SCENE: &str = "\
 from manim import *

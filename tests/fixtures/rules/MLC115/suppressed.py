@@ -7,5 +7,5 @@ class Demo(Scene):
         dot = Dot()
         group = VGroup(square, dot)
         self.add(group)
-        self.remove(dot)  # manim-lint: ignore[MLC115]
+        self.remove(dot)  # qual: ignore[MLC115]
         self.add(group)

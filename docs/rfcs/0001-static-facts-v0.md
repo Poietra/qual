@@ -2,12 +2,12 @@
 
 - Status: implemented (initial full-analysis producer)
 - Contract: `schemas/static-facts-v0.json`
-- First producer: `manim-lint static-facts [PATH...]`
+- First producer: `qual static-facts [PATH...]`
 - Follow-ups: StaticFacts projection, semantic dependency graph, ChangeImpact
 
 ## Summary
 
-`StaticFacts v0` is a stable, versioned projection of manim-lint's static
+`StaticFacts v0` is a stable, versioned projection of qual's static
 semantic model for Poietra and fast-manim. It is not a serialization of
 `LifecycleFacts`, the abstract heap, cache entries, or internal handles. The
 producer converts those implementation details into snapshot-scoped public
@@ -31,12 +31,12 @@ producer is implemented by `src/static_facts.rs` and exposed by the
 ## Goals and non-goals
 
 The contract must let a consumer answer “which static candidates might this
-runtime or source operation refer to?” without depending on manim-lint's Rust
+runtime or source operation refer to?” without depending on qual's Rust
 types. In particular, two calls to the same helper from different call sites
 remain distinct candidates, and an allocation in a loop is never represented
 as a singleton.
 
-The following remain outside manim-lint's responsibility:
+The following remain outside qual's responsibility:
 
 - runtime object or play-execution identifiers;
 - final StaticFacts/RenderTrace matching;

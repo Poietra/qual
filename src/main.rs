@@ -7,5 +7,5 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    manim_lint::cli::run()
+    qual::cli::run()
 }

@@ -5,18 +5,18 @@
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::manim_surface;
-use manim_lint::frontend::index::{FrontendFacts, analyze as frontend_analyze};
-use manim_lint::knowledge;
-use manim_lint::semantic::events::Event;
-use manim_lint::semantic::interpreter::{
+use qual::application::manim_surface;
+use qual::frontend::index::{FrontendFacts, analyze as frontend_analyze};
+use qual::knowledge;
+use qual::semantic::events::Event;
+use qual::semantic::interpreter::{
     self, CameraKind, DefMap, FixedAction, FixedKind, LifecycleFacts, PlayKind, SceneLifecycle,
     TargetRequirement, UpdaterHost,
 };
-use manim_lint::semantic::state::CallbackRef;
-use manim_lint::semantic::summaries::{self, SummaryEffect};
-use manim_lint::semantic::values::{Cardinality, Num, ObjectId, Presence, Truth};
-use manim_lint::source::{FileId, SourceManager};
+use qual::semantic::state::CallbackRef;
+use qual::semantic::summaries::{self, SummaryEffect};
+use qual::semantic::values::{Cardinality, Num, ObjectId, Presence, Truth};
+use qual::source::{FileId, SourceManager};
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lifecycle")
@@ -229,7 +229,7 @@ fn replacement_transform_replaces_and_transform_does_not() {
             &traced.event,
             Event::FinishPlay(finish) if finish.cleanup.iter().any(|effect| matches!(
                 effect,
-                manim_lint::semantic::events::CleanupEffect::SceneReplace { old, new }
+                qual::semantic::events::CleanupEffect::SceneReplace { old, new }
                     if *old == sq && *new == circle
             ))
         )
@@ -429,7 +429,7 @@ fn animate_builder_generates_target_and_plays() {
     assert_eq!(fact.methods, vec!["shift".to_owned(), "rotate".to_owned()]);
     assert!(
         fact.channels
-            .contains(&manim_lint::semantic::state::WriteChannel::Points)
+            .contains(&qual::semantic::state::WriteChannel::Points)
     );
     assert_eq!(fact.played, Truth::Yes);
     assert_eq!(fact.overwritten_by_later_builder, Truth::No);

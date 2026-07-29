@@ -7,4 +7,4 @@ class Bad(Scene):
         b = ImageMobject("absent")
         c = SVGMobject("Logo.svg")
         d = ImageMobject("Picture.png")
-        e = SVGMobject("gone.svg")  # manim-lint: ignore[MLR104]
+        e = SVGMobject("gone.svg")  # qual: ignore[MLR104]

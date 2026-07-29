@@ -1,13 +1,13 @@
 //! Configuration honesty tests (DESIGN §8.2, review follow-up): a setting
-//! manim-lint accepts must actually be consulted, and a setting it cannot
+//! qual accepts must actually be consulted, and a setting it cannot
 //! honor must be an explicit configuration error (exit 2) instead of a
 //! silently ignored value.
 
 use std::path::Path;
 
-use manim_lint::application::{ApplicationError, check, run_config_at};
-use manim_lint::cli::{CheckArgs, Resolution};
-use manim_lint::reporting::OutputFormat;
+use qual::application::{ApplicationError, check, run_config_at};
+use qual::cli::{CheckArgs, Resolution};
+use qual::reporting::OutputFormat;
 
 const SCENE: &str = "\
 from manim import *
@@ -38,7 +38,7 @@ fn args_for(root: &Path) -> CheckArgs {
     }
 }
 
-fn expect_config_error(result: Result<manim_lint::application::CheckReport, ApplicationError>) {
+fn expect_config_error(result: Result<qual::application::CheckReport, ApplicationError>) {
     match result {
         Err(ApplicationError::Config(_)) => {}
         Err(other) => panic!("expected a config error (exit 2), got: {other}"),
@@ -48,7 +48,7 @@ fn expect_config_error(result: Result<manim_lint::application::CheckReport, Appl
 
 #[test]
 fn cli_fps_zero_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     let mut args = args_for(project.path());
     args.fps = Some(0.0);
     expect_config_error(check(&args));
@@ -56,7 +56,7 @@ fn cli_fps_zero_is_a_config_error() {
 
 #[test]
 fn cli_fps_non_finite_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     for bad in [f64::NAN, f64::INFINITY, -1.0] {
         let mut args = args_for(project.path());
         args.fps = Some(bad);
@@ -66,7 +66,7 @@ fn cli_fps_non_finite_is_a_config_error() {
 
 #[test]
 fn cli_resolution_zero_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     let mut args = args_for(project.path());
     args.resolution = Some("0x0".parse::<Resolution>().unwrap());
     expect_config_error(check(&args));
@@ -75,29 +75,29 @@ fn cli_resolution_zero_is_a_config_error() {
 #[test]
 fn profile_zero_frame_rate_is_a_config_error() {
     let project = write_project(
-        "[tool.manim-lint]\ndefault-profile = \"p\"\n\n\
-         [[tool.manim-lint.profile]]\nname = \"p\"\nframe-rate = 0\n",
+        "[tool.qual]\ndefault-profile = \"p\"\n\n\
+         [[tool.qual.profile]]\nname = \"p\"\nframe-rate = 0\n",
     );
     expect_config_error(check(&args_for(project.path())));
 }
 
 #[test]
 fn manim_cfg_zero_frame_rate_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     std::fs::write(project.path().join("manim.cfg"), "[CLI]\nframe_rate = 0\n").unwrap();
     expect_config_error(check(&args_for(project.path())));
 }
 
 #[test]
 fn manim_cfg_zero_pixel_width_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     std::fs::write(project.path().join("manim.cfg"), "[CLI]\npixel_width = 0\n").unwrap();
     expect_config_error(check(&args_for(project.path())));
 }
 
 #[test]
 fn stub_paths_is_an_honest_refusal() {
-    let project = write_project("[tool.manim-lint]\nstub-paths = [\"stubs\"]\n");
+    let project = write_project("[tool.qual]\nstub-paths = [\"stubs\"]\n");
     match check(&args_for(project.path())) {
         Err(ApplicationError::Config(error)) => {
             assert!(
@@ -113,7 +113,7 @@ fn stub_paths_is_an_honest_refusal() {
 
 #[test]
 fn manim_version_outside_knowledge_profile_range_is_a_config_error() {
-    let project = write_project("[tool.manim-lint]\nmanim-version = \"0.19\"\n");
+    let project = write_project("[tool.qual]\nmanim-version = \"0.19\"\n");
     match check(&args_for(project.path())) {
         Err(ApplicationError::Config(error)) => {
             let message = error.to_string();
@@ -127,9 +127,9 @@ fn manim_version_outside_knowledge_profile_range_is_a_config_error() {
 #[test]
 fn manim_version_inside_range_or_absent_is_accepted() {
     for pyproject in [
-        "[tool.manim-lint]\nmanim-version = \"0.20\"\n",
-        "[tool.manim-lint]\nmanim-version = \"0.20.1\"\n",
-        "[tool.manim-lint]\n",
+        "[tool.qual]\nmanim-version = \"0.20\"\n",
+        "[tool.qual]\nmanim-version = \"0.20.1\"\n",
+        "[tool.qual]\n",
     ] {
         let project = write_project(pyproject);
         assert!(
@@ -144,31 +144,23 @@ fn manim_version_inside_range_or_absent_is_accepted() {
 /// "informational" for the default profile.
 #[test]
 fn shipped_knowledge_profile_range_is_enforceable() {
-    let profile = manim_lint::knowledge::load(manim_lint::knowledge::DEFAULT_PROFILE).unwrap();
+    let profile = qual::knowledge::load(qual::knowledge::DEFAULT_PROFILE).unwrap();
     // In-range passes, out-of-range fails: both directions prove the
     // range parsed instead of being skipped.
     assert!(
-        manim_lint::config::loader::validate_manim_version(
-            "0.20",
-            &profile.name,
-            &profile.manim_version
-        )
-        .is_ok()
+        qual::config::loader::validate_manim_version("0.20", &profile.name, &profile.manim_version)
+            .is_ok()
     );
     assert!(
-        manim_lint::config::loader::validate_manim_version(
-            "0.19",
-            &profile.name,
-            &profile.manim_version
-        )
-        .is_err()
+        qual::config::loader::validate_manim_version("0.19", &profile.name, &profile.manim_version)
+            .is_err()
     );
 }
 
 #[test]
 fn target_python_newer_than_parser_grammar_is_a_config_error() {
     for bad in ["3.13", "4.0", "2.7", "3.11.2", "py3"] {
-        let project = write_project(&format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n"));
+        let project = write_project(&format!("[tool.qual]\ntarget-python = \"{bad}\"\n"));
         expect_config_error(check(&args_for(project.path())));
     }
 }
@@ -179,7 +171,7 @@ fn target_python_newer_than_parser_grammar_is_a_config_error() {
 #[test]
 fn target_python_below_the_gating_floor_is_a_config_error() {
     for bad in ["3.0", "3.5"] {
-        let project = write_project(&format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n"));
+        let project = write_project(&format!("[tool.qual]\ntarget-python = \"{bad}\"\n"));
         match check(&args_for(project.path())) {
             Err(ApplicationError::Config(error)) => {
                 let message = error.to_string();
@@ -197,7 +189,7 @@ fn target_python_below_the_gating_floor_is_a_config_error() {
 #[test]
 fn target_python_in_supported_range_is_accepted() {
     for good in ["3.6", "3.8", "3.11", "3.12"] {
-        let project = write_project(&format!("[tool.manim-lint]\ntarget-python = \"{good}\"\n"));
+        let project = write_project(&format!("[tool.qual]\ntarget-python = \"{good}\"\n"));
         assert!(
             check(&args_for(project.path())).is_ok(),
             "target-python {good} must be accepted"
@@ -222,7 +214,7 @@ class Chooser(Scene):
             case 1:
                 self.play(FadeIn(Square()), run_time=0.004)
 ";
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.9\"\n", MATCH_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.9\"\n", MATCH_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     let gate: Vec<_> = report
         .diagnostics
@@ -244,7 +236,7 @@ class Chooser(Scene):
          the match arm still reports"
     );
 
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.10\"\n", MATCH_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.10\"\n", MATCH_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     assert!(
         report
@@ -258,7 +250,7 @@ class Chooser(Scene):
 #[test]
 fn target_python_gates_type_alias_statements() {
     const TYPE_SCENE: &str = "type Vector = list[float]\n";
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.11\"\n", TYPE_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.11\"\n", TYPE_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     assert!(
         report.diagnostics.iter().any(|diagnostic| {
@@ -269,7 +261,7 @@ fn target_python_gates_type_alias_statements() {
         "diagnostics: {:?}",
         report.diagnostics
     );
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.12\"\n", TYPE_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.12\"\n", TYPE_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     assert!(report.diagnostics.is_empty());
 }
@@ -277,14 +269,14 @@ fn target_python_gates_type_alias_statements() {
 #[test]
 fn target_python_gates_walrus_below_3_8() {
     const WALRUS_SCENE: &str = "value = 1\nif (flag := value) > 0:\n    pass\n";
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.7\"\n", WALRUS_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.7\"\n", WALRUS_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.rule_id == "MLC000"
             && diagnostic.message
                 == "assignment expression `:=` requires Python 3.8 but target-python is 3.7"
     }));
-    let project = write_project_with("[tool.manim-lint]\ntarget-python = \"3.8\"\n", WALRUS_SCENE);
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.8\"\n", WALRUS_SCENE);
     let report = check(&args_for(project.path())).unwrap();
     assert!(report.diagnostics.is_empty(), "walrus is fine at 3.8");
 }
@@ -297,10 +289,7 @@ fn target_python_gates_walrus_below_3_8() {
 #[test]
 fn pre37_async_identifier_parse_failure_carries_the_hint_under_3_6() {
     const HINT: &str = "this may be valid Python 3.6 source";
-    let project = write_project_with(
-        "[tool.manim-lint]\ntarget-python = \"3.6\"\n",
-        "async = 1\n",
-    );
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.6\"\n", "async = 1\n");
     let report = check(&args_for(project.path())).unwrap();
     let diagnostic = report
         .diagnostics
@@ -315,7 +304,7 @@ fn pre37_async_identifier_parse_failure_carries_the_hint_under_3_6() {
 
     for target in ["3.7", "3.12"] {
         let project = write_project_with(
-            &format!("[tool.manim-lint]\ntarget-python = \"{target}\"\n"),
+            &format!("[tool.qual]\ntarget-python = \"{target}\"\n"),
             "async = 1\n",
         );
         let report = check(&args_for(project.path())).unwrap();
@@ -336,10 +325,7 @@ fn pre37_async_identifier_parse_failure_carries_the_hint_under_3_6() {
 /// `async` / `await` near the error is reported without the note.
 #[test]
 fn pre37_hint_is_absent_when_the_failure_does_not_mention_async() {
-    let project = write_project_with(
-        "[tool.manim-lint]\ntarget-python = \"3.6\"\n",
-        "def broken(:\n",
-    );
+    let project = write_project_with("[tool.qual]\ntarget-python = \"3.6\"\n", "def broken(:\n");
     let report = check(&args_for(project.path())).unwrap();
     let diagnostic = report
         .diagnostics
@@ -355,7 +341,7 @@ fn pre37_hint_is_absent_when_the_failure_does_not_mention_async() {
 
 #[test]
 fn config_command_states_what_is_enforced() {
-    let project = write_project("[tool.manim-lint]\nmanim-version = \"0.20\"\n");
+    let project = write_project("[tool.qual]\nmanim-version = \"0.20\"\n");
     let execution = run_config_at(project.path()).unwrap();
     let value: serde_json::Value = serde_json::from_str(&execution.stdout).unwrap();
     let enforcement = value
@@ -383,7 +369,7 @@ fn config_command_states_what_is_enforced() {
 
 #[test]
 fn config_command_reports_config_errors_with_exit_2_semantics() {
-    let project = write_project("[tool.manim-lint]\nmanim-version = \"0.19\"\n");
+    let project = write_project("[tool.qual]\nmanim-version = \"0.19\"\n");
     assert!(
         matches!(
             run_config_at(project.path()),
@@ -400,7 +386,7 @@ fn config_command_reports_config_errors_with_exit_2_semantics() {
 /// state").
 #[test]
 fn mlp206_explanation_states_the_start_state_direction() {
-    let project = write_project("[tool.manim-lint]\n");
+    let project = write_project("[tool.qual]\n");
     let report = check(&args_for(project.path())).unwrap();
     let diagnostic = report
         .diagnostics

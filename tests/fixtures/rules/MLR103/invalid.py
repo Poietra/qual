@@ -6,4 +6,4 @@ class Bad(Scene):
         one = MathTex("\frac{a}{b}")
         two = Tex("x \times y")
         both = MathTex("\alpha + \tau")
-        supp = MathTex("\begin{align}x\end{align}")  # manim-lint: ignore[MLR103]
+        supp = MathTex("\begin{align}x\end{align}")  # qual: ignore[MLR103]

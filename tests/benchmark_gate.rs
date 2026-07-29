@@ -25,10 +25,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manim_lint::application::check;
-use manim_lint::cache::CacheStatus;
-use manim_lint::cli::CheckArgs;
-use manim_lint::reporting::OutputFormat;
+use qual::application::check;
+use qual::cache::CacheStatus;
+use qual::cli::CheckArgs;
+use qual::reporting::OutputFormat;
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/benchmark_10kloc")
@@ -281,7 +281,7 @@ fn run_check_over_fixture(root: &Path) -> (usize, CacheStatus) {
 
 fn isolated_fixture() -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("temporary benchmark project");
-    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n")
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.qual]\n")
         .expect("benchmark pyproject");
     for (name, content) in generated_files() {
         std::fs::write(project.path().join(name), content).expect("benchmark source file");
@@ -303,7 +303,7 @@ fn benchmark_cold_warm_and_incremental_within_reference_budget() {
     // would be meaningless.
     benchmark_fixture_matches_generator();
     let project = isolated_fixture();
-    let cache_database = project.path().join(".manim-lint-cache/cache-v2.sqlite3");
+    let cache_database = project.path().join(".qual-cache/cache-v2.sqlite3");
     assert!(
         !cache_database.exists(),
         "cold run must start without a cache"

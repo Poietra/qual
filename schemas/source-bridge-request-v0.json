@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://manim-lint.dev/schemas/source-bridge-request-v0.json",
-  "title": "manim-lint SourceBridge request v0",
+  "$id": "https://raw.githubusercontent.com/Poietra/qual/main/schemas/source-bridge-request-v0.json",
+  "title": "Qual SourceBridge request v0",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "snapshot_id", "target_id", "operation"],

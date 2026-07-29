@@ -5,12 +5,12 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use manim_lint::application::{check, manim_surface};
-use manim_lint::cli::CheckArgs;
-use manim_lint::frontend::index::analyze;
-use manim_lint::knowledge;
-use manim_lint::reporting::OutputFormat;
-use manim_lint::source::SourceManager;
+use qual::application::{check, manim_surface};
+use qual::cli::CheckArgs;
+use qual::frontend::index::analyze;
+use qual::knowledge;
+use qual::reporting::OutputFormat;
+use qual::source::SourceManager;
 
 const SCENE_FILE: &str = "\
 from manim import *
@@ -23,7 +23,7 @@ class Intro(Scene):
 ";
 
 fn write_project(root: &Path, knowledge_profile: Option<&str>) {
-    let mut pyproject = String::from("[tool.manim-lint]\n");
+    let mut pyproject = String::from("[tool.qual]\n");
     if let Some(name) = knowledge_profile {
         let _ = writeln!(pyproject, "knowledge-profile = \"{name}\"");
     }

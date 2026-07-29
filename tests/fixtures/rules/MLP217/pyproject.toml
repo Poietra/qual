@@ -1,2 +1,2 @@
-[tool.manim-lint]
+[tool.qual]
 knowledge-profile = "local_0_20_1_4d25c031"

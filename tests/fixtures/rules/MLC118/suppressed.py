@@ -6,4 +6,4 @@ class SuppressedSuspendedUpdaterResult(Scene):
         square = Square()
         square.add_updater(lambda mob: mob.move_to(ORIGIN))
         self.add(square)
-        self.play(square.animate.shift(RIGHT))  # manim-lint: ignore[MLC118]
+        self.play(square.animate.shift(RIGHT))  # qual: ignore[MLC118]

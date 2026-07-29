@@ -433,7 +433,7 @@ impl<'a> Projector<'a> {
         json!({
             "schema_version": 0,
             "tool": {
-                "name": "manim-lint",
+                "name": "qual",
                 "version": crate::VERSION,
                 "semantic_build_hash": self.semantic_build_hash,
             },
@@ -2075,7 +2075,7 @@ fn public_id(kind: &str, fields: Vec<Value>) -> String {
 }
 
 fn build_hash() -> String {
-    let value = option_env!("MANIM_LINT_BUILD_ID").unwrap_or(crate::VERSION);
+    let value = option_env!("QUAL_BUILD_ID").unwrap_or(crate::VERSION);
     if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         format!("sha256:{}", value.to_ascii_lowercase())
     } else {

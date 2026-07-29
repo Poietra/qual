@@ -24,15 +24,15 @@
     "note": "DESIGN 11.4 defines warm as the second identical run and incremental as a third run after changing one of twenty independent source components. The benchmark asserts that cold is a cache miss, creates cache-v2.sqlite3, warm is a dependency-validated cache hit, and incremental is a partial hit before enforcing these thresholds."
   },
   "measured": {
-    "date": "2026-07-20",
+    "date": "2026-07-30",
     "build": "cargo test --release --test benchmark_gate -- --ignored benchmark",
     "fixture": "tests/corpus/benchmark_10kloc (20 files, 10810 physical lines)",
     "samples": 3,
     "aggregation": "median of three consecutive benchmark processes",
-    "cold_seconds": 0.422,
-    "warm_seconds": 0.006,
-    "incremental_seconds": 0.171,
-    "peak_rss_mib": 246.5
+    "cold_seconds": 0.435,
+    "warm_seconds": 0.015,
+    "incremental_seconds": 0.185,
+    "peak_rss_mib": 250.4
   },
-  "conditions": "Median of three consecutive invocations on the reference machine using the default Rayon worker pool. In each process the deterministic 20-file fixture is written to an isolated temporary project before timing, so its source contents are already in the OS page cache. Cold is the first in-process check() with .manim-lint-cache absent and asserts CacheStatus::Miss plus cache-v2 database creation. Warm is the immediately following identical check() and asserts CacheStatus::Hit. Incremental appends one semantics-neutral comment to scenes_00.py, asserts CacheStatus::Partial, and reuses the other 19 independent components. Peak RSS is VmHWM of the test process, covering all three runs."
+  "conditions": "Median of three consecutive invocations on the reference machine using the default Rayon worker pool. In each process the deterministic 20-file fixture is written to an isolated temporary project before timing, so its source contents are already in the OS page cache. Cold is the first in-process check() with .qual-cache absent and asserts CacheStatus::Miss plus cache-v2 database creation. Warm is the immediately following identical check() and asserts CacheStatus::Hit. Incremental appends one semantics-neutral comment to scenes_00.py, asserts CacheStatus::Partial, and reuses the other 19 independent components. Peak RSS is VmHWM of the test process, covering all three runs."
 }

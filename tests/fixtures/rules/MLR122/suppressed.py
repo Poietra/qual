@@ -6,4 +6,4 @@ class SuppressedReadd(Scene):
         low = Square(z_index=0)
         high = Circle(z_index=3)
         self.add(low, high)
-        self.bring_to_front(low)  # manim-lint: ignore[MLR122]
+        self.bring_to_front(low)  # qual: ignore[MLR122]

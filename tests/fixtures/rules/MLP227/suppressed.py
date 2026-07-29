@@ -6,4 +6,4 @@ class Demo(Scene):
         self.always_update_mobjects = True
         square = Square()
         self.add(square)
-        self.wait(3)  # manim-lint: ignore[MLP227]
+        self.wait(3)  # qual: ignore[MLP227]

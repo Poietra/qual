@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use manim_lint::application::{ChangeImpactReport, change_impact, static_facts};
-use manim_lint::cli::{ChangeImpactArgs, StaticFactsArgs};
+use qual::application::{ChangeImpactReport, change_impact, static_facts};
+use qual::cli::{ChangeImpactArgs, StaticFactsArgs};
 use serde_json::Value;
 
 const SCHEMA: &str = include_str!("../schemas/change-impact-v0.json");

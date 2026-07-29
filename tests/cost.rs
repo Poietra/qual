@@ -6,24 +6,22 @@ use std::path::Path;
 
 use serde_json::json;
 
-use manim_lint::application::manim_surface;
-use manim_lint::config::model::{Platform, RenderProfile, Renderer};
-use manim_lint::cost::contexts::HotEntryKind;
-use manim_lint::cost::estimator::{
-    frames_for_duration, sum_frames_across_profiles, symbolic_frames,
-};
-use manim_lint::cost::model::{frame_buffer_bytes, pixel_frames};
-use manim_lint::cost::thresholds::{
+use qual::application::manim_surface;
+use qual::config::model::{Platform, RenderProfile, Renderer};
+use qual::cost::contexts::HotEntryKind;
+use qual::cost::estimator::{frames_for_duration, sum_frames_across_profiles, symbolic_frames};
+use qual::cost::model::{frame_buffer_bytes, pixel_frames};
+use qual::cost::thresholds::{
     LARGE_FAMILY_GATE, LARGE_POINTS_GATE, PER_FRAME_ALLOCATION_GATE,
     TRANSFORM_CURVE_INSERTION_GATE, TRANSFORM_FAMILY_GATE, transform_begin_gate_met,
 };
-use manim_lint::cost::{CostFacts, HotTargetKind};
-use manim_lint::frontend::index::{FrontendFacts, QualifiedCall, analyze};
-use manim_lint::knowledge::{self, KnowledgeProfile};
-use manim_lint::semantic::events::Multiplicity;
-use manim_lint::semantic::interpreter::LifecycleFacts;
-use manim_lint::semantic::values::Num;
-use manim_lint::source::SourceManager;
+use qual::cost::{CostFacts, HotTargetKind};
+use qual::frontend::index::{FrontendFacts, QualifiedCall, analyze};
+use qual::knowledge::{self, KnowledgeProfile};
+use qual::semantic::events::Multiplicity;
+use qual::semantic::interpreter::LifecycleFacts;
+use qual::semantic::values::Num;
+use qual::source::SourceManager;
 
 const MATH_TEX: &str = "manim.mobject.text.tex_mobject.MathTex";
 const SCENE_PLAY: &str = "manim.scene.scene.Scene.play";
@@ -88,12 +86,8 @@ fn cost_facts_with_lifecycle(
     profile: &KnowledgeProfile,
     profiles: &[RenderProfile],
 ) -> (CostFacts, LifecycleFacts) {
-    let lifecycle = manim_lint::semantic::interpreter::analyze(
-        sources,
-        &facts.index,
-        &facts.calls,
-        Some(profile),
-    );
+    let lifecycle =
+        qual::semantic::interpreter::analyze(sources, &facts.index, &facts.calls, Some(profile));
     let cost = CostFacts::compute_with_lifecycle(
         sources,
         &facts.index,
@@ -735,7 +729,7 @@ fn per_frame_allocation_bytes_multiplies_literal_tuple_shapes() {
 
 #[test]
 fn unknown_and_symbolic_sizes_never_confirm_thresholds() {
-    for gate in &manim_lint::cost::thresholds::ALL_GATES {
+    for gate in &qual::cost::thresholds::ALL_GATES {
         assert!(!gate.confirmed_by(&Num::Unknown), "{}", gate.name);
         assert!(
             !gate.confirmed_by(&Num::Symbol("family".to_owned())),

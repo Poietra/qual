@@ -10,11 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::CheckArgs;
-use manim_lint::diagnostic::{Confidence, Severity};
-use manim_lint::reporting::OutputFormat;
-use manim_lint::rules::registry;
+use qual::application::check;
+use qual::cli::CheckArgs;
+use qual::diagnostic::{Confidence, Severity};
+use qual::reporting::OutputFormat;
+use qual::rules::registry;
 
 fn fixture_dir(rule: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -461,12 +461,12 @@ fn cairo_only_cost_rules_stay_silent_under_opengl() {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(
         project.path().join("pyproject.toml"),
-        "[tool.manim-lint]\n\
+        "[tool.qual]\n\
          select = [\"MLP213\", \"MLP223\"]\n\
          min-confidence = \"medium\"\n\
          default-profile = \"opengl\"\n\
          \n\
-         [[tool.manim-lint.profile]]\n\
+         [[tool.qual.profile]]\n\
          name = \"opengl\"\n\
          renderer = \"opengl\"\n",
     )

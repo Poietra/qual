@@ -48,7 +48,7 @@ def main() -> None:
     cargo_path = ROOT / "Cargo.toml"
     cargo = cargo_path.read_text(encoding="utf-8")
     updated_cargo, count = re.subn(
-        r'(?m)^(\[package\]\nname = "manim-lint"\nversion = ")[^"]+("\n)',
+        r'(?m)^(\[package\]\nname = "qual"\nversion = ")[^"]+("\n)',
         rf"\g<1>{args.version}\g<2>",
         cargo,
         count=1,

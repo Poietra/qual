@@ -10,4 +10,4 @@ class Demo(Scene):
         square = Square()
         self.add(square)
         square.add_updater(spin)
-        square.remove_updater(lambda m: m)  # manim-lint: ignore[MLC125]
+        square.remove_updater(lambda m: m)  # qual: ignore[MLC125]

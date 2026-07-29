@@ -1,7 +1,7 @@
 # RFC 0004: SourceBridge and rematching v0
 
 - Status: implemented
-- Command: `manim-lint source-bridge PATH --request REQUEST.json`
+- Command: `qual source-bridge PATH --request REQUEST.json`
 - Request schema: `schemas/source-bridge-request-v0.json`
 - Output schema: `schemas/source-bridge-v0.json`
 - Depends on: RFC 0001 StaticFacts v0

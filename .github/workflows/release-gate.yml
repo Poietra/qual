@@ -47,5 +47,5 @@ jobs:
           git -C "${RUNNER_TEMP}/manim" checkout --detach FETCH_HEAD
       - name: Knowledge drift gate
         env:
-          MANIM_LINT_MANIM_ROOT: ${{ runner.temp }}/manim
+          QUAL_MANIM_ROOT: ${{ runner.temp }}/manim
         run: cargo test --test knowledge_drift -- --ignored

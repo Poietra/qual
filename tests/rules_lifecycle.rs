@@ -11,11 +11,11 @@
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::CheckArgs;
-use manim_lint::diagnostic::{Confidence, Severity};
-use manim_lint::reporting::OutputFormat;
-use manim_lint::rules::registry;
+use qual::application::check;
+use qual::cli::CheckArgs;
+use qual::diagnostic::{Confidence, Severity};
+use qual::reporting::OutputFormat;
+use qual::rules::registry;
 
 fn fixture_dir(rule: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

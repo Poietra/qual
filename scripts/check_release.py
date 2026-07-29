@@ -11,6 +11,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_NAME = "qual"
+REPOSITORY_URL = "https://github.com/Poietra/qual"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\."
     r"(?P<minor>0|[1-9]\d*)\."
@@ -68,6 +70,23 @@ def main() -> None:
     package = cargo.get("package")
     if not isinstance(package, dict):
         fail("Cargo.toml has no [package] table")
+    if package.get("name") != PACKAGE_NAME:
+        fail(f"Cargo package name must remain {PACKAGE_NAME}")
+    if package.get("default-run") != PACKAGE_NAME:
+        fail(f"default Cargo binary must remain {PACKAGE_NAME}")
+    for field in ("repository", "homepage"):
+        if package.get(field) != REPOSITORY_URL:
+            fail(f"Cargo {field} must remain {REPOSITORY_URL}")
+    if package.get("documentation") != f"{REPOSITORY_URL}#readme":
+        fail("Cargo documentation URL must point to the Qual README")
+    bins = cargo.get("bin")
+    if not isinstance(bins, list) or not any(
+        isinstance(binary, dict)
+        and binary.get("name") == PACKAGE_NAME
+        and binary.get("path") == "src/main.rs"
+        for binary in bins
+    ):
+        fail(f"Cargo.toml must expose src/main.rs as the {PACKAGE_NAME} binary")
     version = package.get("version")
     if not isinstance(version, str) or not SEMVER.fullmatch(version):
         fail(f"Cargo.toml package version is not SemVer: {version!r}")
@@ -81,10 +100,10 @@ def main() -> None:
     own_versions = {
         item.get("version")
         for item in packages
-        if isinstance(item, dict) and item.get("name") == "manim-lint"
+        if isinstance(item, dict) and item.get("name") == PACKAGE_NAME
     }
     if own_versions != {version}:
-        fail(f"Cargo.lock manim-lint version is {own_versions}, expected {version}")
+        fail(f"Cargo.lock {PACKAGE_NAME} version is {own_versions}, expected {version}")
     locked_names = {
         item.get("name") for item in packages if isinstance(item, dict)
     }
@@ -112,8 +131,15 @@ def main() -> None:
     project = pyproject.get("project")
     if not isinstance(project, dict):
         fail("pyproject.toml has no [project] table")
-    if project.get("name") != "manim-lint":
-        fail("PyPI project name must remain manim-lint")
+    if project.get("name") != PACKAGE_NAME:
+        fail(f"PyPI project name must remain {PACKAGE_NAME}")
+    urls = project.get("urls")
+    if not isinstance(urls, dict):
+        fail("pyproject.toml has no [project.urls] table")
+    if urls.get("Homepage") != REPOSITORY_URL or urls.get("Repository") != REPOSITORY_URL:
+        fail("PyPI homepage and repository must point to the Qual repository")
+    if urls.get("Changelog") != f"{REPOSITORY_URL}/blob/main/CHANGELOG.md":
+        fail("PyPI changelog URL must point to the Qual changelog")
     if project.get("dynamic") != ["version"] or "version" in project:
         fail("PyPI version must be dynamic and sourced only from Cargo.toml")
     license_files = set(project.get("license-files", []))
@@ -124,10 +150,14 @@ def main() -> None:
     dist_package = load_toml("dist.toml").get("package")
     if not isinstance(dist_package, dict):
         fail("dist.toml has no [package] table")
-    if dist_package.get("binaries") != ["manim-lint"]:
-        fail("standalone releases must contain only the manim-lint binary")
+    if dist_package.get("binaries") != [PACKAGE_NAME]:
+        fail(f"standalone releases must contain only the {PACKAGE_NAME} binary")
 
-    dist = load_toml("dist-workspace.toml").get("dist")
+    dist_workspace = load_toml("dist-workspace.toml")
+    workspace = dist_workspace.get("workspace")
+    if not isinstance(workspace, dict) or workspace.get("packages") != [PACKAGE_NAME]:
+        fail(f"cargo-dist workspace must publish only {PACKAGE_NAME}")
+    dist = dist_workspace.get("dist")
     if not isinstance(dist, dict):
         fail("dist-workspace.toml has no [dist] table")
     included = set(dist.get("include", []))
@@ -215,7 +245,7 @@ def main() -> None:
     ):
         fail(f"CHANGELOG.md has no dated [{version}] release heading")
 
-    print(f"release check: manim-lint {version} metadata is consistent")
+    print(f"release check: {PACKAGE_NAME} {version} metadata is consistent")
 
 
 if __name__ == "__main__":

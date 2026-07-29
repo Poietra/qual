@@ -1,6 +1,6 @@
 # Rule catalog
 
-manim-lint defines 92 rule IDs in four families, and all 92 are
+qual defines 92 rule IDs in four families, and all 92 are
 **implemented**. The authoritative catalog definition is
 [`DESIGN.md`](../../DESIGN.md) section 7.
 
@@ -11,7 +11,7 @@ profile, and only an exact `--select MLP225` evaluates it in `check`.
 
 Rule selection controls diagnostics only. The
 [`StaticFacts v0`](../rfcs/0001-static-facts-v0.md) public semantic projection
-emitted by `manim-lint static-facts` requests all facts in its contract independently of `--select`,
+emitted by `qual static-facts` requests all facts in its contract independently of `--select`,
 `--ignore`, suppressions, confidence thresholds, and baselines. Renderer risk
 facts in that projection are static evidence, not new diagnostics and not
 permission to skip or fork rendering.
@@ -24,7 +24,7 @@ Columns:
   / `low`) at which the rule is allowed to fire. Individual diagnostics can
   carry a higher confidence than this floor, never a lower one.
 - Implemented IDs link to their full documentation, which is also available
-  as `manim-lint explain <ID>`.
+  as `qual explain <ID>`.
 
 ## MLC — lifecycle / correctness (31 implemented, 0 reserved)
 

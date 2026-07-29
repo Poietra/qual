@@ -120,7 +120,7 @@ jobs:
       - name: Fetch Manim at the pinned base commit
         # Shallow-fetch exactly the base commit the shipped profile is pinned
         # to (src/knowledge/profiles/README.md). The drift test reads the
-        # checkout named by MANIM_LINT_MANIM_ROOT (tests/knowledge_drift.rs).
+        # checkout named by QUAL_MANIM_ROOT (tests/knowledge_drift.rs).
         run: |
           git init "${RUNNER_TEMP}/manim"
           git -C "${RUNNER_TEMP}/manim" remote add origin https://github.com/ManimCommunity/manim.git
@@ -128,5 +128,5 @@ jobs:
           git -C "${RUNNER_TEMP}/manim" checkout --detach FETCH_HEAD
       - name: Knowledge drift gate
         env:
-          MANIM_LINT_MANIM_ROOT: ${{ runner.temp }}/manim
+          QUAL_MANIM_ROOT: ${{ runner.temp }}/manim
         run: cargo test --test knowledge_drift -- --ignored

@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::{StaticFactsReport, static_facts};
-use manim_lint::cli::StaticFactsArgs;
+use qual::application::{StaticFactsReport, static_facts};
+use qual::cli::StaticFactsArgs;
 use serde_json::Value;
 
 const SCHEMA: &str = include_str!("../schemas/static-facts-v0.json");
@@ -382,10 +382,10 @@ fn output_is_byte_identical_across_runs_and_worker_counts() {
 #[test]
 fn rule_selection_does_not_change_static_facts() {
     let source = b"from manim import Scene, Square\n\nclass Demo(Scene):\n    def construct(self):\n        self.add(Square())\n";
-    let first = project(source, Some("[tool.manim-lint]\nselect = [\"MLC\"]\n"));
+    let first = project(source, Some("[tool.qual]\nselect = [\"MLC\"]\n"));
     let second = project(
         source,
-        Some("[tool.manim-lint]\nselect = [\"MLP\"]\nignore = [\"MLP225\"]\n"),
+        Some("[tool.qual]\nselect = [\"MLP\"]\nignore = [\"MLP225\"]\n"),
     );
     assert_eq!(facts(first.path()).output, facts(second.path()).output);
 }

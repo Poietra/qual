@@ -111,7 +111,7 @@ pub struct SourceBridgeReport {
     pub output: String,
 }
 
-/// Runs `manim-lint source-bridge PATH --request REQUEST.json`.
+/// Runs `qual source-bridge PATH --request REQUEST.json`.
 pub fn run_source_bridge(args: &SourceBridgeArgs) -> Result<Execution, ApplicationError> {
     let report = source_bridge(args)?;
     Ok(Execution::success(report.output))
@@ -175,7 +175,7 @@ pub fn source_bridge(args: &SourceBridgeArgs) -> Result<SourceBridgeReport, Appl
     let document = serde_json::json!({
         "schema_version": 0,
         "tool": {
-            "name": "manim-lint",
+            "name": "qual",
             "version": crate::VERSION,
             "semantic_build_hash": snapshot.static_facts.document["tool"]["semantic_build_hash"],
         },
@@ -211,7 +211,7 @@ pub struct ChangeImpactReport {
     pub target_config: ResolvedConfig,
 }
 
-/// Runs `manim-lint change-impact --before OLD --after NEW`.
+/// Runs `qual change-impact --before OLD --after NEW`.
 pub fn run_change_impact(args: &ChangeImpactArgs) -> Result<Execution, ApplicationError> {
     let report = change_impact(args)?;
     Ok(Execution::success(report.output))
@@ -501,7 +501,7 @@ pub struct StaticFactsReport {
     pub config: ResolvedConfig,
 }
 
-/// Runs `manim-lint static-facts [PATH...]` and writes `StaticFacts` v0 JSON.
+/// Runs `qual static-facts [PATH...]` and writes `StaticFacts` v0 JSON.
 pub fn run_static_facts(args: &StaticFactsArgs) -> Result<Execution, ApplicationError> {
     let report = static_facts(args)?;
     Ok(Execution::success(report.output))
@@ -603,7 +603,7 @@ struct ComponentPlan {
     dependencies_before: Option<DependencyManifest>,
 }
 
-/// Runs `manim-lint check` and renders its output.
+/// Runs `qual check` and renders its output.
 pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
     validate_flag_combinations(args)?;
     let report = check(args)?;
@@ -622,7 +622,7 @@ pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
         stderr.push_str(&coverage::render_text(coverage));
     }
     for warning in &report.cache_warnings {
-        let _ = writeln!(stderr, "manim-lint: warning: {warning}");
+        let _ = writeln!(stderr, "qual: warning: {warning}");
     }
     Ok(Execution {
         stdout: report.output,
@@ -1359,7 +1359,7 @@ fn cache_has_drive_prefix(path: &str) -> bool {
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
-/// Runs `manim-lint coverage [PATH...] [--format text|json]`: the
+/// Runs `qual coverage [PATH...] [--format text|json]`: the
 /// analysis-coverage report as a standalone command on stdout.
 ///
 /// Computes the same fact stack a `check` run would (frontend facts plus
@@ -1578,7 +1578,7 @@ fn compute_incremental_facts(
     }
 }
 
-/// Runs `manim-lint cost PATH [--scene NAME]` (DESIGN §8.1, §4.1): a
+/// Runs `qual cost PATH [--scene NAME]` (DESIGN §8.1, §4.1): a
 /// per-scene symbolic cost breakdown over the lifecycle and cost facts.
 ///
 /// Unknown quantities are printed as "unknown" / "per-frame", never as a
@@ -2211,7 +2211,7 @@ fn walk_directory(
         // A symlink is followed only while it stays inside the project. An
         // analyzed project can come from an untrusted checkout, and `--fix`
         // writes back to the discovered path: without this, a link committed
-        // to a repository would let `manim-lint check --fix` rewrite an
+        // to a repository would let `qual check --fix` rewrite an
         // arbitrary file outside it.
         if !path_is_inside(project_root, &entry) {
             continue;
@@ -2502,7 +2502,7 @@ fn run_config() -> Result<Execution, ApplicationError> {
     run_config_at(&current_dir)
 }
 
-/// Runs `manim-lint config` for the project containing `start`.
+/// Runs `qual config` for the project containing `start`.
 ///
 /// Prints the resolved configuration as one JSON object, extended with an
 /// `enforcement` section that states which settings are actually enforced

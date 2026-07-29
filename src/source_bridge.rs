@@ -749,7 +749,7 @@ fn is_call_expression(source: &str) -> bool {
 }
 
 fn parsed_assignment_value(source: &str) -> Option<Box<ast::Expr>> {
-    let wrapped = format!("__manim_lint_bridge__ = ({source})\n");
+    let wrapped = format!("__qual_bridge__ = ({source})\n");
     let Ok(ast::Mod::Module(module)) = parse(&wrapped, Mode::Module, "<source-bridge>") else {
         return None;
     };

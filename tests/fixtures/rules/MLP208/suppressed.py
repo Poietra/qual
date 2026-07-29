@@ -6,4 +6,4 @@ class Demo(Scene):
         title = Text("The quick brown fox jumps over the lazy dog by the river")
         target = MathTex(r"\alpha")
         self.add(title)
-        self.play(Transform(title, target))  # manim-lint: ignore[MLP208]
+        self.play(Transform(title, target))  # qual: ignore[MLP208]

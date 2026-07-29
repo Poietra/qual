@@ -5,5 +5,5 @@ class SuppressedScene(Scene):
     def construct(self):
         circle = Circle()
         self.add(circle)
-        circle.shift(OUT)  # manim-lint: ignore[MLR121]
+        circle.shift(OUT)  # qual: ignore[MLR121]
         self.wait()

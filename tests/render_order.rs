@@ -6,20 +6,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::manim_surface;
-use manim_lint::frontend::index::{FrontendFacts, analyze as frontend_analyze};
-use manim_lint::knowledge;
-use manim_lint::render_order::{
+use qual::application::manim_surface;
+use qual::frontend::index::{FrontendFacts, analyze as frontend_analyze};
+use qual::knowledge;
+use qual::render_order::{
     DisplayOrder, MemberFacts, MemberProvenance, MovingReason, MovingScope, OrderUnknownReason,
     RenderOrderInputs, SuffixFact, display_order_at_play, inputs_at_play, is_order_known,
     moving_scope_at_play, moving_suffix_at_play, moving_suffix_evidence,
 };
-use manim_lint::semantic::events::Event;
-use manim_lint::semantic::interpreter::{self, LifecycleFacts, PlayKind, SceneLifecycle};
-use manim_lint::semantic::values::{
-    AllocationSite, CallContextId, Cardinality, Num, ObjectId, Truth,
-};
-use manim_lint::source::{FileId, SourceManager};
+use qual::semantic::events::Event;
+use qual::semantic::interpreter::{self, LifecycleFacts, PlayKind, SceneLifecycle};
+use qual::semantic::values::{AllocationSite, CallContextId, Cardinality, Num, ObjectId, Truth};
+use qual::source::{FileId, SourceManager};
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render_order")

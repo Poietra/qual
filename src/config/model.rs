@@ -72,9 +72,9 @@ impl std::fmt::Display for Platform {
 pub enum ConfigSource {
     /// Command-line flags.
     Cli,
-    /// The `[[tool.manim-lint.profile]]` entry selected for this run.
+    /// The `[[tool.qual.profile]]` entry selected for this run.
     SelectedProfile,
-    /// Base keys under `[tool.manim-lint]` in `pyproject.toml`.
+    /// Base keys under `[tool.qual]` in `pyproject.toml`.
     PyprojectBase,
     /// Values read from `manim.cfg` (only when `respect-manim-cfg`).
     ManimCfg,

@@ -15,8 +15,8 @@
 //! 9: no fabricated quantities). Output is deterministic and byte-stable
 //! for identical inputs.
 //!
-//! Consumed by `manim-lint coverage [PATH...]` (stdout) and
-//! `manim-lint check --analysis-summary` (stderr, after diagnostics;
+//! Consumed by `qual coverage [PATH...]` (stdout) and
+//! `qual check --analysis-summary` (stderr, after diagnostics;
 //! never affects stdout or the exit code).
 
 use std::collections::{BTreeMap, BTreeSet};

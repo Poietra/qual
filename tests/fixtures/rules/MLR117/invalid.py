@@ -11,4 +11,4 @@ class Bad(Scene):
 
 
 register_font("module_level.ttf")
-register_font("suppressed.ttf")  # manim-lint: ignore[MLR117]
+register_font("suppressed.ttf")  # qual: ignore[MLR117]
