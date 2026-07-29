@@ -71,11 +71,16 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo publish --locked --dry-run
 python3 scripts/check_release.py --tag v0.2.1
+QUAL_MANIM_ROOT=../manim cargo test --test knowledge_drift -- --ignored
 ```
 
 The DESIGN §11.4 benchmark gate must also be run on the pinned reference
 machine before approving the release PR. The release workflow reruns the
-portable quality gates and fetches the pinned Manim commit for knowledge drift.
+portable quality gates and fetches the public pinned Manim commit for upstream
+knowledge drift. Hosted Actions deliberately selects only the upstream drift
+test because its checkout does not contain the private `Poietra/fast-manim`
+working tree. The command above is therefore the release gate for both the
+upstream profile and the local optimized-fork overlay.
 
 Commit the release preparation separately (for example,
 `release: prepare 0.2.1`) and merge it through the normal reviewed PR path.
