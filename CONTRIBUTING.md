@@ -41,7 +41,7 @@ gate — are described in the
 
 Release preparation and the registry/permission bootstrap are documented in
 [docs/releasing.md](docs/releasing.md). `Cargo.toml` is the single version
-source; PyPI and npm metadata are derived from it.
+source; PyPI metadata is derived from it.
 
 ## Repository layout
 

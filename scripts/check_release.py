@@ -131,10 +131,16 @@ def main() -> None:
     )
     if missing_includes:
         fail(f"standalone archives omit: {', '.join(missing_includes)}")
+    installers = set(dist.get("installers", []))
+    if "npm" in installers:
+        fail("npm is not an active installer")
     publish_jobs = set(dist.get("publish-jobs", []))
-    required_jobs = {"npm", "./publish-pypi", "./publish-crates"}
-    if not required_jobs <= publish_jobs:
-        fail(f"publisher set changed; expected at least {sorted(required_jobs)}")
+    if publish_jobs != {"./publish-crates"}:
+        fail("cargo-dist must publish only the crates.io package")
+    pypi_workflow = ROOT / ".github/workflows/publish-pypi.yml"
+    pypi_text = pypi_workflow.read_text(encoding="utf-8")
+    if "workflow_run:" not in pypi_text or "workflows: [\"Release\"]" not in pypi_text:
+        fail("PyPI must publish from its top-level post-Release workflow")
     extra_artifacts = dist.get("extra-artifacts", [])
     if not any(
         isinstance(entry, dict)

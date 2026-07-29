@@ -9,10 +9,10 @@ ci = "github"
 dispatch-releases = true
 pr-run-mode = "plan"
 
-# GitHub archives are also the payload used by the shell, PowerShell, and npm
-# installers. PyPI wheels are built by the custom local-artifacts workflow.
-installers = ["shell", "powershell", "npm"]
-publish-jobs = ["npm", "./publish-pypi", "./publish-crates"]
+# PyPI wheels are built by the custom local-artifacts workflow and published
+# by the top-level publish-pypi workflow after Release completes successfully.
+installers = ["shell", "powershell"]
+publish-jobs = ["./publish-crates"]
 plan-jobs = ["./release-gate"]
 local-artifacts-jobs = ["./build-wheels"]
 
@@ -64,10 +64,6 @@ contents = "read"
 
 [dist.github-custom-job-permissions."build-wheels"]
 contents = "read"
-
-[dist.github-custom-job-permissions."publish-pypi"]
-contents = "read"
-id-token = "write"
 
 [dist.github-custom-job-permissions."publish-crates"]
 contents = "read"

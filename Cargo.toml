@@ -29,7 +29,7 @@ required-features = ["dev-tools"]
 [features]
 default = []
 # Maintainer-only binaries are excluded from normal cargo install, wheels,
-# release archives, and the generated npm package.
+# release archives, and standalone installers.
 dev-tools = []
 
 [dependencies]

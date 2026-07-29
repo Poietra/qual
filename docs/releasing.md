@@ -3,7 +3,7 @@
 The release flow intentionally follows the shape used by Ruff: one reviewed
 version fans out into native artifacts, Python wheels, source packages, and
 installer packages. `Cargo.toml` is the only version source. Maturin reads it
-for PyPI, and dist reads it for GitHub Releases and npm.
+for PyPI, and dist reads it for GitHub Releases and crates.io.
 
 ## What one release publishes
 
@@ -12,7 +12,6 @@ for PyPI, and dist reads it for GitHub Releases and npm.
 | GitHub Releases | checksummed archives for macOS arm64/x64, Linux glibc arm64/x64, Linux musl arm64/x64, and Windows x64 |
 | GitHub Releases | shell and PowerShell installers, application/LGPL source archives, manifest, and build attestations |
 | PyPI | platform wheels containing the `manim-lint` executable plus a source distribution |
-| npm | a generated `manim-lint` installer package that selects a matching GitHub archive |
 | crates.io | the source crate for `cargo install manim-lint --locked` |
 
 Prerelease versions create a GitHub prerelease but are not sent to package
@@ -26,23 +25,21 @@ deprecated and followed by a patch release; it is never overwritten.
    and both trusted publishers target this environment.
 2. On PyPI, configure a trusted publisher for repository
    `Poietra/manim-lint`, workflow `publish-pypi.yml`, environment `release`.
-   PyPI pending publishers can create the project on the first publish.
-3. On npm, reserve the unscoped package `manim-lint`. Add a granular
-   automation token with publish access as the repository secret `NPM_TOKEN`.
-   Narrow the token to this package after the first publish.
-4. crates.io trusted publishing needs an existing crate. Bootstrap the first
+   PyPI pending publishers can create the project on the first publish. This
+   top-level workflow follows a successful stable `Release` run and obtains
+   the wheels from that exact run; dry runs, PRs, and prereleases are skipped.
+3. crates.io trusted publishing needs an existing crate. Bootstrap the first
    source release once with a narrowly scoped owner token and
    `cargo publish --locked`, then configure the trusted publisher for
-   `Poietra/manim-lint`, workflow `publish-crates.yml`, environment `release`.
+   `Poietra/manim-lint`, workflow `release.yml`, environment `release`.
    Subsequent workflow runs obtain an ephemeral token through
    `rust-lang/crates-io-auth-action`.
-5. Keep the default `GITHUB_TOKEN` permission to create releases and
+4. Keep the default `GITHUB_TOKEN` permission to create releases and
    attestations. No long-lived PyPI or crates.io token is stored.
 
 Package names are checked before the first release because registry ownership
-is first-come, first-served. If an unscoped npm name becomes unavailable,
-change `npm-package` (and optionally `npm-scope`) in `dist-workspace.toml`
-before any public release, regenerate `release.yml`, and update both READMEs.
+is first-come, first-served. A PyPI pending publisher does not reserve the name,
+and the first crates.io publish is the point at which the crate name is claimed.
 
 Homebrew is deliberately not an active publisher yet: a stable tap repository
 does not exist. To add it later, create (for example)
@@ -97,14 +94,15 @@ tag cannot publish by accident.
 4. Approve the `release` environment deployment. The gate checks that the tag,
    Cargo package, lockfile, changelog, PyPI metadata, publisher list, and LGPL
    material agree before builds proceed.
-5. Confirm the GitHub release, PyPI, npm, and crates.io pages all show the same
+5. Confirm the GitHub release, PyPI, and crates.io pages all show the same
    version. Test one clean install command from each registry.
 
-GitHub is created before npm is published because the npm installer downloads
-its payload from the release. PyPI and crates.io publish through OIDC after all
-native builds and the GitHub host phase succeed. The final announcement waits
-for every registry job, so a partial publish is visible in the workflow rather
-than being reported as a successful release.
+crates.io publishes through OIDC after all native builds and the GitHub host
+phase succeed. After the `Release` workflow completes successfully, the
+top-level `Publish to PyPI` workflow verifies that the host job succeeded and
+that the plan is stable, then publishes the wheels through OIDC. A PyPI failure
+therefore appears as its own failed workflow and must be resolved before the
+release is considered complete.
 
 ## Updating dist
 
@@ -118,7 +116,8 @@ The custom reusable workflows are intentionally separate from generated code:
 
 - `release-gate.yml` owns product quality and compliance checks;
 - `build-wheels.yml` owns maturin's PyPI matrix and installed-wheel smoke test;
-- `publish-pypi.yml` and `publish-crates.yml` own trusted publishing.
+- `publish-crates.yml` owns crates.io publishing inside the generated release;
+- the top-level `publish-pypi.yml` owns post-Release PyPI trusted publishing.
 
 ## Binary-distribution compliance
 

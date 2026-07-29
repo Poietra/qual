@@ -1,4 +1,4 @@
 [package]
-# Only the user-facing CLI belongs in standalone archives and the npm wrapper.
+# Only the user-facing CLI belongs in standalone archives and installers.
 # The knowledge synchronizer is a maintainer tool gated behind `dev-tools`.
 binaries = ["manim-lint"]

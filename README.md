@@ -101,18 +101,14 @@ than guessing** — a deliberate design stance carried through every rule.
 
 ## Installation
 
-For a published release, choose any of these entry points. The PyPI and npm
-packages install the same native Rust executable; they do not import Manim or
-require a Python runtime after installation.
+For a published release, choose any of these entry points. The PyPI package
+installs the native Rust executable; it does not import Manim or require a
+Python runtime after installation.
 
 ```bash
 # Python tooling
 uv tool install manim-lint
 # or: pipx install manim-lint
-
-# Node tooling
-npm install --global manim-lint
-# or, without a global install: npx manim-lint check .
 
 # Rust tooling (builds from source; Rust 1.85+)
 cargo install manim-lint --locked

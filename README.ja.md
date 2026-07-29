@@ -59,18 +59,14 @@ scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is
 
 ## インストール
 
-公開済みリリースは、次のどの入口からでもインストールできます。PyPI と
-npm のパッケージが入れるものは同じ Rust ネイティブ実行ファイルで、実行時に
-Manim を import せず、Python ランタイムも必要としません。
+公開済みリリースは、次のどの入口からでもインストールできます。PyPI
+パッケージが入れるものは Rust ネイティブ実行ファイルで、実行時に Manim を
+import せず、Python ランタイムも必要としません。
 
 ```bash
 # Python ツールとして
 uv tool install manim-lint
 # または: pipx install manim-lint
-
-# Node ツールとして
-npm install --global manim-lint
-# グローバルインストールなしなら: npx manim-lint check .
 
 # Rust ツールとして（ソースからビルド、Rust 1.85+）
 cargo install manim-lint --locked

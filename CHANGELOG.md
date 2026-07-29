@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Ruff-style, single-version release pipeline.** A reviewed
   `Cargo.toml` version is now distributed by cargo-dist as checksummed,
-  attested Linux/macOS/Windows archives plus shell, PowerShell, and npm
-  installers; maturin builds matching PyPI wheels and an sdist; and a custom
+  attested Linux/macOS/Windows archives plus shell and PowerShell installers;
+  maturin builds matching PyPI wheels and an sdist; and a custom
   trusted-publishing job publishes the source crate to crates.io. A manual
   `release` environment gate re-runs formatting, clippy, tests, package
   verification, and knowledge drift before any registry write.
