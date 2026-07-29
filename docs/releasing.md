@@ -1,0 +1,132 @@
+# Releasing manim-lint
+
+The release flow intentionally follows the shape used by Ruff: one reviewed
+version fans out into native artifacts, Python wheels, source packages, and
+installer packages. `Cargo.toml` is the only version source. Maturin reads it
+for PyPI, and dist reads it for GitHub Releases and npm.
+
+## What one release publishes
+
+| Destination | Artifact |
+| --- | --- |
+| GitHub Releases | checksummed archives for macOS arm64/x64, Linux glibc arm64/x64, Linux musl arm64/x64, and Windows x64 |
+| GitHub Releases | shell and PowerShell installers, application/LGPL source archives, manifest, and build attestations |
+| PyPI | platform wheels containing the `manim-lint` executable plus a source distribution |
+| npm | a generated `manim-lint` installer package that selects a matching GitHub archive |
+| crates.io | the source crate for `cargo install manim-lint --locked` |
+
+Prerelease versions create a GitHub prerelease but are not sent to package
+registries. Registry versions are immutable, so a bad release is yanked or
+deprecated and followed by a patch release; it is never overwritten.
+
+## One-time repository and registry setup
+
+1. Create a protected GitHub environment named `release`. Add required
+   reviewers if the repository has more than one maintainer. The release gate
+   and both trusted publishers target this environment.
+2. On PyPI, configure a trusted publisher for repository
+   `Poietra/manim-lint`, workflow `publish-pypi.yml`, environment `release`.
+   PyPI pending publishers can create the project on the first publish.
+3. On npm, reserve the unscoped package `manim-lint`. Add a granular
+   automation token with publish access as the repository secret `NPM_TOKEN`.
+   Narrow the token to this package after the first publish.
+4. crates.io trusted publishing needs an existing crate. Bootstrap the first
+   source release once with a narrowly scoped owner token and
+   `cargo publish --locked`, then configure the trusted publisher for
+   `Poietra/manim-lint`, workflow `publish-crates.yml`, environment `release`.
+   Subsequent workflow runs obtain an ephemeral token through
+   `rust-lang/crates-io-auth-action`.
+5. Keep the default `GITHUB_TOKEN` permission to create releases and
+   attestations. No long-lived PyPI or crates.io token is stored.
+
+Package names are checked before the first release because registry ownership
+is first-come, first-served. If an unscoped npm name becomes unavailable,
+change `npm-package` (and optionally `npm-scope`) in `dist-workspace.toml`
+before any public release, regenerate `release.yml`, and update both READMEs.
+
+Homebrew is deliberately not an active publisher yet: a stable tap repository
+does not exist. To add it later, create (for example)
+`Poietra/homebrew-tap`, add `homebrew` to `installers` and `publish-jobs`, set
+`tap`, regenerate the workflow, and test a dry run. Linux packages for distro
+repositories should be maintained in their native repositories rather than
+claimed by this workflow.
+
+## Preparing a release PR
+
+Start from a clean `main` checkout after deciding whether the next version is
+a SemVer patch or minor release. Public diagnostic/configuration/JSON changes
+still follow the stronger contract-update rules in `AGENTS.md` and
+`DESIGN.md`.
+
+```bash
+git pull --ff-only
+python3 scripts/prepare_release.py 0.2.1
+```
+
+The script moves the current Unreleased notes under a dated version heading,
+updates `Cargo.toml`, lets Cargo update the root package entry in `Cargo.lock`,
+and checks all version consumers. Review those three files; edit the changelog
+into user-facing release notes, then run:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo publish --locked --dry-run
+python3 scripts/check_release.py --tag v0.2.1
+```
+
+The DESIGN §11.4 benchmark gate must also be run on the pinned reference
+machine before approving the release PR. The release workflow reruns the
+portable quality gates and fetches the pinned Manim commit for knowledge drift.
+
+Commit the release preparation separately (for example,
+`release: prepare 0.2.1`) and merge it through the normal reviewed PR path.
+
+## Dry run and publish
+
+The generated `.github/workflows/release.yml` is dispatch-based, so pushing a
+tag cannot publish by accident.
+
+1. In GitHub Actions, select **Release** and run it from the prepared `main`
+   commit with the default `dry-run`. This builds every archive and wheel but
+   does not create a tag, release, or registry upload.
+2. Inspect the workflow artifacts, install at least the native archive and
+   wheel for the maintainer's platform, and check `manim-lint --version`.
+3. Run the same workflow from the exact prepared commit with tag `v0.2.1`.
+4. Approve the `release` environment deployment. The gate checks that the tag,
+   Cargo package, lockfile, changelog, PyPI metadata, publisher list, and LGPL
+   material agree before builds proceed.
+5. Confirm the GitHub release, PyPI, npm, and crates.io pages all show the same
+   version. Test one clean install command from each registry.
+
+GitHub is created before npm is published because the npm installer downloads
+its payload from the release. PyPI and crates.io publish through OIDC after all
+native builds and the GitHub host phase succeed. The final announcement waits
+for every registry job, so a partial publish is visible in the workflow rather
+than being reported as a successful release.
+
+## Updating dist
+
+`release.yml` is generated code. Do not hand-edit it. To update dist, change
+`cargo-dist-version` in `dist-workspace.toml`, install or download that exact
+version, run `dist generate`, and review both the configuration and generated
+workflow. `dist plan` must succeed locally, and the Release workflow's PR hook
+also checks the generated plan.
+
+The custom reusable workflows are intentionally separate from generated code:
+
+- `release-gate.yml` owns product quality and compliance checks;
+- `build-wheels.yml` owns maturin's PyPI matrix and installed-wheel smoke test;
+- `publish-pypi.yml` and `publish-crates.yml` own trusted publishing.
+
+## Binary-distribution compliance
+
+The current parser brings in statically linked LGPL-3.0-only `malachite`
+components. Every binary format therefore includes the LGPL/GPL texts,
+`THIRD-PARTY-LICENSES.md`, and `RELINKING.md`; every GitHub release also hosts
+the exact application source archive, `Cargo.lock`, and a deterministic archive
+of all locked `malachite` sources. `scripts/check_release.py`, the source-bundle
+builder, and the wheel smoke test fail if this material drifts or disappears.
+See `RELINKING.md` for the rebuild path. This is the repository's compliance
+mechanism, not legal advice.

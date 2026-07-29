@@ -59,10 +59,37 @@ scenes/demo.py:14:19: MLC104 error Use a positive `duration`: the literal `0` is
 
 ## インストール
 
-Rust ツールチェーン(1.85+)が必要です。crates.io へのリリースはまだありません。ソースからインストールしてください。
+公開済みリリースは、次のどの入口からでもインストールできます。PyPI と
+npm のパッケージが入れるものは同じ Rust ネイティブ実行ファイルで、実行時に
+Manim を import せず、Python ランタイムも必要としません。
 
 ```bash
-git clone <this repository>
+# Python ツールとして
+uv tool install manim-lint
+# または: pipx install manim-lint
+
+# Node ツールとして
+npm install --global manim-lint
+# グローバルインストールなしなら: npx manim-lint check .
+
+# Rust ツールとして（ソースからビルド、Rust 1.85+）
+cargo install manim-lint --locked
+```
+
+Linux・macOS・Windows 向けの standalone installer とチェックサム付き
+archive は各 GitHub Release に添付されます。
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Poietra/manim-lint/releases/latest/download/manim-lint-installer.sh | sh
+```
+
+最初の registry release より前、または現在の checkout を使う場合はソースから
+インストールしてください。
+
+```bash
+git clone https://github.com/Poietra/manim-lint.git
 cd manim-lint
 cargo install --path .
 ```
@@ -437,8 +464,8 @@ output ................... concise | full | json | sarif | github, fixes, cost r
 ```bash
 cargo fmt --check
 cargo build
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 4 つのゲートすべてが通る必要があります。
@@ -447,9 +474,9 @@ knowledge profile のメンテナンス: `sync_manim_knowledge` バイナリは 
 
 ```bash
 # working tree(フォーク)— upstream に対しては情報提供のみ
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --diff
 # クリーンな upstream ベース — 矛盾ゼロでなければならない
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
 cargo test --test knowledge_drift -- --ignored   # layer-9 ドリフトゲート(両方)
 ```
 
@@ -489,3 +516,8 @@ cargo test --test knowledge_drift -- --ignored
 ## ライセンス
 
 [MIT](LICENSE)。
+
+プリビルド配布物には LGPL/GPL の本文、完全なロック済みソース、および
+[再リンク手順](RELINKING.md)を同梱します。この素材が欠けると release gate は
+公開を拒否します。依存ライセンスの詳細は
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)を参照してください。

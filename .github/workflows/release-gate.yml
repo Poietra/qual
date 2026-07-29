@@ -1,0 +1,45 @@
+name: Release gate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate release metadata
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [[ "$tag" == "dry-run" ]]; then
+            python3 scripts/check_release.py
+          else
+            python3 scripts/check_release.py --tag "$tag"
+          fi
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features
+      - run: cargo publish --locked --dry-run
+      - name: Fetch pinned Manim source
+        run: |
+          git init "${RUNNER_TEMP}/manim"
+          git -C "${RUNNER_TEMP}/manim" remote add origin https://github.com/ManimCommunity/manim.git
+          git -C "${RUNNER_TEMP}/manim" fetch --depth 1 origin 4d25c031ffe71c602e20935afd54a96f33545a6e
+          git -C "${RUNNER_TEMP}/manim" checkout --detach FETCH_HEAD
+      - name: Knowledge drift gate
+        env:
+          MANIM_LINT_MANIM_ROOT: ${{ runner.temp }}/manim
+        run: cargo test --test knowledge_drift -- --ignored

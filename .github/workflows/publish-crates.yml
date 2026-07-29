@@ -1,0 +1,28 @@
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish:
+    name: Upload source crate
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: rust-lang/crates-io-auth-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        id: auth
+      - name: Publish crate
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

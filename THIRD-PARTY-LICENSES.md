@@ -33,10 +33,14 @@ What this means in practice:
   `Cargo.lock`, the toolchain version, and the build command), and by stating
   that the work uses `malachite` under the LGPL with a copy of that license.
 
-Until that compliance material accompanies a release, prefer distributing
-`manim-lint` as source. This is a licensing obligation, not legal advice; if
-binaries are important to a downstream packager, review it with counsel, or
-remove the obligation by replacing the parser (see below).
+Prebuilt releases now carry that material in every distribution format:
+`LICENSES/LGPL-3.0-only.txt`, the GNU GPL text it incorporates,
+`RELINKING.md`, the exact `Cargo.lock`, the application source archive, and a
+deterministic `malachite-sources.tar.gz` containing the locked LGPL-covered
+sources beside the binary archives. The release metadata check, source-bundle
+builder, and installed-wheel test fail closed if this material disappears.
+This describes the project's compliance mechanism; it is not legal advice,
+and distributors should still review their own obligations.
 
 ## Removing the obligation
 

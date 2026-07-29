@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "Static lifecycle and performance analysis for Manim scenes"
 license = "MIT"
+publish = ["crates-io"]
 repository = "https://github.com/Poietra/manim-lint"
 homepage = "https://github.com/Poietra/manim-lint"
 documentation = "https://github.com/Poietra/manim-lint#readme"
@@ -23,6 +24,13 @@ path = "src/main.rs"
 [[bin]]
 name = "sync_manim_knowledge"
 path = "src/bin/sync_manim_knowledge.rs"
+required-features = ["dev-tools"]
+
+[features]
+default = []
+# Maintainer-only binaries are excluded from normal cargo install, wheels,
+# release archives, and the generated npm package.
+dev-tools = []
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -66,3 +74,8 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# cargo-dist uses this profile for standalone release archives.
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -101,8 +101,34 @@ than guessing** — a deliberate design stance carried through every rule.
 
 ## Installation
 
-Requires a Rust toolchain (1.85+). There is no crates.io release yet;
-install from source:
+For a published release, choose any of these entry points. The PyPI and npm
+packages install the same native Rust executable; they do not import Manim or
+require a Python runtime after installation.
+
+```bash
+# Python tooling
+uv tool install manim-lint
+# or: pipx install manim-lint
+
+# Node tooling
+npm install --global manim-lint
+# or, without a global install: npx manim-lint check .
+
+# Rust tooling (builds from source; Rust 1.85+)
+cargo install manim-lint --locked
+```
+
+Standalone installers and checksummed archives for Linux, macOS, and Windows
+are attached to each GitHub Release:
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Poietra/manim-lint/releases/latest/download/manim-lint-installer.sh | sh
+```
+
+Until the first registry release, or to install the current checkout, build
+from source:
 
 ```bash
 git clone https://github.com/Poietra/manim-lint.git
@@ -713,8 +739,8 @@ reports `match | ambiguous | missing` without writing project files.
 ```bash
 cargo fmt --check
 cargo build
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 All four gates must pass.
@@ -730,9 +756,9 @@ tree adds on top:
 
 ```bash
 # working tree (fork) — informational against upstream
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --diff
 # clean upstream base — must be contradiction-free
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
 cargo test --test knowledge_drift -- --ignored   # layer-9 drift gate (both)
 ```
 
@@ -784,6 +810,10 @@ prebuilt binary — the Python parser pulls in an LGPL-3.0-only big-integer
 crate, which Rust links statically — are documented in
 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). Installing from source
 (`cargo install`) is unaffected.
+
+Prebuilt releases include the LGPL/GPL texts, exact locked source, and the
+[relinking instructions](RELINKING.md) in every distribution format. The
+release gate refuses to publish when that material is missing.
 
 `manim-lint` is an independent project. Manim Community is not affiliated
 with it and does not endorse it.

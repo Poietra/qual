@@ -61,10 +61,10 @@ impl PatchRequest {
                 if replacement.is_empty() {
                     return Err("replacement must not be empty");
                 }
-                if let ArgumentSelector::Keyword { keyword } = argument
-                    && !is_identifier(keyword)
-                {
-                    return Err("keyword is not a Python identifier");
+                if let ArgumentSelector::Keyword { keyword } = argument {
+                    if !is_identifier(keyword) {
+                        return Err("keyword is not a Python identifier");
+                    }
                 }
             }
             PatchOperation::ModifyExistingShift { argument }

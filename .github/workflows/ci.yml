@@ -31,7 +31,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -44,7 +44,31 @@ jobs:
       # corpus regression identifiable at a glance.
       - name: Corpus gate
         run: cargo test --test corpus_gate
-      - run: cargo test
+      - run: cargo test --all-features
+
+  msrv:
+    name: Rust 1.85 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets --all-features
+
+  release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check release metadata and compliance files
+        run: python3 scripts/check_release.py
+      - name: Verify the crates.io source package
+        run: cargo publish --locked --dry-run
+      - name: Verify the LGPL corresponding-source bundle
+        run: |
+          python3 scripts/build_lgpl_source_bundle.py
+          gzip -t target/release-assets/malachite-sources.tar.gz
 
   # Layer-9 drift gate (DESIGN 11.2): regenerates knowledge candidates from
   # the Manim source at the profile's pinned base commit and asserts the
