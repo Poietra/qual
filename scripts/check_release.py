@@ -212,6 +212,23 @@ def main() -> None:
         or "github.event.inputs.tag" in gate_text
     ):
         fail("release gate must pass its tag through the environment")
+    upstream_drift_command = (
+        "cargo test --test knowledge_drift -- --ignored "
+        "upstream_profile_matches_clean_base_commit"
+    )
+    for workflow_name in ("ci.yml", "release-gate.yml"):
+        text = workflow_text.get(workflow_name, "")
+        if upstream_drift_command not in text:
+            fail(
+                f"{workflow_name} must select the upstream-only knowledge drift test"
+            )
+        if re.search(
+            r"(?m)^\s*run:\s*cargo test --test knowledge_drift -- --ignored\s*$",
+            text,
+        ):
+            fail(
+                f"{workflow_name} runs private-fork drift against the upstream checkout"
+            )
 
     pypi_workflow = ROOT / ".github/workflows/publish-pypi.yml"
     pypi_text = workflow_text.get(pypi_workflow.name, "")
