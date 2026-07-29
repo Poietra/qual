@@ -3,9 +3,14 @@ members = ["cargo:."]
 packages = ["manim-lint"]
 
 [dist]
-# Keep this exact: release.yml is generated and validated by this version.
+# Keep this exact: release.yml is derived from this version before the
+# repository-specific security hardening documented in docs/releasing.md.
 cargo-dist-version = "0.32.0"
 ci = "github"
+# release.yml starts from cargo-dist's template, then receives repository-
+# specific least-privilege and shell-injection hardening. Keep the hardened
+# workflow under review instead of letting `dist generate` overwrite it.
+allow-dirty = ["ci"]
 dispatch-releases = true
 pr-run-mode = "plan"
 

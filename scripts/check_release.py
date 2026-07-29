@@ -35,6 +35,11 @@ MALACHITE_PACKAGES = {
     "malachite-nz",
     "malachite-q",
 }
+PINNED_ACTION = re.compile(
+    r"^\s*-?\s*uses:\s+[\"']?(?!\./)[^\s@\"']+@(?P<ref>[^\s#\"']+)",
+    flags=re.MULTILINE,
+)
+COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def load_toml(path: str) -> dict[str, object]:
@@ -137,10 +142,57 @@ def main() -> None:
     publish_jobs = set(dist.get("publish-jobs", []))
     if publish_jobs != {"./publish-crates"}:
         fail("cargo-dist must publish only the crates.io package")
+    if dist.get("allow-dirty") != ["ci"]:
+        fail("cargo-dist must preserve the security-hardened release workflow")
+
+    workflow_dir = ROOT / ".github/workflows"
+    workflow_text = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(workflow_dir.glob("*.yml"))
+    }
+    for name, text in workflow_text.items():
+        for match in PINNED_ACTION.finditer(text):
+            action_ref = match.group("ref")
+            if not COMMIT_SHA.fullmatch(action_ref):
+                fail(f"{name} has an action that is not pinned to a commit: {action_ref}")
+        if "secrets: inherit" in text:
+            fail(f"{name} inherits secrets instead of declaring its requirements")
+
+    release_text = workflow_text.get("release.yml", "")
+    required_release_hardening = (
+        '\nname: Release\npermissions:\n  "contents": "read"\n',
+        "RELEASE_TAG: ${{ inputs.tag }}",
+        'dist host --steps=create "--tag=$RELEASE_TAG"',
+        'gh release create "$RELEASE_TAG"',
+        '    permissions:\n      "attestations": "write"\n      "contents": "write"\n      "id-token": "write"',
+    )
+    if any(marker not in release_text for marker in required_release_hardening):
+        fail("release.yml is missing required permission or input hardening")
+    forbidden_release_fragments = (
+        "format('host --steps=create --tag={0}', inputs.tag)",
+        'gh release create "${{ needs.plan.outputs.tag }}"',
+    )
+    if any(fragment in release_text for fragment in forbidden_release_fragments):
+        fail("release.yml interpolates a release tag directly into shell code")
+
+    gate_text = workflow_text.get("release-gate.yml", "")
+    if (
+        "RELEASE_TAG: ${{ inputs.tag }}" not in gate_text
+        or "github.event.inputs.tag" in gate_text
+    ):
+        fail("release gate must pass its tag through the environment")
+
     pypi_workflow = ROOT / ".github/workflows/publish-pypi.yml"
-    pypi_text = pypi_workflow.read_text(encoding="utf-8")
+    pypi_text = workflow_text.get(pypi_workflow.name, "")
     if "workflow_run:" not in pypi_text or "workflows: [\"Release\"]" not in pypi_text:
         fail("PyPI must publish from its top-level post-Release workflow")
+    pypi_guards = (
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.event == 'workflow_dispatch'",
+        "github.event.workflow_run.head_branch == github.event.repository.default_branch",
+    )
+    if any(guard not in pypi_text for guard in pypi_guards):
+        fail("PyPI workflow_run is missing a trusted Release-source guard")
     extra_artifacts = dist.get("extra-artifacts", [])
     if not any(
         isinstance(entry, dict)

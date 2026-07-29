@@ -106,11 +106,27 @@ release is considered complete.
 
 ## Updating dist
 
-`release.yml` is generated code. Do not hand-edit it. To update dist, change
-`cargo-dist-version` in `dist-workspace.toml`, install or download that exact
-version, run `dist generate`, and review both the configuration and generated
-workflow. `dist plan` must succeed locally, and the Release workflow's PR hook
-also checks the generated plan.
+`release.yml` is derived from cargo-dist's generated workflow and then kept as
+security-reviewed code. `allow-dirty = ["ci"]` prevents `dist generate` from
+silently replacing its least-privilege permissions, environment-based input
+handling, pinned Actions, and explicit reusable-workflow inputs.
+
+To update dist, make the change in a temporary worktree or temporarily remove
+`ci` from `allow-dirty`, update `cargo-dist-version`, and run `dist generate`.
+Review the generated diff, reapply the documented security hardening, restore
+`allow-dirty = ["ci"]`, and run all of the following before committing:
+
+```bash
+actionlint .github/workflows/*.yml
+uvx zizmor==1.28.0 .github/workflows
+python3 scripts/check_release.py
+dist plan
+```
+
+`scripts/check_release.py` fails closed if an external Action is not pinned to
+a full commit SHA, if reusable jobs inherit all secrets, if the release tag is
+interpolated directly into shell code, or if the PyPI `workflow_run` loses its
+trusted-source guards.
 
 The custom reusable workflows are intentionally separate from generated code:
 

@@ -52,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release workflows now fail closed under security linting.** External
+  Actions are pinned to reviewed commit SHAs, release tags enter shell steps
+  through environment variables, reusable jobs no longer inherit unrelated
+  secrets, and job permissions are limited to the release phase that needs
+  them. CI runs zizmor to prevent these controls from drifting.
 - The declared Rust 1.85 MSRV is now enforced in CI and works in practice;
   request validation no longer uses let-chain syntax that requires Rust 1.88.
 - **Untrusted input can no longer abort the process.** The 0.2.0 limits missed

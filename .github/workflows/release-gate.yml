@@ -2,6 +2,10 @@ name: Release gate
 
 on:
   workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,21 +17,23 @@ jobs:
     environment:
       name: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
         with:
+          toolchain: stable
           components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Validate release metadata
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          tag="${{ github.event.inputs.tag }}"
-          if [[ "$tag" == "dry-run" ]]; then
+          if [[ "$RELEASE_TAG" == "dry-run" ]]; then
             python3 scripts/check_release.py
           else
-            python3 scripts/check_release.py --tag "$tag"
+            python3 scripts/check_release.py --tag "$RELEASE_TAG"
           fi
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
