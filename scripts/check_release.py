@@ -205,6 +205,17 @@ def main() -> None:
     )
     if any(fragment in release_text for fragment in forbidden_release_fragments):
         fail("release.yml interpolates a release tag directly into shell code")
+    global_job_start = release_text.find("\n  build-global-artifacts:\n")
+    global_job_end = release_text.find("\n  host:\n", global_job_start)
+    if global_job_start == -1 or global_job_end == -1:
+        fail("release.yml has no bounded build-global-artifacts job")
+    global_job = release_text[global_job_start:global_job_end]
+    required_global_python = (
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+        'python-version: "3.11"',
+    )
+    if any(marker not in global_job for marker in required_global_python):
+        fail("build-global-artifacts must install pinned Python 3.11 for tomllib")
 
     gate_text = workflow_text.get("release-gate.yml", "")
     if (
