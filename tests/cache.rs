@@ -455,7 +455,12 @@ fn concurrent_cold_writers_share_the_wal_database() {
     assert!(
         reports
             .iter()
-            .all(|report| report.cache_warnings.is_empty())
+            .all(|report| report.cache_warnings.is_empty()),
+        "unexpected cache warnings: {:?}",
+        reports
+            .iter()
+            .map(|report| &report.cache_warnings)
+            .collect::<Vec<_>>()
     );
     assert!(
         reports
