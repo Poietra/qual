@@ -3,7 +3,7 @@ requires = ["maturin>=1.11.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "qual"
+name = "qual-manim"
 dynamic = ["version"]
 description = "Static lifecycle and performance analysis for Manim scenes"
 readme = "README.md"
