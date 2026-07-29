@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Ruff-style, single-version release pipeline.** A reviewed
+  `Cargo.toml` version is now distributed by cargo-dist as checksummed,
+  attested Linux/macOS/Windows archives plus shell and PowerShell installers;
+  maturin builds matching PyPI wheels and an sdist; and a custom
+  trusted-publishing job publishes the source crate to crates.io. A manual
+  `release` environment gate re-runs formatting, clippy, tests, package
+  verification, and knowledge drift before any registry write.
+- Release compliance material for the statically linked LGPL-3.0-only
+  `malachite` dependency: verbatim LGPL/GPL texts, relinking instructions,
+  source archives, and fail-closed metadata/wheel checks.
 - **A `rich` output format, and it is the default in a terminal.** Each finding
   gets a severity banner, the offending source line with its span underlined,
   two lines of context, the explanation, and a run summary
@@ -42,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release workflows now fail closed under security linting.** External
+  Actions are pinned to reviewed commit SHAs, release tags enter shell steps
+  through environment variables, reusable jobs no longer inherit unrelated
+  secrets, and job permissions are limited to the release phase that needs
+  them. CI runs zizmor to prevent these controls from drifting.
+- The declared Rust 1.85 MSRV is now enforced in CI and works in practice;
+  request validation no longer uses let-chain syntax that requires Rust 1.88.
 - **Untrusted input can no longer abort the process.** The 0.2.0 limits missed
   every chain that nests without nesting brackets — `a()()()`, `a.b.b.b`,
   `1 + 1 + 1`, `lambda: lambda:` — each of which overflowed the stack. Tokens

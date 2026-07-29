@@ -1,0 +1,83 @@
+[workspace]
+members = ["cargo:."]
+packages = ["manim-lint"]
+
+[dist]
+# Keep this exact: release.yml is derived from this version before the
+# repository-specific security hardening documented in docs/releasing.md.
+cargo-dist-version = "0.32.0"
+ci = "github"
+# release.yml starts from cargo-dist's template, then receives repository-
+# specific least-privilege and shell-injection hardening. Keep the hardened
+# workflow under review instead of letting `dist generate` overwrite it.
+allow-dirty = ["ci"]
+dispatch-releases = true
+pr-run-mode = "plan"
+
+# PyPI wheels are built by the custom local-artifacts workflow and published
+# by the top-level publish-pypi workflow after Release completes successfully.
+installers = ["shell", "powershell"]
+publish-jobs = ["./publish-crates"]
+plan-jobs = ["./release-gate"]
+local-artifacts-jobs = ["./build-wheels"]
+
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+]
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+checksum = "sha256"
+source-tarball = true
+install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
+
+# These files are release-critical: malachite is LGPL-3.0-only and is linked
+# into prebuilt artifacts. The release gate also checks that they are present.
+include = [
+  "LICENSES/GPL-3.0-only.txt",
+  "LICENSES/LGPL-3.0-only.txt",
+  "RELINKING.md",
+  "THIRD-PARTY-LICENSES.md",
+]
+
+create-release = true
+github-attestations = true
+github-attestations-phase = "announce"
+github-attestations-filters = [
+  "*.json",
+  "*.ps1",
+  "*.sha256",
+  "*.sh",
+  "*.tar.gz",
+  "*.zip",
+]
+
+[[dist.extra-artifacts]]
+# Build outside cargo-dist's output directory; cargo-dist copies the finished
+# artifact into target/distrib. Using the destination as the source truncates
+# it during that copy.
+artifacts = ["target/release-assets/malachite-sources.tar.gz"]
+build = ["python3", "scripts/build_lgpl_source_bundle.py"]
+
+[dist.github-custom-job-permissions."release-gate"]
+contents = "read"
+
+[dist.github-custom-job-permissions."build-wheels"]
+contents = "read"
+
+[dist.github-custom-job-permissions."publish-crates"]
+contents = "read"
+id-token = "write"
+
+[dist.github-action-commits]
+"actions/checkout" = "de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+"actions/upload-artifact" = "bbbca2ddaa5d8feaa63e36b76fdaad77386f024f" # v7.0.0
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
+"actions/attest-build-provenance" = "a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32" # v4.1.0
+"actions/attest" = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6" # v4
+"actions/setup-node" = "249970729cb0ef3589644e2896645e5dc5ba9c38" # v6

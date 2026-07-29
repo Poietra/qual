@@ -29,8 +29,8 @@ All four must pass before a change is done:
 ```bash
 cargo fmt --check
 cargo build
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 `cargo test` already includes the labeled corpus gate
@@ -38,6 +38,10 @@ cargo clippy --all-targets -- -D warnings
 two explicit release gates — the benchmark gate and the knowledge-drift
 gate — are described in the
 [README's release quality gates section](README.md#release-quality-gates-design-114).
+
+Release preparation and the registry/permission bootstrap are documented in
+[docs/releasing.md](docs/releasing.md). `Cargo.toml` is the single version
+source; PyPI metadata is derived from it.
 
 ## Repository layout
 

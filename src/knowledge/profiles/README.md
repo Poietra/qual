@@ -196,19 +196,19 @@ returns-`self` evidence, `__all__` lists, and the star-export closure of
 
 ```sh
 # reviewable candidates (byte-identical for identical input)
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --emit candidates.json
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --emit candidates.json
 
 # drift check against the shipped profile (default upstream_0_20);
 # exit 1 when the profile contradicts the source
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff --report drift.json
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --diff --report drift.json
 
 # drift check against a committed tree instead of the working tree:
 # `git archive` materializes it in memory (read-only) — this is how the
 # upstream profile is checked against the clean base commit
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --manim-ref 4d25c031 --diff
 
 # fork overlay vs the working tree it describes
-cargo run --bin sync_manim_knowledge -- --manim-root ../manim --diff local_0_20_1_4d25c031
+cargo run --features dev-tools --bin sync_manim_knowledge -- --manim-root ../manim --diff local_0_20_1_4d25c031
 ```
 
 Every generated entry is marked `"generated": true`; curated-only semantic
