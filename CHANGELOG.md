@@ -79,8 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The project is now named Qual.** The CLI, Cargo crate, and PyPI project
-  move from `manim-lint` to `qual`; configuration moves from
+- **The project is now named Qual.** The CLI and Cargo crate move from
+  `manim-lint` to `qual`; the PyPI distribution moves to `qual-manim` because
+  PyPI rejects the shorter name as too similar to an existing project;
+  configuration moves from
   `[tool.manim-lint]` to `[tool.qual]`; inline suppressions use `# qual:`;
   the cache moves to `.qual-cache`; and maintainer builds use the
   `QUAL_MANIM_ROOT` and `QUAL_BUILD_ID` environment variables. Rule IDs and

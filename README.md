@@ -107,8 +107,8 @@ Python runtime after installation.
 
 ```bash
 # Python tooling
-uv tool install qual
-# or: pipx install qual
+uv tool install qual-manim
+# or: pipx install qual-manim
 
 # Rust tooling (builds from source; Rust 1.85+)
 cargo install qual --locked

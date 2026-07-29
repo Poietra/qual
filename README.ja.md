@@ -65,8 +65,8 @@ import せず、Python ランタイムも必要としません。
 
 ```bash
 # Python ツールとして
-uv tool install qual
-# または: pipx install qual
+uv tool install qual-manim
+# または: pipx install qual-manim
 
 # Rust ツールとして（ソースからビルド、Rust 1.85+）
 cargo install qual --locked

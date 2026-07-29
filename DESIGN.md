@@ -3,7 +3,7 @@
 - 状態: 実装済み（v0.2.0、ルール 92/92）
 - 対象: Manim Community 0.20 系（実地参照は 2026-07-17 時点の `0.20.1`、基底コミット `4d25c031`。ローカルフォークの未コミット高速化を含む作業ツリーは `local_0_20_1_4d25c031` オーバーレイ側にのみ反映する）
 - 実装言語: Rust 2024 edition（rustc 1.85 以上）。本書が Python 実装を前提に書かれた箇所は歴史的経緯であり、現行の実装配置は `docs/architecture.md` と `CONTRIBUTING.md` が正典
-- CLI / package 名: `qual` / `qual`
+- CLI / Cargo package / PyPI distribution 名: `qual` / `qual` / `qual-manim`
 
 ## 1. 結論
 

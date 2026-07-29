@@ -11,7 +11,7 @@ for PyPI, and dist reads it for GitHub Releases and crates.io.
 | --- | --- |
 | GitHub Releases | checksummed archives for macOS arm64/x64, Linux glibc arm64/x64, Linux musl arm64/x64, and Windows x64 |
 | GitHub Releases | shell and PowerShell installers, application/LGPL source archives, manifest, and build attestations |
-| PyPI | platform wheels containing the `qual` executable plus a source distribution |
+| PyPI (`qual-manim`) | platform wheels containing the `qual` executable plus a source distribution |
 | crates.io | the source crate for `cargo install qual --locked` |
 
 Prerelease versions create a GitHub prerelease but are not sent to package
@@ -23,7 +23,7 @@ deprecated and followed by a patch release; it is never overwritten.
 1. Create a protected GitHub environment named `release`. Add required
    reviewers if the repository has more than one maintainer. The release gate
    and both trusted publishers target this environment.
-2. On PyPI, configure a trusted publisher for repository
+2. On PyPI, configure the `qual-manim` trusted publisher for repository
    `Poietra/qual`, workflow `publish-pypi.yml`, environment `release`.
    PyPI pending publishers can create the project on the first publish. This
    top-level workflow follows a successful stable `Release` run and obtains
@@ -95,7 +95,8 @@ tag cannot publish by accident.
    Cargo package, lockfile, changelog, PyPI metadata, publisher list, and LGPL
    material agree before builds proceed.
 5. Confirm the GitHub release, PyPI, and crates.io pages all show the same
-   version. Test one clean install command from each registry.
+   version. Test `uv tool install qual-manim` and
+   `cargo install qual --locked` in clean environments.
 
 crates.io publishes through OIDC after all native builds and the GitHub host
 phase succeed. After the `Release` workflow completes successfully, the

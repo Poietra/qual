@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "qual"
+PYPI_PROJECT_NAME = "qual-manim"
 REPOSITORY_URL = "https://github.com/Poietra/qual"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\."
@@ -131,8 +132,8 @@ def main() -> None:
     project = pyproject.get("project")
     if not isinstance(project, dict):
         fail("pyproject.toml has no [project] table")
-    if project.get("name") != PACKAGE_NAME:
-        fail(f"PyPI project name must remain {PACKAGE_NAME}")
+    if project.get("name") != PYPI_PROJECT_NAME:
+        fail(f"PyPI project name must remain {PYPI_PROJECT_NAME}")
     urls = project.get("urls")
     if not isinstance(urls, dict):
         fail("pyproject.toml has no [project.urls] table")
