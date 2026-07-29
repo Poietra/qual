@@ -1,6 +1,6 @@
 # Third-party licenses
 
-`manim-lint` itself is [MIT](LICENSE) licensed. It links third-party Rust
+`qual` itself is [MIT](LICENSE) licensed. It links third-party Rust
 crates whose licenses are listed here. Regenerate the survey with
 `cargo license` or `cargo deny list`.
 
@@ -18,14 +18,14 @@ crates whose licenses are listed here. Regenerate the survey with
 `rustpython-parser`, the Python parser this analyzer is built on, depends on
 `rustpython-ast`, which uses `malachite-bigint` for Python integer literals.
 The `malachite` family is **LGPL-3.0-only**, and Rust links it statically, so
-its object code is present in any compiled `manim-lint` binary.
+its object code is present in any compiled `qual` binary.
 
 What this means in practice:
 
-- **Source distribution (crates.io, `cargo install manim-lint`, building from
+- **Source distribution (crates.io, `cargo install qual`, building from
   a checkout) is unaffected.** Each user's toolchain fetches and compiles
   `malachite` itself; nothing LGPL-licensed is redistributed by this project.
-  `manim-lint`'s own source stays MIT.
+  `qual`'s own source stays MIT.
 - **Distributing a prebuilt binary triggers LGPL-3.0 §4.** A statically linked
   executable is a "Combined Work". Shipping it obliges the distributor to let
   recipients relink the executable against a modified `malachite` — in
@@ -62,4 +62,4 @@ public API surface of [Manim Community](https://www.manim.community/)
 (MIT licensed): class names, base chains, method kinds, and export lists,
 extracted statically by `sync_manim_knowledge` from a Manim checkout. They
 contain no Manim source code. Manim Community is a separate project and is
-not affiliated with, nor an endorser of, `manim-lint`.
+not affiliated with, nor an endorser of, `qual`.

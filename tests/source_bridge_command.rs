@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use manim_lint::application::{source_bridge, static_facts};
-use manim_lint::cli::{SourceBridgeArgs, StaticFactsArgs};
+use qual::application::{source_bridge, static_facts};
+use qual::cli::{SourceBridgeArgs, StaticFactsArgs};
 use serde_json::{Value, json};
 
 const REQUEST_SCHEMA: &str = include_str!("../schemas/source-bridge-request-v0.json");
@@ -24,7 +24,7 @@ fn project(source: &str) -> tempfile::TempDir {
     directory
 }
 
-fn facts(project: &Path) -> manim_lint::application::StaticFactsReport {
+fn facts(project: &Path) -> qual::application::StaticFactsReport {
     static_facts(&StaticFactsArgs {
         paths: vec![project.to_path_buf()],
         ..StaticFactsArgs::default()
@@ -46,7 +46,7 @@ fn target_object(document: &Value, binding: &str) -> Value {
         .clone()
 }
 
-fn run(project: &Path, request: &Value) -> manim_lint::application::SourceBridgeReport {
+fn run(project: &Path, request: &Value) -> qual::application::SourceBridgeReport {
     let request_file = project.join("request.json");
     std::fs::write(&request_file, serde_json::to_vec_pretty(&request).unwrap()).unwrap();
     source_bridge(&SourceBridgeArgs {

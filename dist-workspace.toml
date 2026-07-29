@@ -1,6 +1,6 @@
 [workspace]
 members = ["cargo:."]
-packages = ["manim-lint"]
+packages = ["qual"]
 
 [dist]
 # Keep this exact: release.yml is derived from this version before the

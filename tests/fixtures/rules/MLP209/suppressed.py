@@ -11,4 +11,4 @@ class Demo(Scene):
         panel = VGroup(Dot(), Dot(), Dot(), Dot(), Dot(), Dot(), Dot(), Dot())
         self.add(background, panel)
         background.add_updater(drift)
-        self.wait(2)  # manim-lint: ignore[MLP209]
+        self.wait(2)  # qual: ignore[MLP209]

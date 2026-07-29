@@ -2,7 +2,7 @@
 //! (DESIGN §5.4): loading, validation, overlay semantics, and the
 //! star-import exports bridge.
 
-use manim_lint::knowledge::{
+use qual::knowledge::{
     self, AcceptedTarget, ForkBlocker, KnowledgeError, ProfileDocument, SceneMembershipEffect,
     SymbolKind, apply_overlay,
 };
@@ -241,18 +241,18 @@ fn register_font_is_exported_as_a_function() {
 
 #[test]
 fn override_animate_and_graph_overrides_are_curated() {
-    let profile = manim_lint::knowledge::load("upstream_0_20").unwrap();
+    let profile = qual::knowledge::load("upstream_0_20").unwrap();
     let (id, helper) = profile
         .resolve_export("override_animate")
         .expect("override_animate star export");
     assert_eq!(id, "manim.mobject.mobject.override_animate");
-    assert_eq!(helper.kind, manim_lint::knowledge::SymbolKind::Function);
+    assert_eq!(helper.kind, qual::knowledge::SymbolKind::Function);
 
     let graph = profile
         .resolve_export("Graph")
         .expect("Graph star export")
         .1;
-    assert_eq!(graph.kind, manim_lint::knowledge::SymbolKind::Vmobject);
+    assert_eq!(graph.kind, qual::knowledge::SymbolKind::Vmobject);
     for method in [
         "add_vertices",
         "remove_vertices",

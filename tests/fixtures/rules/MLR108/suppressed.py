@@ -6,5 +6,5 @@ class SuppressedScene(ThreeDScene):
         label = Text("HUD")
         self.add_fixed_in_frame_mobjects(label)
         self.remove_fixed_in_frame_mobjects(label)
-        label.set_color(RED)  # manim-lint: ignore[MLR108]
+        label.set_color(RED)  # qual: ignore[MLR108]
         self.wait()

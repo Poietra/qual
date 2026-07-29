@@ -95,7 +95,7 @@ def main() -> None:
         raise SystemExit(f"LGPL source directories missing: {', '.join(missing_sources)}")
 
     manifest_lines = [
-        "Locked LGPL-3.0-only sources for manim-lint",
+        "Locked LGPL-3.0-only sources for qual",
         "Generated from Cargo.lock; each directory is an unmodified registry source.",
         "",
     ]

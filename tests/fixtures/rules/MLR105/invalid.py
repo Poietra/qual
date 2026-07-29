@@ -7,4 +7,4 @@ class Bad(Scene):
         unclosed = MarkupText("<u>never closed")
         entity = MarkupText("x &foo; y")
         stray = MarkupText("stray </b> here")
-        supp = MarkupText("<b>oops</i>")  # manim-lint: ignore[MLR105]
+        supp = MarkupText("<b>oops</i>")  # qual: ignore[MLR105]

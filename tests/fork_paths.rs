@@ -12,20 +12,20 @@
 
 use std::path::Path;
 
-use manim_lint::application::{check, run_cost};
-use manim_lint::cli::CheckArgs;
-use manim_lint::diagnostic::{Confidence, Severity};
-use manim_lint::reporting::OutputFormat;
-use manim_lint::rules::registry;
+use qual::application::{check, run_cost};
+use qual::cli::CheckArgs;
+use qual::diagnostic::{Confidence, Severity};
+use qual::reporting::OutputFormat;
+use qual::rules::registry;
 
 /// The DESIGN §8.2 fork-profile configuration: the local overlay plus a
 /// production profile requesting the fork pipeline and static layers.
 const FORK_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 knowledge-profile = \"local_0_20_1_4d25c031\"
 default-profile = \"production\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"production\"
 renderer = \"cairo\"
 platform = \"linux\"
@@ -36,11 +36,11 @@ cairo-static-layers = true
 /// Same overlay, but the fork pipeline is unrequested (`workers 0` is
 /// not a blocker and never a reported loss — DESIGN §7.3).
 const UNREQUESTED_PYPROJECT: &str = "\
-[tool.manim-lint]
+[tool.qual]
 knowledge-profile = \"local_0_20_1_4d25c031\"
 default-profile = \"production\"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = \"production\"
 renderer = \"cairo\"
 platform = \"linux\"
@@ -267,7 +267,7 @@ fn explicit_select_evaluates_mlp225_under_the_fork_profile() {
             "no removal advice"
         );
     }
-    assert_eq!(report.exit, manim_lint::cli::ExitStatus::Success);
+    assert_eq!(report.exit, qual::cli::ExitStatus::Success);
 }
 
 /// Even the explicit opt-in stays inert under `upstream_0_20`: the

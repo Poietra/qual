@@ -5,15 +5,15 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use manim_lint::frontend::ManimSurface;
-use manim_lint::frontend::index::{
+use qual::frontend::ManimSurface;
+use qual::frontend::index::{
     ArgShape, AttributeRef, FrontendFacts, LiteralFact, ParamFact, ParamKind, QualifiedCall,
     ReceiverKind, analyze,
 };
-use manim_lint::frontend::statements::{
+use qual::frontend::statements::{
     StatementRole, each_class_scope_statement, for_loop_with_body_statement, walk_certain_exprs,
 };
-use manim_lint::source::{FileId, SourceManager};
+use qual::source::{FileId, SourceManager};
 use rustpython_parser::ast::{self, Ranged};
 
 const SCENE: &str = "manim.scene.scene.Scene";

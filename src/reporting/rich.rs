@@ -250,7 +250,7 @@ fn push_summary(
     if let Some(first) = rules.first() {
         let _ = writeln!(
             output,
-            "{dim}Run `manim-lint explain {first}` for the full rule documentation.{reset}",
+            "{dim}Run `qual explain {first}` for the full rule documentation.{reset}",
             dim = color.style(DIM),
             reset = color.style(RESET),
         );

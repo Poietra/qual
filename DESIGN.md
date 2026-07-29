@@ -1,13 +1,13 @@
-# manim-lint 設計書
+# Qual 設計書
 
 - 状態: 実装済み（v0.2.0、ルール 92/92）
 - 対象: Manim Community 0.20 系（実地参照は 2026-07-17 時点の `0.20.1`、基底コミット `4d25c031`。ローカルフォークの未コミット高速化を含む作業ツリーは `local_0_20_1_4d25c031` オーバーレイ側にのみ反映する）
 - 実装言語: Rust 2024 edition（rustc 1.85 以上）。本書が Python 実装を前提に書かれた箇所は歴史的経緯であり、現行の実装配置は `docs/architecture.md` と `CONTRIBUTING.md` が正典
-- CLI / package 名: `manim-lint` / `manim_lint`
+- CLI / package 名: `qual` / `qual`
 
 ## 1. 結論
 
-`manim-lint` は一般的な Python linter の薄いプラグインにはしない。対象コードを実行も import もせず、次の三つを同時に扱う独立した静的解析器として作る。
+`qual` は一般的な Python linter の薄いプラグインにはしない。対象コードを実行も import もせず、次の三つを同時に扱う独立した静的解析器として作る。
 
 1. Manim のライフサイクルを追う抽象解釈器
 2. Cairo / OpenGL の描画特性を含む、記号的なコスト推定器
@@ -325,7 +325,7 @@ score = operation_weight
 - `copy()` が小さな Dot に一度: 診断しない。
 - `copy()` / `align_data()` が large family の updater 内: warning。
 
-calibration がない場合の出力は「high multiplicity」「per-frame × family-linear」のような階級にする。将来 `manim-lint calibrate` を追加する場合も、machine / Manim source digest / renderer / resolution を含む別 JSON に係数を保存する。
+calibration がない場合の出力は「high multiplicity」「per-frame × family-linear」のような階級にする。将来 `qual calibrate` を追加する場合も、machine / Manim source digest / renderer / resolution を含む別 JSON に係数を保存する。
 
 ## 5. 解析アーキテクチャ
 
@@ -926,15 +926,15 @@ dot.add_updater(lambda m, dt: m.shift(dt * RIGHT))  # 時間基準
 ### 8.1 commands
 
 ```text
-manim-lint check [PATH...]
-manim-lint explain RULE
-manim-lint rules
-manim-lint config
-manim-lint cost PATH [--scene NAME]
-manim-lint coverage [PATH...] [--format text|json]
-manim-lint static-facts [PATH...] [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
-manim-lint change-impact --before PATH --after PATH [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
-manim-lint source-bridge PATH --request REQUEST.json [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+qual check [PATH...]
+qual explain RULE
+qual rules
+qual config
+qual cost PATH [--scene NAME]
+qual coverage [PATH...] [--format text|json]
+qual static-facts [PATH...] [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+qual change-impact --before PATH --after PATH [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
+qual source-bridge PATH --request REQUEST.json [--profile NAME|all] [--renderer cairo|opengl] [--fps FPS] [--resolution WIDTHxHEIGHT]
 ```
 
 `check` options:
@@ -975,7 +975,7 @@ JSON は schema version を必須にし、SARIF は 2.1.0 を外部依存なし�
 ### 8.2 `pyproject.toml`
 
 ```toml
-[tool.manim-lint]
+[tool.qual]
 manim-version = "0.20"
 target-python = "3.11"
 select = ["MLC", "MLR", "MLP", "MLD"]
@@ -990,7 +990,7 @@ per-file-ignores = { "tests/fixtures/**" = ["MLP", "MLD"] }
 source-roots = ["."]
 stub-paths = []
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 platform = "linux"
@@ -1023,12 +1023,12 @@ renderer 候補が複数なら renderer-specific diagnostic に `applicable_prof
 ### 8.3 inline suppression
 
 ```python
-self.play(...)  # manim-lint: ignore[MLC108]
+self.play(...)  # qual: ignore[MLC108]
 
-# manim-lint: ignore[MLP201]
+# qual: ignore[MLP201]
 label = always_redraw(...)
 
-# manim-lint: file-ignore[MLP]
+# qual: file-ignore[MLP]
 ```
 
 - 行末 comment は同じ statement。
@@ -1041,7 +1041,7 @@ baseline fingerprint は line number を使わず、`rule ID + relative path + q
 
 ### 8.4 StaticFacts v0 public contract
 
-Poietra / fast-manim 向けの静的意味情報は、内部の `FileId`、`ObjectId`、`PlayGroupId`、heap、cache entry をserializeせず、[`docs/rfcs/0001-static-facts-v0.md`](docs/rfcs/0001-static-facts-v0.md) と [`schemas/static-facts-v0.json`](schemas/static-facts-v0.json) に定義したversioned projectionとして`manim-lint static-facts`から公開する。RFCを正典、JSON Schemaを機械検証可能な形とする。
+Poietra / fast-manim 向けの静的意味情報は、内部の `FileId`、`ObjectId`、`PlayGroupId`、heap、cache entry をserializeせず、[`docs/rfcs/0001-static-facts-v0.md`](docs/rfcs/0001-static-facts-v0.md) と [`schemas/static-facts-v0.json`](schemas/static-facts-v0.json) に定義したversioned projectionとして`qual static-facts`から公開する。RFCを正典、JSON Schemaを機械検証可能な形とする。
 
 v0の範囲はScene、reachable object、play/animation、updater、play境界のmembership/render order、renderer risk、coverage frontierに限定する。公開IDはrelative POSIX path、raw source hash、source anchor、bounded call path、cardinality、Scene identityからsnapshot内で決定的に生成し、内部handleを含めない。編集前後の同一性はIDの安定性ではなく後続のrematching契約で扱う。
 
@@ -1078,7 +1078,7 @@ MVP はまず逐次で正しさを確立した。10k-LOC cold measurement で li
 cache-v2:
 
 ```text
-.manim-lint-cache/cache-v2.sqlite3
+.qual-cache/cache-v2.sqlite3
 ```
 
 第一層はcache-v1と同じatomicなwhole-project entryである。全sourceが一致する通常のwarm runはfrontendを起動せず、次を再利用する:
@@ -1124,7 +1124,7 @@ lookup 時は source key に加えてentryごとのdependency manifestを再計�
 pyproject.toml
 README.md
 DESIGN.md
-src/manim_lint/
+src/qual/
   __init__.py
   __main__.py
   cli.py
@@ -1245,7 +1245,7 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - `tests/corpus/manifest-v1.json` に source digest、license、期待診断、label revision を固定する。Manim公式examples/testsと、許可済み実Scene snapshotを含める。
 - default correctness rules全体で、少なくとも200件の発火候補を人手labelし、各ruleに最低10 true-positive例を持たせる。precision点推定98%以上かつ95% Wilson下限95%以上、さらにpinned公式corpusで既知false positive 0件をrelease gateとする。
 - performance advisoryは上記と別集計にし、precisionに加えてmultiplicity evidenceと代替案が有用かをreview checklistで採点する。
-- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内、20個の独立componentのうち1fileだけを変更したincremental runを0.5秒以内とする。benchmark は隔離した一時projectで、cold前に`.manim-lint-cache`不在、coldがcache miss、warmがcache hit、incrementalがpartial hitであることもassertし、filesystem cache条件を記録する。
+- `tests/corpus/benchmark_10kloc/` を固定し、`benchmarks/reference-machine.json` のCPU/OS/Pythonでcold 10k LOC 2秒以内、cacheを温めた直後の二回目をwarm 0.5秒以内、20個の独立componentのうち1fileだけを変更したincremental runを0.5秒以内とする。benchmark は隔離した一時projectで、cold前に`.qual-cache`不在、coldがcache miss、warmがcache hit、incrementalがpartial hitであることもassertし、filesystem cache条件を記録する。
 - peak RSS: 300 MiB 未満
 - diagnostic order と JSON は同じ入力で byte-stable
 
@@ -1260,7 +1260,7 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - text / JSON reporter
 - syntax error diagnostic
 
-受入条件: `manim-lint check .` が複数ファイルを解析し、安定順で結果を出す。
+受入条件: `qual check .` が複数ファイルを解析し、安定順で結果を出す。
 
 ### Phase 1: 名前解決と direct-call rules
 
@@ -1291,7 +1291,7 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - family / points / curves / pixels の symbolic dimensions
 - 先に高確度の `MLP201`, `MLP204`, `MLP205`, `MLP217`, `MLP218`, `MLP220`, `MLP226`, `MLP227`
 - cardinality 推定が安定してから `MLP202`, `MLP203`, `MLP207`, `MLP208`, `MLP211`, `MLP216`
-- `manim-lint cost` の play / frame / family / pixel breakdown
+- `qual cost` の play / frame / family / pixel breakdown
 
 受入条件: diagnostic に frequency の根拠が表示され、Unknown のとき偽の数値を出さない。
 
@@ -1328,7 +1328,7 @@ P1:
 
 受入条件: 同一helperの複数call context、loop allocationのnon-singleton、`Transform` / `ReplacementTransform`の区別、理由付きdynamic-call Unknown、shared helperの全caller Sceneへの波及、before graphからの削除/rename追跡、incremental/full一致、worker数間byte一致、Shift-JIS/日本語anchor、rule selection非依存、Manim/user code非実行をfixtureで固定する。
 
-catalog entry はすべて `implementation_phase` をmetadataに持つ。まだそのphaseへ到達していないIDは `reserved/deferred` として `manim-lint rules` に表示しても、checkでは登録しない。未実装ruleを「検査済み」と見せない。
+catalog entry はすべて `implementation_phase` をmetadataに持つ。まだそのphaseへ到達していないIDは `reserved/deferred` として `qual rules` に表示しても、checkでは登録しない。未実装ruleを「検査済み」と見せない。
 
 ## 13. 最初の issue-sized backlog
 

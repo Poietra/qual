@@ -273,7 +273,7 @@ pub fn append_pre37_async_hint(
     target_python: &str,
     diagnostic: &mut crate::diagnostic::Diagnostic,
 ) {
-    const HINT: &str = " (note: this may be valid Python 3.6 source; manim-lint \
+    const HINT: &str = " (note: this may be valid Python 3.6 source; qual \
                         parses with the 3.12 grammar, where `async`/`await` are \
                         reserved keywords)";
     let Some(target) = parse_python_version(target_python) else {

@@ -30,10 +30,7 @@ fn main() {
         update_field(&mut digest, shown.as_bytes());
         update_field(&mut digest, &bytes);
     }
-    println!(
-        "cargo:rustc-env=MANIM_LINT_BUILD_ID={:x}",
-        digest.finalize()
-    );
+    println!("cargo:rustc-env=QUAL_BUILD_ID={:x}", digest.finalize());
 }
 
 fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) {

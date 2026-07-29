@@ -1,2 +1,2 @@
-[tool.manim-lint]
+[tool.qual]
 min-confidence = "low"

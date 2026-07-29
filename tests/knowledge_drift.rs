@@ -2,7 +2,7 @@
 //!
 //! The non-ignored tests exercise the extractor on small inline Python
 //! fixtures. The `#[ignore]`d tests are the layer-9 drift gate: they read
-//! a Manim git checkout — `../manim`, or `MANIM_LINT_MANIM_ROOT` — (statically,
+//! a Manim git checkout — `../manim`, or `QUAL_MANIM_ROOT` — (statically,
 //! read-only) and check the shipped profiles against both provenances —
 //! the clean upstream base commit (must be contradiction-free) and the
 //! working tree carrying local fork changes (informational, except for
@@ -14,12 +14,12 @@
 
 use std::path::PathBuf;
 
-use manim_lint::knowledge;
-use manim_lint::knowledge::generator::{
+use qual::knowledge;
+use qual::knowledge::generator::{
     GeneratedCandidates, ReturnEvidence, diff, generate, generate_from_git_ref,
     generate_from_sources, generate_from_tar, sha256_hex, to_stable_json,
 };
-use manim_lint::knowledge::model::ProfileDocument;
+use qual::knowledge::model::ProfileDocument;
 
 /// The clean upstream base commit of the sibling checkout's fork lineage
 /// (v0.20.1 lineage; `git describe` in that checkout names it
@@ -227,7 +227,7 @@ fn sha256_matches_fips_vectors() {
 
 /// A curated profile with one correct entry per checked field plus one
 /// deliberate error of each drift category.
-fn synthetic_profile() -> manim_lint::knowledge::model::KnowledgeProfile {
+fn synthetic_profile() -> qual::knowledge::model::KnowledgeProfile {
     let json = r#"{
   "schema_version": 1,
   "name": "test_profile",
@@ -403,14 +403,14 @@ fn tar_without_the_manim_package_is_an_error() {
 
 /// Path of the Manim checkout the drift gate reads.
 ///
-/// `MANIM_LINT_MANIM_ROOT` overrides the default sibling location, so the gate
+/// `QUAL_MANIM_ROOT` overrides the default sibling location, so the gate
 /// runs from any working copy and from CI without a machine-specific path.
 fn sibling_checkout() -> PathBuf {
-    let root = std::env::var_os("MANIM_LINT_MANIM_ROOT")
+    let root = std::env::var_os("QUAL_MANIM_ROOT")
         .map_or_else(|| PathBuf::from("../manim"), PathBuf::from);
     assert!(
         root.join("manim").join("__init__.py").is_file(),
-        "Manim checkout not found at {}; clone it there or set MANIM_LINT_MANIM_ROOT",
+        "Manim checkout not found at {}; clone it there or set QUAL_MANIM_ROOT",
         root.display()
     );
     root
@@ -422,7 +422,7 @@ fn sibling_checkout() -> PathBuf {
 /// upstream facts. Everything must verify: no contradictions, no missing
 /// symbols, and the profile digest must equal the clean-tree digest.
 #[test]
-#[ignore = "requires a Manim checkout at ../manim or MANIM_LINT_MANIM_ROOT"]
+#[ignore = "requires a Manim checkout at ../manim or QUAL_MANIM_ROOT"]
 fn upstream_profile_matches_clean_base_commit() {
     let candidates = generate_from_git_ref(&sibling_checkout(), UPSTREAM_BASE_COMMIT)
         .expect("archive candidates from the clean base commit");
@@ -452,7 +452,7 @@ fn upstream_profile_matches_clean_base_commit() {
 /// facts that were never true upstream). The fork overlay itself must be
 /// drift-free against the working tree it describes.
 #[test]
-#[ignore = "requires a Manim checkout at ../manim or MANIM_LINT_MANIM_ROOT"]
+#[ignore = "requires a Manim checkout at ../manim or QUAL_MANIM_ROOT"]
 fn working_tree_drift_is_informational_for_fork_only_changes() {
     let root = sibling_checkout();
     let clean = generate_from_git_ref(&root, UPSTREAM_BASE_COMMIT)

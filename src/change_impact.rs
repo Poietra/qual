@@ -159,7 +159,7 @@ impl<'a> ImpactProjector<'a> {
         json!({
             "schema_version": 0,
             "tool": {
-                "name": "manim-lint",
+                "name": "qual",
                 "version": crate::VERSION,
                 "semantic_build_hash": self.target.static_facts.document["tool"]["semantic_build_hash"],
             },

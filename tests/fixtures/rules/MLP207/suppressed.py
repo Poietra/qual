@@ -6,4 +6,4 @@ class Demo(Scene):
         group = VGroup(Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square(), Square())
         target = Circle()
         self.add(group)
-        self.play(Transform(group, target))  # manim-lint: ignore[MLP207]
+        self.play(Transform(group, target))  # qual: ignore[MLP207]

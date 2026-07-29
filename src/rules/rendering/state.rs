@@ -375,7 +375,7 @@ impl Rule for BareMobjectLeaf {
                         "A bare `Mobject()` has no drawable points: adding it to \
                          the scene as a display object shows nothing. If it is a \
                          deliberate container or positional anchor, suppress with \
-                         `# manim-lint: ignore[MLR125]`"
+                         `# qual: ignore[MLR125]`"
                             .to_owned(),
                         "The base Mobject class carries no geometry the renderers \
                          can draw; only subclasses with points (VMobjects, images) \

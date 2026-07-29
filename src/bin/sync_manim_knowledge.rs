@@ -29,8 +29,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use manim_lint::knowledge::generator::{self, DriftReport, GeneratedCandidates};
-use manim_lint::knowledge::model::{KnowledgeProfile, ProfileDocument};
+use qual::knowledge::generator::{self, DriftReport, GeneratedCandidates};
+use qual::knowledge::model::{KnowledgeProfile, ProfileDocument};
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
@@ -63,7 +63,7 @@ struct Cli {
         long,
         value_name = "PROFILE",
         num_args = 0..=1,
-        default_missing_value = manim_lint::knowledge::DEFAULT_PROFILE
+        default_missing_value = qual::knowledge::DEFAULT_PROFILE
     )]
     diff: Option<String>,
 
@@ -140,7 +140,7 @@ fn print_summary(candidates: &GeneratedCandidates) {
 /// path. Overlay documents must be loaded by shipped name so their base
 /// resolves.
 fn load_profile(profile_ref: &str) -> Result<KnowledgeProfile, String> {
-    match manim_lint::knowledge::load(profile_ref) {
+    match qual::knowledge::load(profile_ref) {
         Ok(profile) => Ok(profile),
         Err(load_error) => {
             let path = PathBuf::from(profile_ref);

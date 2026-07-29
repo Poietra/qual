@@ -1,4 +1,4 @@
-# Releasing manim-lint
+# Releasing Qual
 
 The release flow intentionally follows the shape used by Ruff: one reviewed
 version fans out into native artifacts, Python wheels, source packages, and
@@ -11,8 +11,8 @@ for PyPI, and dist reads it for GitHub Releases and crates.io.
 | --- | --- |
 | GitHub Releases | checksummed archives for macOS arm64/x64, Linux glibc arm64/x64, Linux musl arm64/x64, and Windows x64 |
 | GitHub Releases | shell and PowerShell installers, application/LGPL source archives, manifest, and build attestations |
-| PyPI | platform wheels containing the `manim-lint` executable plus a source distribution |
-| crates.io | the source crate for `cargo install manim-lint --locked` |
+| PyPI | platform wheels containing the `qual` executable plus a source distribution |
+| crates.io | the source crate for `cargo install qual --locked` |
 
 Prerelease versions create a GitHub prerelease but are not sent to package
 registries. Registry versions are immutable, so a bad release is yanked or
@@ -24,14 +24,14 @@ deprecated and followed by a patch release; it is never overwritten.
    reviewers if the repository has more than one maintainer. The release gate
    and both trusted publishers target this environment.
 2. On PyPI, configure a trusted publisher for repository
-   `Poietra/manim-lint`, workflow `publish-pypi.yml`, environment `release`.
+   `Poietra/qual`, workflow `publish-pypi.yml`, environment `release`.
    PyPI pending publishers can create the project on the first publish. This
    top-level workflow follows a successful stable `Release` run and obtains
    the wheels from that exact run; dry runs, PRs, and prereleases are skipped.
 3. crates.io trusted publishing needs an existing crate. Bootstrap the first
    source release once with a narrowly scoped owner token and
    `cargo publish --locked`, then configure the trusted publisher for
-   `Poietra/manim-lint`, workflow `release.yml`, environment `release`.
+   `Poietra/qual`, workflow `release.yml`, environment `release`.
    Subsequent workflow runs obtain an ephemeral token through
    `rust-lang/crates-io-auth-action`.
 4. Keep the default `GITHUB_TOKEN` permission to create releases and
@@ -89,7 +89,7 @@ tag cannot publish by accident.
    commit with the default `dry-run`. This builds every archive and wheel but
    does not create a tag, release, or registry upload.
 2. Inspect the workflow artifacts, install at least the native archive and
-   wheel for the maintainer's platform, and check `manim-lint --version`.
+   wheel for the maintainer's platform, and check `qual --version`.
 3. Run the same workflow from the exact prepared commit with tag `v0.2.1`.
 4. Approve the `release` environment deployment. The gate checks that the tag,
    Cargo package, lockfile, changelog, PyPI metadata, publisher list, and LGPL

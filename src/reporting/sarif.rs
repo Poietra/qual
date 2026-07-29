@@ -14,7 +14,7 @@ use crate::reporting::RenderContext;
 use crate::rules::registry;
 
 /// URL advertised as the tool driver's `informationUri`.
-const INFORMATION_URI: &str = "https://github.com/example/manim-lint";
+const INFORMATION_URI: &str = "https://github.com/Poietra/qual";
 
 /// Canonical SARIF 2.1.0 schema location referenced from the log.
 const SARIF_SCHEMA: &str =
@@ -37,7 +37,7 @@ pub fn render(diagnostics: &[Diagnostic], context: &RenderContext<'_>) -> String
             "columnKind": "unicodeCodePoints",
             "tool": {
                 "driver": {
-                    "name": "manim-lint",
+                    "name": "qual",
                     "version": context.tool_version,
                     "informationUri": INFORMATION_URI,
                     "rules": rule_descriptors(diagnostics),

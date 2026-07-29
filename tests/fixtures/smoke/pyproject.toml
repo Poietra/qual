@@ -1,10 +1,10 @@
-[tool.manim-lint]
+[tool.qual]
 select = ["MLC", "MLR", "MLP", "MLD"]
 min-confidence = "high"
 fail-level = "warning"
 default-profile = "preview"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "preview"
 renderer = "cairo"
 platform = "linux"

@@ -3,15 +3,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
-use manim_lint::application::check;
-use manim_lint::cache::CacheStatus;
-use manim_lint::cli::CheckArgs;
-use manim_lint::reporting::OutputFormat;
+use qual::application::check;
+use qual::cache::CacheStatus;
+use qual::cli::CheckArgs;
+use qual::reporting::OutputFormat;
 
-const CACHE_DATABASE: &str = ".manim-lint-cache/cache-v2.sqlite3";
+const CACHE_DATABASE: &str = ".qual-cache/cache-v2.sqlite3";
 
 fn write_project(root: &Path, source: &str) {
-    std::fs::write(root.join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(root.join("pyproject.toml"), "[tool.qual]\n").unwrap();
     std::fs::write(root.join("scene.py"), source).unwrap();
 }
 
@@ -56,7 +56,7 @@ fn identical_second_check_hits_and_source_changes_miss() {
 
     std::fs::write(
         project.path().join("pyproject.toml"),
-        "[tool.manim-lint]\ntarget-python = \"3.10\"\n",
+        "[tool.qual]\ntarget-python = \"3.10\"\n",
     )
     .unwrap();
     assert_eq!(check(&args).unwrap().cache_status, CacheStatus::Miss);
@@ -74,7 +74,7 @@ fn no_cache_neither_reads_nor_creates_state() {
     assert_eq!(first.cache_status, CacheStatus::Disabled);
     assert_eq!(second.cache_status, CacheStatus::Disabled);
     assert_eq!(first.output, second.output);
-    assert!(!project.path().join(".manim-lint-cache").exists());
+    assert!(!project.path().join(".qual-cache").exists());
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn operations_requiring_live_facts_bypass_the_cache() {
     let report = check(&args).unwrap();
     assert_eq!(report.cache_status, CacheStatus::Disabled);
     assert!(report.coverage.is_some());
-    assert!(!project.path().join(".manim-lint-cache").exists());
+    assert!(!project.path().join(".qual-cache").exists());
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn asset_filesystem_dependencies_invalidate_an_entry() {
 fn corrupt_database_is_warned_about_rebuilt_and_reused() {
     let project = tempfile::tempdir().unwrap();
     write_project(project.path(), "value = 1\n");
-    std::fs::create_dir(project.path().join(".manim-lint-cache")).unwrap();
+    std::fs::create_dir(project.path().join(".qual-cache")).unwrap();
     std::fs::write(database(project.path()), b"this is not sqlite").unwrap();
     let args = args_for(project.path());
 
@@ -155,7 +155,7 @@ fn corrupt_database_is_warned_about_rebuilt_and_reused() {
 fn incompatible_schema_version_is_reinitialized() {
     let project = tempfile::tempdir().unwrap();
     write_project(project.path(), "value = 1\n");
-    std::fs::create_dir(project.path().join(".manim-lint-cache")).unwrap();
+    std::fs::create_dir(project.path().join(".qual-cache")).unwrap();
     let connection = rusqlite::Connection::open(database(project.path())).unwrap();
     connection
         .execute_batch("CREATE TABLE analysis_entries (old_key TEXT); PRAGMA user_version = 999;")
@@ -335,7 +335,7 @@ fn component_entries_are_bounded() {
 #[test]
 fn independent_source_change_reuses_unchanged_component() {
     let project = tempfile::tempdir().unwrap();
-    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.qual]\n").unwrap();
     std::fs::write(
         project.path().join("a.py"),
         "from manim import Scene\nclass A(Scene):\n    def construct(self):\n        self.play()\n",
@@ -372,7 +372,7 @@ fn independent_source_change_reuses_unchanged_component() {
 #[test]
 fn source_layout_change_invalidates_every_component_file_id() {
     let project = tempfile::tempdir().unwrap();
-    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.qual]\n").unwrap();
     std::fs::write(project.path().join("a.py"), "value = 1\n").unwrap();
     std::fs::write(project.path().join("b.py"), "value = 2\n").unwrap();
     let args = args_for(project.path());
@@ -393,7 +393,7 @@ fn source_layout_change_invalidates_every_component_file_id() {
 #[test]
 fn changing_shared_helper_invalidates_its_whole_dependency_component() {
     let project = tempfile::tempdir().unwrap();
-    std::fs::write(project.path().join("pyproject.toml"), "[tool.manim-lint]\n").unwrap();
+    std::fs::write(project.path().join("pyproject.toml"), "[tool.qual]\n").unwrap();
     std::fs::write(
         project.path().join("shared.py"),
         "def animate(scene):\n    scene.play()\n",

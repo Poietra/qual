@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://manim-lint.dev/schemas/baseline-v1.json",
-  "title": "manim-lint baseline v1",
+  "$id": "https://raw.githubusercontent.com/Poietra/qual/main/schemas/baseline-v1.json",
+  "title": "Qual baseline v1",
   "description": "Known-diagnostic fingerprints (DESIGN 8.3). A fingerprint never contains line numbers: it is rule ID + relative path + qualified Scene name + surrounding token hash, so inserting unrelated lines elsewhere in a file does not invalidate entries. Entries are sorted and each entry hides at most one matching diagnostic. Provenance: files written with scene attribution carry scene_attribution: \"attributed\" — their empty scene means literally outside any Scene class and matches exactly. Files without the marker are legacy pre-attribution baselines (they stored \"\" everywhere), and only there does an empty stored scene match a diagnostic regardless of its computed scene (wildcard). A non-empty scene always matches only that scene. The marker is additive, so schema_version stays 1: legacy documents remain valid and entry shapes are unchanged.",
   "type": "object",
   "additionalProperties": false,

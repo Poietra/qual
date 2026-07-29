@@ -5,19 +5,19 @@
 
 use std::path::Path;
 
-use manim_lint::application::{self, check};
-use manim_lint::cli::{CheckArgs, Command, ExitStatus};
-use manim_lint::diagnostic::Severity;
-use manim_lint::reporting::OutputFormat;
+use qual::application::{self, check};
+use qual::cli::{CheckArgs, Command, ExitStatus};
+use qual::diagnostic::Severity;
+use qual::reporting::OutputFormat;
 
 const PYPROJECT: &str = r#"
-[tool.manim-lint]
+[tool.qual]
 select = ["MLC", "MLR", "MLP", "MLD"]
 min-confidence = "high"
 fail-level = "warning"
 default-profile = "production"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 pixel-width = 1920
@@ -29,8 +29,8 @@ frame-rate = 30
 const GOOD_SCENE: &str = "\
 \"\"\"Valid scene.\"\"\"
 
-value = 1  # manim-lint: ignore[MLC999]
-suppressed = 2  # manim-lint: ignore[MLC108]
+value = 1  # qual: ignore[MLC999]
+suppressed = 2  # qual: ignore[MLC108]
 ";
 
 /// Japanese text before the syntax error exercises character columns.
@@ -186,7 +186,7 @@ fn diagnostics_are_stably_sorted() {
     write_project(project.path());
     let report = check(&args_for(project.path(), OutputFormat::Concise)).unwrap();
     let mut sorted = report.diagnostics.clone();
-    sorted.sort_by(manim_lint::diagnostic::Diagnostic::compare_stable);
+    sorted.sort_by(qual::diagnostic::Diagnostic::compare_stable);
     assert_eq!(report.diagnostics, sorted);
 }
 
@@ -248,7 +248,7 @@ fn inline_suppression_covers_a_multiline_statement() {
          \n\
          class Demo(Scene):\n\
          \x20   def construct(self):\n\
-         \x20       # manim-lint: ignore[MLC101]\n\
+         \x20       # qual: ignore[MLC101]\n\
          \x20       self.play(\n\
          \x20       )\n\
          \x20       self.play()\n",
@@ -296,7 +296,7 @@ fn unknown_selector_on_cli_is_a_config_error() {
 
 #[test]
 fn cost_command_reports_a_scene_breakdown() {
-    // Phase 3 delivered `manim-lint cost`; detailed golden coverage lives
+    // Phase 3 delivered `qual cost`; detailed golden coverage lives
     // in `tests/cost_command.rs`.
     let project = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -411,12 +411,12 @@ fn target_python_gate_emits_mlc000_without_stopping_the_file() {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(
         project.path().join("pyproject.toml"),
-        "[tool.manim-lint]\ntarget-python = \"3.9\"\n",
+        "[tool.qual]\ntarget-python = \"3.9\"\n",
     )
     .unwrap();
     std::fs::write(
         project.path().join("modern.py"),
-        "value = 1\nmatch value:\n    case 1:\n        pass\nx = 2  # manim-lint: ignore[MLC999]\n",
+        "value = 1\nmatch value:\n    case 1:\n        pass\nx = 2  # qual: ignore[MLC999]\n",
     )
     .unwrap();
     let report = check(&args_for(project.path(), OutputFormat::Concise)).unwrap();

@@ -131,14 +131,14 @@
     },
     {
       "path": "cases/probes/multiline_suppression.py",
-      "sha256": "173997654c2d04f3110e9708b14ca84a409235530b1265a2b8f05e2546659089",
-      "label_revision": 1,
+      "sha256": "2da3b1d36614d0c6c55d4779f95b7a32a0329c9709d343b6201ada0673e9d32c",
+      "label_revision": 2,
       "classification": "mixed",
       "guards": [
         "MLC001",
         "MLC101"
       ],
-      "provenance": "Statement-span suppression case (DESIGN 8.3, wave-7 spec-fidelity fix): an inline suppression above a multi-line play() covers the whole statement (and is itself valid, no MLC001), while the next single-line empty play still reports MLC101. Adjudicated in tests/phase0.rs inline_suppression_covers_a_multiline_statement.",
+      "provenance": "Statement-span suppression case (DESIGN 8.3, wave-7 spec-fidelity fix): an inline suppression above a multi-line play() covers the whole statement (and is itself valid, no MLC001), while the next single-line empty play still reports MLC101. Adjudicated in tests/phase0.rs inline_suppression_covers_a_multiline_statement; revision 2 re-adjudicated the marker-only rename to # qual: with the same exact verdict.",
       "expected": [
         {
           "rule": "MLC101",
@@ -337,10 +337,10 @@
     },
     {
       "path": "cases/rules/mlr101_invalid.py",
-      "sha256": "1399a1b4520f43f82ccaa346d10806f50b4667a6b4577358b75f4ca55575c96b",
-      "label_revision": 1,
+      "sha256": "82a3a06257063a72201cf2d8ad491846c6b70ee876ea7eb7a54635cc93899c2a",
+      "label_revision": 2,
       "classification": "true-positive",
-      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR101 golden.",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR101 golden. Revision 2 re-adjudicated the marker-only rename to the # qual: form: the four non-vectorized targets remain true positives and the final target remains suppressed.",
       "expected": [
         {
           "rule": "MLR101",
@@ -425,10 +425,10 @@
     },
     {
       "path": "cases/rules/mlr124_invalid.py",
-      "sha256": "7fddeb06d499cc25c555c1f8ed9b671897fc5d59c427736f23746e55d1dc3c07",
-      "label_revision": 1,
+      "sha256": "5084fe2ebcc3aa8932a702d92a2d3134f3f598a76e6ad3d6a1dc13129f78a72c",
+      "label_revision": 2,
       "classification": "true-positive",
-      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR124 golden.",
+      "provenance": "Promoted from tests/fixtures/rules; adjudicated by tests/rules_rendering.rs MLR124 golden. Revision 2 re-adjudicated the marker-only rename to the # qual: form: the first two plain-Text markup strings remain true positives and the final string remains suppressed.",
       "expected": [
         {
           "rule": "MLR124",

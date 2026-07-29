@@ -13,10 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::CheckArgs;
-use manim_lint::knowledge::generator::sha256_hex;
-use manim_lint::reporting::OutputFormat;
+use qual::application::check;
+use qual::cli::CheckArgs;
+use qual::knowledge::generator::sha256_hex;
+use qual::reporting::OutputFormat;
 
 fn corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus")

@@ -1,24 +1,24 @@
 [package]
-name = "manim-lint"
+name = "qual"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Static lifecycle and performance analysis for Manim scenes"
 license = "MIT"
 publish = ["crates-io"]
-repository = "https://github.com/Poietra/manim-lint"
-homepage = "https://github.com/Poietra/manim-lint"
-documentation = "https://github.com/Poietra/manim-lint#readme"
+repository = "https://github.com/Poietra/qual"
+homepage = "https://github.com/Poietra/qual"
+documentation = "https://github.com/Poietra/qual#readme"
 readme = "README.md"
 keywords = ["manim", "linter", "static-analysis", "animation", "python"]
 categories = ["development-tools", "command-line-utilities"]
 # The test suite depends on fixture corpora that would triple the package
 # size; run it from a repository checkout, not from the published crate.
 exclude = ["/tests", "/benchmarks", "/.github", "/.claude"]
-default-run = "manim-lint"
+default-run = "qual"
 
 [[bin]]
-name = "manim-lint"
+name = "qual"
 path = "src/main.rs"
 
 [[bin]]

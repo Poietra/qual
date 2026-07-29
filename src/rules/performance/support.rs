@@ -1,5 +1,5 @@
 //! Shared fact-resolution, evidence, and display helpers for the
-//! performance rules and the `manim-lint cost` report.
+//! performance rules and the `qual cost` report.
 //!
 //! Every helper here is conservative: a call target counts as resolved only
 //! when every frontend candidate maps to the same curated knowledge symbol,

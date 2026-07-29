@@ -7,4 +7,4 @@ class Demo(Scene):
         dot = Dot()
         dot.add_updater(lambda m: m.set_x(tracker.get_value()))
         self.add(dot)
-        self.wait(2)  # manim-lint: ignore[MLC112]
+        self.wait(2)  # qual: ignore[MLC112]

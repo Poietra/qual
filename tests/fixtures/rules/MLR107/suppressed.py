@@ -1,3 +1,3 @@
 from manim import *
 
-preview = MovingCameraScene()  # manim-lint: ignore[MLR107]
+preview = MovingCameraScene()  # qual: ignore[MLR107]

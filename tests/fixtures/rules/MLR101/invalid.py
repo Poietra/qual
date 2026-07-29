@@ -8,4 +8,4 @@ class Bad(Scene):
         self.play(Write(5))
         self.play(DrawBorderThenFill(Mobject()))
         self.play(Uncreate(Group(img)))
-        self.play(Create(Mobject()))  # manim-lint: ignore[MLR101]
+        self.play(Create(Mobject()))  # qual: ignore[MLR101]

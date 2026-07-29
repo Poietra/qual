@@ -1,6 +1,6 @@
 # Architecture overview
 
-This document is the contributor's map of manim-lint: how a Python source
+This document is the contributor's map of qual: how a Python source
 tree becomes diagnostics, which fact layer owns what, and where each piece
 lives. [`DESIGN.md`](../DESIGN.md) is the authoritative specification (the
 section numbers below refer to it); this page is the guided tour.
@@ -140,7 +140,7 @@ detection plus a depth safety cap; plays materialize as real per-call-site
 summary is applied** (the fallback frontier — recursion, the cap,
 non-helper calls — with combined certainty and summary-derived
 `Maybe`-certainty play records). Every fallback site is recorded on
-`LifecycleFacts::inline_fallbacks` and surfaces in `manim-lint coverage`
+`LifecycleFacts::inline_fallbacks` and surfaces in `qual coverage`
 as `helper calls summarized, not inlined`.
 
 ### Semantic dependency graph (`src/semantic/dependency.rs`)
@@ -159,7 +159,7 @@ ChangeImpact. Graph handles are snapshot-local internal facts; external JSON
 must project them through StaticFacts IDs and source anchors. See
 [`docs/rfcs/0002-semantic-dependency-graph-v0.md`](rfcs/0002-semantic-dependency-graph-v0.md).
 
-`manim-lint change-impact --before OLD --after NEW` constructs this full graph
+`qual change-impact --before OLD --after NEW` constructs this full graph
 for both snapshots. Raw file and definition changes seed reverse traversal in
 each graph, preserving deleted edges on the base side and added edges on the
 target side. `src/change_impact.rs` projects reached Scene/play/object nodes
@@ -218,7 +218,7 @@ Suppressions (statement-scoped, `MLC001` for unknown IDs), baselines
 (line-number-independent fingerprints with `scene_attribution`
 provenance), fixes (SAFE/UNSAFE separation, re-parse validation, per-file
 rollback), the output formats, and `coverage.rs` — the analysis-coverage
-report (`manim-lint coverage`, `check --analysis-summary`) that counts
+report (`qual coverage`, `check --analysis-summary`) that counts
 everything the analysis could *not* resolve. All output is deterministic
 and byte-stable for identical input.
 
@@ -234,7 +234,7 @@ risks, and coverage frontiers. See
 [`docs/rfcs/0001-static-facts-v0.md`](rfcs/0001-static-facts-v0.md) and
 [`schemas/static-facts-v0.json`](../schemas/static-facts-v0.json).
 
-`manim-lint static-facts [PATH...]` reads each source into one immutable raw
+`qual static-facts [PATH...]` reads each source into one immutable raw
 byte snapshot, runs the frontend and lifecycle fact layers independently of
 selected lint rules, and projects those facts through `src/static_facts.rs`.
 The projection never serializes internal analyzer structs. It emits sorted,
@@ -301,7 +301,7 @@ Silence flows the same way: if `run_time` were a variable, the duration
 would be unknown, liveness could still prove execution but the key-count
 evidence would say "per frame" without a number — and if the factory's
 target could not be proven frame-varying, the rule would stay silent.
-`manim-lint coverage` then reports that frontier instead of hiding it.
+`qual coverage` then reports that frontier instead of hiding it.
 
 ## The invariants that govern contributions (DESIGN §15)
 

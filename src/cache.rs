@@ -23,10 +23,10 @@ use crate::diagnostic::Diagnostic;
 use crate::knowledge::KnowledgeProfile;
 use crate::semantic::summaries::SummaryTable;
 
-const CACHE_DIRECTORY: &str = ".manim-lint-cache";
+const CACHE_DIRECTORY: &str = ".qual-cache";
 const CACHE_DATABASE: &str = "cache-v2.sqlite3";
 const CACHE_SCHEMA_VERSION: u32 = 1;
-const CACHE_MAGIC: &[u8] = b"manim-lint/project-analysis-cache";
+const CACHE_MAGIC: &[u8] = b"qual/project-analysis-cache";
 const PROJECT_KEY_MAGIC: &[u8] = b"whole-project";
 const COMPONENT_KEY_MAGIC: &[u8] = b"dependency-component";
 const MAX_PROJECT_ENTRIES: usize = 16;
@@ -128,7 +128,7 @@ impl AnalysisCache {
         }
     }
 
-    /// Opens (or creates) `.manim-lint-cache/cache-v2.sqlite3` under the
+    /// Opens (or creates) `.qual-cache/cache-v2.sqlite3` under the
     /// project root. Corrupt derivative state is removed and rebuilt once.
     #[must_use]
     pub fn open(project_root: &Path) -> Self {
@@ -574,7 +574,7 @@ fn update_key_prefix(
     update_field(digest, crate::VERSION.as_bytes());
     update_field(
         digest,
-        option_env!("MANIM_LINT_BUILD_ID")
+        option_env!("QUAL_BUILD_ID")
             .unwrap_or(crate::VERSION)
             .as_bytes(),
     );

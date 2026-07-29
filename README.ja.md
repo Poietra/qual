@@ -1,10 +1,10 @@
-# manim-lint
+# Qual
 
 **[Manim Community](https://www.manim.community/) のシーンを静的解析 — レンダリング前に、確実な実行時エラー・意図と異なる描画・性能の乗数・非決定性を検出する。**
 
 [English](README.md) | 日本語
 
-`manim-lint` は Manim Community **0.20** 系プロジェクト向けの独立した静的解析器で、Rust で実装されています。Python ソースをパースし、検証済み・バージョン管理された Manim 意味モデルと照合します。Manim も解析対象コードも **決して import・実行しません**。API 名のパターンマッチではなく、`Scene.play` の実際の挙動(引数のコンパイル、auto-add、introducer / remover、updater)を再現するライフサイクル抽象解釈器と、「どのコードが 1 回だけ実行され、どのコードが毎フレーム実行されるか」を把握する記号的コストモデルの上で診断します。
+`qual` は Manim Community **0.20** 系プロジェクト向けの独立した静的解析器で、Rust で実装されています。Python ソースをパースし、検証済み・バージョン管理された Manim 意味モデルと照合します。Manim も解析対象コードも **決して import・実行しません**。API 名のパターンマッチではなく、`Scene.play` の実際の挙動(引数のコンパイル、auto-add、introducer / remover、updater)を再現するライフサイクル抽象解釈器と、「どのコードが 1 回だけ実行され、どのコードが毎フレーム実行されるか」を把握する記号的コストモデルの上で診断します。
 
 ## 例
 
@@ -28,7 +28,7 @@ class TrackerDemo(Scene):
 ```
 
 ```console
-$ manim-lint check . --format concise
+$ qual check . --format concise
 scenes/demo.py:6:46: MLR115 error `Text(font_size=0)` is not positive; text sizing requires font_size > 0
 scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and performs a cache-key lookup, and this f-string key varies per frame: every rendered frame can mint a distinct Text/TeX cache key and disk asset (`K_resource ≈ F`). Across the 1 play(s) where this callback provably executes it may create at least ~480 distinct keys.
 scenes/demo.py:11:19: MLC102 error `square.shift(...)` mutates the mobject immediately and returns the mobject itself, not an Animation; use `.animate` (e.g. `square.animate.shift(...)`) inside `Scene.play()`.
@@ -65,11 +65,11 @@ import せず、Python ランタイムも必要としません。
 
 ```bash
 # Python ツールとして
-uv tool install manim-lint
-# または: pipx install manim-lint
+uv tool install qual
+# または: pipx install qual
 
 # Rust ツールとして（ソースからビルド、Rust 1.85+）
-cargo install manim-lint --locked
+cargo install qual --locked
 ```
 
 Linux・macOS・Windows 向けの standalone installer とチェックサム付き
@@ -78,34 +78,34 @@ archive は各 GitHub Release に添付されます。
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Poietra/manim-lint/releases/latest/download/manim-lint-installer.sh | sh
+  https://github.com/Poietra/qual/releases/latest/download/qual-installer.sh | sh
 ```
 
 最初の registry release より前、または現在の checkout を使う場合はソースから
 インストールしてください。
 
 ```bash
-git clone https://github.com/Poietra/manim-lint.git
-cd manim-lint
+git clone https://github.com/Poietra/qual.git
+cd qual
 cargo install --path .
 ```
 
 ## クイックスタート
 
 ```bash
-manim-lint check .                      # 端末なら rich、パイプなら concise
-manim-lint check . --format rich        # ソースフレームと色を強制
-manim-lint check . --format concise     # 1 診断 1 行
-manim-lint check scenes --format full   # 説明と根拠つき
-manim-lint check . --format json        # schemas/diagnostics-v1.json 準拠
-manim-lint check . --format sarif       # SARIF 2.1.0
-manim-lint check . --format github      # GitHub Actions アノテーション
-manim-lint explain MLC102               # ルールの完全なドキュメント
-manim-lint rules                        # 全ルール ID・フェーズ・実装状態
-manim-lint config                       # 解決済みの有効な設定
-manim-lint cost scenes/demo.py          # シーンごとのコスト内訳
-manim-lint coverage .                   # 解析が解決できなかったものの一覧
-manim-lint static-facts . > facts.json  # StaticFacts v0の意味projection
+qual check .                      # 端末なら rich、パイプなら concise
+qual check . --format rich        # ソースフレームと色を強制
+qual check . --format concise     # 1 診断 1 行
+qual check scenes --format full   # 説明と根拠つき
+qual check . --format json        # schemas/diagnostics-v1.json 準拠
+qual check . --format sarif       # SARIF 2.1.0
+qual check . --format github      # GitHub Actions アノテーション
+qual explain MLC102               # ルールの完全なドキュメント
+qual rules                        # 全ルール ID・フェーズ・実装状態
+qual config                       # 解決済みの有効な設定
+qual cost scenes/demo.py          # シーンごとのコスト内訳
+qual coverage .                   # 解析が解決できなかったものの一覧
+qual static-facts . > facts.json  # StaticFacts v0の意味projection
 ```
 
 終了コード: `0` — `fail-level` に達する報告済み診断なし。`1` — 1 件以上あり。`2` — コマンドライン / 設定 / 内部エラー。
@@ -157,7 +157,7 @@ scenes/demo.py:9:39: MLP226 warning Each invocation constructs a `MathTex` and p
 ## 解析キャッシュ
 
 通常の `check` は破棄可能な SQLite cache を
-`.manim-lint-cache/cache-v2.sqlite3` に保持します。同一入力の二回目はfilesystem
+`.qual-cache/cache-v2.sqlite3` に保持します。同一入力の二回目はfilesystem
 dependencyを検証し、frontendを起動せずwhole-project diagnostics JSONを再利用
 します。source変更後は全projectをparse/indexしてから、解決済みimport、call、
 base class、module名collisionを弱連結componentへまとめます。変更のないcomponent
@@ -173,7 +173,7 @@ directory walkもentryごとにstampするため、asset変更は該当component
 破損時はwarning付きで再構築し、その他のfailureでも解析を継続します。
 `--no-cache`はcache filesystem accessをすべて無効にします。`--fix`、baseline、
 `--analysis-summary`はlive source/index stateが必要なため完全解析します。
-projectのignore fileには`.manim-lint-cache/`を追加してください。旧
+projectのignore fileには`.qual-cache/`を追加してください。旧
 `cache-v1.sqlite3`は使われないため削除できます。
 
 cold runは依存しないsummary component、Scene lifecycle、ruleをbounded worker
@@ -183,10 +183,10 @@ poolで並列化します。再帰summaryのfixpointとfrontend/project indexは
 
 ## 設定
 
-設定は `pyproject.toml` の `[tool.manim-lint]` から読み込みます(検査対象パスから上方向へ探索)。レンダープロファイルは `[[tool.manim-lint.profile]]` エントリです。
+設定は `pyproject.toml` の `[tool.qual]` から読み込みます(検査対象パスから上方向へ探索)。レンダープロファイルは `[[tool.qual.profile]]` エントリです。
 
 ```toml
-[tool.manim-lint]
+[tool.qual]
 manim-version = "0.20"
 target-python = "3.11"
 select = ["MLC", "MLR", "MLP", "MLD"]
@@ -199,7 +199,7 @@ respect-manim-cfg = true
 exclude = [".venv/**", "media/**"]
 per-file-ignores = { "tests/fixtures/**" = ["MLP", "MLD"] }
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 platform = "linux"
@@ -221,22 +221,22 @@ CLI > selected profile > pyproject base > manim.cfg > builtin defaults
 設定は正直に検証されます(違反は exit 2):
 
 - 宣言した `manim-version` は、設定した knowledge profile が対応する Manim 範囲内でなければなりません(例: `upstream_0_20` は `>=0.20,<0.21` に対応)。未宣言なら検証しません。
-- `target-python` は `MAJOR.MINOR` 形式で 3.6〜3.12 の範囲に収まる必要があります。上限は同梱パーサー(rustpython-parser 0.4)が実装する Python 文法、下限は構文ゲートの完全性を保証できるフロアです(それより古い target は黙って放置されず exit 2 で拒否されます)。文法は固定で(`feature_version` の指定はなし)パース結果は変わりませんが、パース後のゲートが AST・トークン列・f-string テキストを走査し、target より新しい構文をすべて `MLC000` として報告します(`async def` 外の `async`/`await` 構文 3.7、`:=`・位置専用引数 `/`・f-string の自己文書化 `=` 3.8、拡張デコレーターと `as` 付き括弧付きコンテキストマネージャー 3.9、`match` 3.10、`except*` と PEP 646 の添字 `*` アンパック 3.11、`type` エイリアス・PEP 695 型パラメーター・PEP 701 f-string 式 3.12)。ゲートを無警告で通過したファイルは target 自身のパーサーで必ずパース可能です。ゲートされたファイルも解析は継続し、対象構文を持ち込む `--fix` はロールバックされます。カバレッジ表は `manim-lint explain MLC000` を参照してください。
+- `target-python` は `MAJOR.MINOR` 形式で 3.6〜3.12 の範囲に収まる必要があります。上限は同梱パーサー(rustpython-parser 0.4)が実装する Python 文法、下限は構文ゲートの完全性を保証できるフロアです(それより古い target は黙って放置されず exit 2 で拒否されます)。文法は固定で(`feature_version` の指定はなし)パース結果は変わりませんが、パース後のゲートが AST・トークン列・f-string テキストを走査し、target より新しい構文をすべて `MLC000` として報告します(`async def` 外の `async`/`await` 構文 3.7、`:=`・位置専用引数 `/`・f-string の自己文書化 `=` 3.8、拡張デコレーターと `as` 付き括弧付きコンテキストマネージャー 3.9、`match` 3.10、`except*` と PEP 646 の添字 `*` アンパック 3.11、`type` エイリアス・PEP 695 型パラメーター・PEP 701 f-string 式 3.12)。ゲートを無警告で通過したファイルは target 自身のパーサーで必ずパース可能です。ゲートされたファイルも解析は継続し、対象構文を持ち込む `--fix` はロールバックされます。カバレッジ表は `qual explain MLC000` を参照してください。
 - ゼロ・負・非有限のフレームレートと、寸法が 0 の解像度は、どの経路(`--fps` / `--resolution`、プロファイル、`manim.cfg`)から来ても拒否されます。
 - `stub-paths` は未実装です。空でないリストは黙って無視されず、設定エラーになります。
 
-`manim-lint config` は解決済み設定に加えて、どの設定が強制され、どれが情報提供のみかを示す `enforcement` セクションを出力します。
+`qual config` は解決済み設定に加えて、どの設定が強制され、どれが情報提供のみかを示す `enforcement` セクションを出力します。
 
 ## 最適化フォークプロファイルの利用
 
-ローカルにパッチを当てた Manim フォーク(プロファイル `local_0_20_1_4d25c031`)でレンダリングするプロジェクトは、それを manim-lint に伝えることでフォーク固有の解析レイヤーを有効化できます:
+ローカルにパッチを当てた Manim フォーク(プロファイル `local_0_20_1_4d25c031`)でレンダリングするプロジェクトは、それを qual に伝えることでフォーク固有の解析レイヤーを有効化できます:
 
 ```toml
-[tool.manim-lint]
+[tool.qual]
 knowledge-profile = "local_0_20_1_4d25c031"
 default-profile = "production"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 platform = "linux"
@@ -246,7 +246,7 @@ cairo-static-layers = true
 
 upstream プロファイルが提供するすべてに加えて、次が有効になります:
 
-- **`manim-lint cost` の「fork fast paths」セクション**: play ごとに、fork-per-play Cairo パイプライン(`cairo-fork-workers`)、静的レイヤー保持パス(`cairo-static-layers`)、packed interpolation が適用されるかどうかを表示します。適用されない場合は正確なブロッカーとそのソース位置(例: Scene updater)を示し、最初の serial play 以降のレンダラー全体に及ぶ単調な無効化の因果連鎖も説明します。このセクションは機能の削除を助言することは決してなく、レンダーパス上の帰結を説明するだけです。
+- **`qual cost` の「fork fast paths」セクション**: play ごとに、fork-per-play Cairo パイプライン(`cairo-fork-workers`)、静的レイヤー保持パス(`cairo-static-layers`)、packed interpolation が適用されるかどうかを表示します。適用されない場合は正確なブロッカーとそのソース位置(例: Scene updater)を示し、最初の serial play 以降のレンダラー全体に及ぶ単調な無効化の因果連鎖も説明します。このセクションは機能の削除を助言することは決してなく、レンダーパス上の帰結を説明するだけです。
 - **`MLP214`**: シーン最初の play より前に 4 個以上の相異なる TeX コンパイルキーが直列に構築される箇所を指摘し、フォークの事前コンパイル API(`MathTex.precompile`、`tex_to_svg_file_async`)を提示します。
 - **`MLP217`**: hot なコールバック内でフレームごとに変わる `use_svg_cache=True` キーが、フォークが宣言するプロセスグローバル SVG キャッシュを毎フレーム成長させる箇所を指摘します。
 - **`MLP225`**(`--select MLP225` によるオプトイン): cost レポートの fast-path ブロッカー説明を play ごとの診断として出力します。
@@ -256,12 +256,12 @@ upstream プロファイルが提供するすべてに加えて、次が有効�
 ## 抑制(suppression)
 
 ```python
-self.play(square.shift(RIGHT))  # manim-lint: ignore[MLC102]   # 同じ文
+self.play(square.shift(RIGHT))  # qual: ignore[MLC102]   # 同じ文
 
-# manim-lint: ignore[MLP201]                                   # 次の文
+# qual: ignore[MLP201]                                   # 次の文
 label = always_redraw(...)
 
-# manim-lint: file-ignore[MLP]   # ファイル全体。ファイルヘッダー領域に置く
+# qual: file-ignore[MLP]   # ファイル全体。ファイルヘッダー領域に置く
 ```
 
 抑制の対象は行単位ではなく**文単位**です。行末コメント(または直上の独立コメント)は、複数行にまたがる呼び出しの継続行も含めた文全体をカバーし、その文の内部のどこに位置する診断でも抑制されます。複合文(`def`、`for`、`if`、`with` など)ではヘッダー(コロンまで)だけをカバーし、1 つのコメントがスイート全体を沈黙させることはありません。
@@ -279,8 +279,8 @@ scene.py:8:41: MLC001 warning unknown rule ID in suppression: MLC999
 既存プロジェクトに、全部を直す前から導入できます。
 
 ```bash
-manim-lint check . --write-baseline .manim-lint-baseline.json  # 今日の検出結果を記録
-manim-lint check . --baseline .manim-lint-baseline.json        # 新規の検出だけを報告
+qual check . --write-baseline .qual-baseline.json  # 今日の検出結果を記録
+qual check . --baseline .qual-baseline.json        # 新規の検出だけを報告
 ```
 
 baseline の指紋(`schemas/baseline-v1.json`)は **行番号を含みません** — ルール ID、相対パス、修飾された Scene 名、周辺トークンのハッシュから作られるため、ファイル内の無関係な行の追加でエントリが失効しません。`scene` フィールドには修飾された囲み Scene クラス名が記録され(Scene の外では空)、別々の Scene にある同一の検出は異なる指紋になります。書き出されるファイルには来歴マーカー `scene_attribution: "attributed"` が付き、そのファイルでは空の `scene` は文字どおり「どの Scene の外」を意味して厳密に一致します。Scene 帰属導入前に書かれた baseline(マーカーなし)も引き続き読み込め、その場合に限り空の `scene` がワイルドカードとしてマッチします。破損した、あるいはスキーマの合わない baseline ファイルは明確なメッセージとともに exit 2 になります。
@@ -288,24 +288,24 @@ baseline の指紋(`schemas/baseline-v1.json`)は **行番号を含みません*
 ## 自動修正(autofix)
 
 ```bash
-manim-lint check . --fix            # SAFE な修正だけを適用
-manim-lint check . --fix --unsafe-fixes  # UNSAFE な修正も適用
+qual check . --fix            # SAFE な修正だけを適用
+qual check . --fix --unsafe-fixes  # UNSAFE な修正も適用
 ```
 
 safe と unsafe は厳密に分離されています。`--fix` 単体では挙動を変えない編集だけを適用します(例: `MLC127` は 1 回の `add()`/`VGroup()` 呼び出しから重複した子を除去、`MLR104` は case-only のアセットパスを修正)。unsafe な修正は実行時の意味を変え得るため(例: `MLC102` の `play(mob.shift(...))` → `play(mob.animate.shift(...))` への書き換え)、明示的な追加フラグが必要です。修正されたファイルはすべて再パースで検証され、検証に失敗したファイルはロールバックされます。
 
 ```console
-$ manim-lint check . --fix
+$ qual check . --fix
 scene.py:8:40: MLC127 info Remove the duplicate `square` from this `VGroup(...)` call: Manim warns and ignores repeated children of a single add.
 fixed 1 issue(s) in 1 file(s)
 ```
 
 ## cost コマンド
 
-`manim-lint cost` はシーンごとの記号的コスト内訳を表示します — フレーム数区間つきの play リスト、由来とコールバックの実行が証明された play つきの hot context、毎フレーム構築、リソースキーの成長。未知の duration は unknown と表示し、数値を捏造しません。
+`qual cost` はシーンごとの記号的コスト内訳を表示します — フレーム数区間つきの play リスト、由来とコールバックの実行が証明された play つきの hot context、毎フレーム構築、リソースキーの成長。未知の duration は unknown と表示し、数値を捏造しません。
 
 ```console
-$ manim-lint cost scenes/demo.py
+$ qual cost scenes/demo.py
 profiles: production (cairo, 1920x1080, 60 fps)
 
 scene scenes.demo.TrackerDemo (scenes/demo.py)
@@ -325,7 +325,7 @@ scene scenes.demo.TrackerDemo (scenes/demo.py)
 ローカルフォークの knowledge profile の下では、レポートにシーンごとの「fork fast paths」セクションが加わります(上の「最適化フォークプロファイルの利用」を参照)。例えばプロファイルに `cairo-fork-workers = 4` と `cairo-static-layers = true` を設定した場合:
 
 ```console
-$ manim-lint cost scene.py
+$ qual cost scene.py
 ...
   fork fast paths (profile production, knowledge local_0_20_1_4d25c031):
     fork-per-play (cairo_fork_workers 4):
@@ -343,12 +343,12 @@ $ manim-lint cost scene.py
 
 ## 解析カバレッジ
 
-保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のか — その沈黙は安全なのか、それとも盲目なのか — を区別できるように、`manim-lint coverage`(および同じレポートを stderr に出す `manim-lint check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン、インライン化されずサマリーへフォールバックしたヘルパー呼び出し(再帰・解決不能。プロジェクト全体で重複排除して集計)。
+保守的な沈黙は正しくても見えません。クリーンな実行が「問題なし」なのか「半分しか解析できなかった」のか — その沈黙は安全なのか、それとも盲目なのか — を区別できるように、`qual coverage`(および同じレポートを stderr に出す `qual check --analysis-summary`)は解析が解決**できなかった**ものを列挙します: 未解決の import(不明モジュールからの star import、プロジェクト木を出る相対 import)、候補が空の呼び出し、duration 不明の play、対象不明の `.animate` ビルダー、`target-python` を超える構文(MLC000)、knowledge profile に無い manim API、コンストラクタ状態が不明なシーン、インライン化されずサマリーへフォールバックしたヘルパー呼び出し(再帰・解決不能。プロジェクト全体で重複排除して集計)。
 
 解決できないモジュールからの star import、プロジェクト木を出る相対 import、`target-python = "3.9"` を超える `match` 文、未解決ヘルパー呼び出しに包まれた play を含むファイルの例:
 
 ```console
-$ manim-lint coverage .
+$ qual coverage .
 analysis coverage (knowledge profile upstream_0_20, target-python 3.9)
 
 scene.py
@@ -382,7 +382,7 @@ analysis confidence: 1/1 files parsed, 5/6 calls resolved, 1/2 play durations kn
 GitHub Actions アノテーションを PR の差分に直接表示する場合:
 
 ```yaml
-name: manim-lint
+name: qual
 on: [push, pull_request]
 jobs:
   lint:
@@ -391,18 +391,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install --path . --locked
-        working-directory: manim-lint   # manim-lint checkout へのパス
-      - run: manim-lint check . --format github
+        working-directory: qual   # qual checkout へのパス
+      - run: qual check . --format github
 ```
 
 SARIF をアップロードして GitHub の code scanning UI に表示する場合:
 
 ```yaml
-      - run: manim-lint check . --format sarif > manim-lint.sarif
+      - run: qual check . --format sarif > qual.sarif
         continue-on-error: true
       - uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: manim-lint.sarif
+          sarif_file: qual.sarif
 ```
 
 ## ルールカタログ
@@ -418,7 +418,7 @@ SARIF をアップロードして GitHub の code scanning UI に表示する場
 
 実装済みルールのうち 1 つはオプトインです: `MLP225` は `default_enabled: false` で、通常の `check` 実行には決して参加しません。ローカルフォークプロファイルの下で正確な `--select MLP225` を指定したときだけ評価されます。
 
-ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`manim-lint explain <ID>` でも読めます。
+ルールごとの状態・severity・confidence を含む完全な索引は [docs/rules/README.md](docs/rules/README.md) にあります。実装済みルールにはそれぞれドキュメントページがあり、`qual explain <ID>` でも読めます。
 
 ## アーキテクチャ
 
@@ -442,17 +442,17 @@ suppressions, supersedes, baseline
 output ................... concise | full | json | sarif | github, fixes, cost report
 ```
 
-[docs/architecture.md](docs/architecture.md)(英語)は新しいコントリビューター向けにこのパイプラインを解説します: 各事実レイヤーが何を提供しどこにあるか、knowledge profile システム、そして 1 つの診断がエンドツーエンドでどう流れるか。意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。`manim-lint static-facts`が出力するPoietra / fast-manim向け意味bridgeは[`StaticFacts v0 RFC`](docs/rfcs/0001-static-facts-v0.md)とその[`JSON Schema`](schemas/static-facts-v0.json)に従います。snapshot内のScene/object/play/animation/updater ID、encoding-awareなsource anchor、理由付きUnknown、renderer risk、coverage frontierを公開しますが、描画省略やforkの許可は出しません。出力は決定的で、同じ入力に対して byte 単位で安定です。
+[docs/architecture.md](docs/architecture.md)(英語)は新しいコントリビューター向けにこのパイプラインを解説します: 各事実レイヤーが何を提供しどこにあるか、knowledge profile システム、そして 1 つの診断がエンドツーエンドでどう流れるか。意味モデル・ルールカタログ・公開契約の正典仕様は [`DESIGN.md`](DESIGN.md) です。JSON 出力は [`schemas/diagnostics-v1.json`](schemas/diagnostics-v1.json)、baseline は [`schemas/baseline-v1.json`](schemas/baseline-v1.json) に従います。`qual static-facts`が出力するPoietra / fast-manim向け意味bridgeは[`StaticFacts v0 RFC`](docs/rfcs/0001-static-facts-v0.md)とその[`JSON Schema`](schemas/static-facts-v0.json)に従います。snapshot内のScene/object/play/animation/updater ID、encoding-awareなsource anchor、理由付きUnknown、renderer risk、coverage frontierを公開しますが、描画省略やforkの許可は出しません。出力は決定的で、同じ入力に対して byte 単位で安定です。
 
 ## 既知の制限
 
 - **対象バージョン。** 同梱の knowledge profile は Manim Community **0.20 のみ** を対象とします。他のバージョンのプロファイルはまだありません。
 - **アセット検査は lint 実行マシンを調べます。** `MLR104` はリテラルなアセットパスを、lint を実行しているマシン上で Manim 自身のランタイム探索により解決します。プロジェクトツリー外の絶対パスについては、それは lint ホストに関する証拠であり、必ずしもレンダーホストのものではありません(例: CI で lint し、別マシンでレンダーするリポジトリ)。そのような診断は根拠として `environment_dependent: true` を持ちます。case-only の不一致は大文字小文字を区別する対象プラットフォーム(`linux`)に対してのみ報告されます。影響するプロファイルがすべて windows / macos を対象とする場合、宣言されたレンダーは書かれたとおりにファイルを解決できるため、linter は沈黙します。
-- **ソースエンコーディング。** PEP 263 宣言は WHATWG ラベルと CPython コーデック別名テーブル(`latin-1`、`cp932`、`koi8_r`、...)で解決します。linter が表現できない稀な Python コーデックは、明示的な `MLC000` の「not supported by manim-lint」通知とともにスキップされます — 対象の Python がそのファイルをデコードできない、という主張には決してなりません。
+- **ソースエンコーディング。** PEP 263 宣言は WHATWG ラベルと CPython コーデック別名テーブル(`latin-1`、`cp932`、`koi8_r`、...)で解決します。linter が表現できない稀な Python コーデックは、明示的な `MLC000` の「not supported by qual」通知とともにスキップされます — 対象の Python がそのファイルをデコードできない、という主張には決してなりません。
 - **duration はリテラルのみから導出します。** Manim の*デフォルト*に依存する play(`run_time` を一切書かない `self.play(m.animate.shift(RIGHT))`、`self.wait()`)の duration は unknown と報告され、フレーム数は数値の代わりに per-frame 表現になります(保守的: 欠落はしても捏造はしない)。リテラルな play レベルの `run_time` は play 全体の duration を正確に決定します — Scene ヘルパー内の play も呼び出しサイトごとに、呼び出しサイトが異なる(あるいは追跡不能な)mobject をパラメーター上の `.animate` ビルダーに渡す場合も含めて — 一方、*非リテラル*な `run_time`(や `**kwargs` splat)は、それが上書きするコンストラクタリテラルを正直に unknown へ広げます。
 - **サマリー由来の play は保守的です。** ヘルパーのインライン化が effect summary へフォールバックした場合(再帰、解決不能な呼び出し — カバレッジレポートの `helper calls summarized, not inlined` に計上)、そのヘルパーの play は `Maybe` 確度・開いた繰り返し回数のレコードとして現れます: `MLC104` のようなリテラル duration 検査はそこでも発火しますが、呼び出し元の状態に依存する判定はすべて degrade されたままです。
 - **`TracedPath` がコンストラクタで登録する updater はコスト専用です。** `TracedPath` が構築時に自身へ登録する updater はコスト目的ではモデル化されます(`MLP220` のスパン、lambda を渡した場合の hot context)が、ライフサイクル上の updater 登録ではありません: `TracedPath` 単独ではデフォルトの `wait()` はライフサイクルモデル上 dynamic にならず、バウンドメソッドの `traced_point_func` 本体は hot context として解析されません。
-- **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `manim-lint explain <RULE>` が述べます。
+- **意図的に保守的な沈黙。** 一部の検出はカタログの記述より狭く、推測するより沈黙します。`MLR106` は NaN / inf をリテラル形式でのみ見て、`float("nan")` 呼び出しは追いません。`MLD301` は `dt` パラメータを持たない updater についてのみ FPS 依存を証明します(宣言だけして未使用の `dt` は指摘しません)。`MLC113`/`MLC124` はドキュメント化された呼び出し形のみを認識します。`MLR102` は play された裸の builder の target が不変であることを解釈器が証明できる必要があります。`MLR105` は検証済みの Pango サブセットを検査します(裸の `&` は許容)。`MLD304` は ThreeDScene の fixed-object cleanup 分岐のみを実装しています。各ルールの正確な範囲は `qual explain <RULE>` が述べます。
 - **未実装。** レンダー済みベースラインに対する閾値較正、nightly のレンダー比較 CI。
 
 ## 開発

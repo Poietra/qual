@@ -1,4 +1,4 @@
-# Contributing to manim-lint
+# Contributing to Qual
 
 Thank you for contributing. Two documents outrank this one:
 
@@ -123,14 +123,14 @@ default severity, and minimum confidence. Implementing one:
    wrong/right code examples. Add a row link in `docs/rules/README.md`.
 7. **Add the doc to the `explain` table**: the `DOCS` array in
    `src/application.rs` embeds every implemented rule's markdown via
-   `include_str!`, so `manim-lint explain <ID>` works offline.
+   `include_str!`, so `qual explain <ID>` works offline.
 8. If the rule ships a fix, mark it SAFE only when it preserves behavior;
    anything that can change runtime semantics is UNSAFE. Fixes are re-parse
    validated with per-file rollback, and fixed-then-relinted code must be a
    no-op (idempotence).
 
 **The honesty rule:** an ID you cannot implement soundly *stays reserved*.
-`manim-lint rules` lists it as `reserved`, `check` never registers it, and
+`qual rules` lists it as `reserved`, `check` never registers it, and
 no documentation pretends otherwise. Prefer a conservative `Unknown` — and
 silence — over a high-confidence false positive (AGENTS.md rule 4). A
 narrower-than-catalog implementation is acceptable if its documentation

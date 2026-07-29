@@ -68,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file type and size are checked on the directory entry, before opening.
 - **`--fix` can no longer write outside the project.** Symlinks were followed
   wherever they led, so a link committed to a repository let
-  `manim-lint check --fix` rewrite an arbitrary file elsewhere on the machine.
+  `qual check --fix` rewrite an arbitrary file elsewhere on the machine.
   Paths that resolve outside the project root are skipped at discovery and
   refused again immediately before the write.
 - **`MLC109` no longer claims certainty it does not have.** An empty
@@ -79,7 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The knowledge-drift gate reads `MANIM_LINT_MANIM_ROOT` (default `../manim`)
+- **The project is now named Qual.** The CLI, Cargo crate, and PyPI project
+  move from `manim-lint` to `qual`; configuration moves from
+  `[tool.manim-lint]` to `[tool.qual]`; inline suppressions use `# qual:`;
+  the cache moves to `.qual-cache`; and maintainer builds use the
+  `QUAL_MANIM_ROOT` and `QUAL_BUILD_ID` environment variables. Rule IDs and
+  diagnostic semantics are unchanged.
+- The knowledge-drift gate reads `QUAL_MANIM_ROOT` (default `../manim`)
   instead of a hardcoded path on the author's machine, which CI had been
   recreating on the runner with `sudo` and which no contributor could match.
 - Package metadata is publishable: repository, homepage, keywords, categories,
@@ -122,14 +128,14 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
   block on `--min-confidence certain` only, and why error severity alone is the
   wrong gate (correct source can assert its own failure cases).
 
-- **SourceBridge/rematching v0 (RFC 0004)**: `manim-lint source-bridge`
+- **SourceBridge/rematching v0 (RFC 0004)**: `qual source-bridge`
   generates non-writing, hash-guarded literal/shift patch candidates with
   rollback text, virtually reparses and fully reanalyzes each edit, reports
   `match | ambiguous | missing`, and rejects parse failures or new coverage
   frontiers. Request/output schemas cover ambiguity, preconditions, structured
   Unknowns, and accepted/rejected validation.
 
-- **ChangeImpact v0 (RFC 0003)**: `manim-lint change-impact --before OLD
+- **ChangeImpact v0 (RFC 0003)**: `qual change-impact --before OLD
   --after NEW` compares two full source snapshots and emits schema-validated
   added/removed/modified definitions, conservative Scene/play/object
   candidates, deterministic reverse dependency reason paths, and structured
@@ -143,7 +149,7 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
   cache v2 consumes only the graph's weak file-component view, leaving the
   reverse reason paths available to ChangeImpact.
 
-- **StaticFacts v0 contract and producer (RFC 0001)**: `manim-lint
+- **StaticFacts v0 contract and producer (RFC 0001)**: `qual
   static-facts` emits the Draft 2020-12-schema-validated Poietra/fast-manim
   semantic bridge, with snapshot-scoped public
   IDs, encoding-aware source anchors, reason-carrying unknown values, renderer
@@ -183,7 +189,7 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
   re-add is defeated by a strictly higher exact `z_index`.
 
 - **Analysis-coverage reporting** (the review's "trust feature"): a new
-  `manim-lint coverage [PATH...] [--format text|json]` subcommand and a
+  `qual coverage [PATH...] [--format text|json]` subcommand and a
   `check --analysis-summary` flag (same report on stderr after the
   diagnostics; stdout and the exit code are untouched) that surface what
   the conservative analysis could NOT resolve — unresolved imports
@@ -237,7 +243,7 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
     packed interpolation thresholds, and the process-global unbounded SVG
     cache — every fact cited to the fork source; both ignored drift gates
     (upstream clean-base and overlay-vs-fork-working-tree) hold.
-  - `manim-lint cost` gains a per-scene "fork fast paths" section under
+  - `qual cost` gains a per-scene "fork fast paths" section under
     the fork profile: per-play verdicts for the fork-per-play,
     static-layer, and packed-interpolation gates with the exact blocker
     and cause span, the monotonic-disable causal chain, and measured A/B
@@ -294,7 +300,7 @@ reserved** (was 79 / 13 at 0.1.0): `MLC114`, `MLC116`, `MLC118`,
   from any tier (CLI, profile, `manim.cfg`), non-empty `stub-paths`
   (unimplemented), `manim-version` outside the loaded knowledge profile's
   supported range, and malformed or out-of-range `target-python`.
-  `manim-lint config` gained an `enforcement` section stating which
+  `qual config` gained an `enforcement` section stating which
   settings are enforced and which are informational.
 - **Release quality gates** (DESIGN §11.4): a labeled corpus gate
   (`tests/corpus/manifest-v1.json`, 35 cases pinning sha256 and exact
@@ -464,7 +470,7 @@ projects that never imports or executes the analyzed code.
   catalog IDs are listed as reserved and never fire.
 - Severity/confidence separation, definite (all-paths) evidence gating, and
   specificity dedup via rule `supersedes` metadata.
-- Configuration from `[tool.manim-lint]` in `pyproject.toml` with render
+- Configuration from `[tool.qual]` in `pyproject.toml` with render
   profiles, a minimal `manim.cfg` reader, and the precedence chain
   `CLI > profile > pyproject > manim.cfg > defaults`; `per-file-ignores`.
 - Inline suppressions (same-statement, next-statement, header `file-ignore`)

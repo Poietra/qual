@@ -1,6 +1,6 @@
 //! Configuration discovery, parsing, and validation (DESIGN §8.2).
 //!
-//! Reads `[tool.manim-lint]` from `pyproject.toml`, optionally a minimal
+//! Reads `[tool.qual]` from `pyproject.toml`, optionally a minimal
 //! `manim.cfg` INI, applies the precedence chain from
 //! [`crate::config::model`], and validates the result. Every error maps to
 //! exit code 2.
@@ -33,7 +33,7 @@ pub enum ConfigError {
         /// Parser or schema message.
         message: String,
     },
-    /// `manim.cfg` contains a value manim-lint cannot interpret.
+    /// `manim.cfg` contains a value qual cannot interpret.
     #[error("invalid manim.cfg at {path}: {message}")]
     InvalidManimCfg {
         /// File that failed to parse.
@@ -129,9 +129,9 @@ fn validate_target_python(value: &str) -> Result<(), ConfigError> {
     if version > MAX_TARGET_PYTHON {
         return Err(ConfigError::InvalidValue(format!(
             "target-python {value} is newer than the Python grammar bundled \
-             with manim-lint (rustpython-parser 0.4 implements the Python \
+             with qual (rustpython-parser 0.4 implements the Python \
              {major}.{minor} grammar); lower target-python or use a \
-             manim-lint build with a newer parser",
+             qual build with a newer parser",
             major = MAX_TARGET_PYTHON.0,
             minor = MAX_TARGET_PYTHON.1,
         )));
@@ -248,7 +248,7 @@ fn validate_profile_numbers(profile: &RenderProfile) -> Result<(), ConfigError> 
     Ok(())
 }
 
-/// `[tool.manim-lint]` exactly as written in `pyproject.toml`.
+/// `[tool.qual]` exactly as written in `pyproject.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct PyprojectSection {
@@ -269,7 +269,7 @@ pub struct PyprojectSection {
     profile: Vec<ProfileSection>,
 }
 
-/// One `[[tool.manim-lint.profile]]` entry as written.
+/// One `[[tool.qual.profile]]` entry as written.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ProfileSection {
@@ -371,9 +371,9 @@ pub fn find_pyproject(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Parses `[tool.manim-lint]` from a `pyproject.toml` file.
+/// Parses `[tool.qual]` from a `pyproject.toml` file.
 ///
-/// Returns `Ok(None)` when the file has no `[tool.manim-lint]` table.
+/// Returns `Ok(None)` when the file has no `[tool.qual]` table.
 pub fn load_pyproject(path: &Path) -> Result<Option<PyprojectSection>, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
@@ -385,7 +385,7 @@ pub fn load_pyproject(path: &Path) -> Result<Option<PyprojectSection>, ConfigErr
     })
 }
 
-/// Parses `[tool.manim-lint]` from pyproject TOML text.
+/// Parses `[tool.qual]` from pyproject TOML text.
 pub fn parse_pyproject(text: &str) -> Result<Option<PyprojectSection>, String> {
     #[derive(Deserialize)]
     struct PyprojectFile {
@@ -393,15 +393,15 @@ pub fn parse_pyproject(text: &str) -> Result<Option<PyprojectSection>, String> {
     }
     #[derive(Deserialize)]
     struct ToolTable {
-        #[serde(rename = "manim-lint")]
-        manim_lint: Option<PyprojectSection>,
+        #[serde(rename = "qual")]
+        qual: Option<PyprojectSection>,
     }
 
     let file: PyprojectFile = toml::from_str(text).map_err(|error| error.to_string())?;
-    Ok(file.tool.and_then(|tool| tool.manim_lint))
+    Ok(file.tool.and_then(|tool| tool.qual))
 }
 
-/// Values manim-lint reads from `manim.cfg` (resolution, fps, renderer).
+/// Values qual reads from `manim.cfg` (resolution, fps, renderer).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ManimCfgValues {
     /// `pixel_width` from the `[CLI]` section.
@@ -441,7 +441,7 @@ pub fn load_manim_cfg(dir: &Path) -> Result<Option<ManimCfgValues>, ConfigError>
         .map_err(|message| ConfigError::InvalidManimCfg { path, message })
 }
 
-/// Parses the minimal INI subset of `manim.cfg` that manim-lint consumes.
+/// Parses the minimal INI subset of `manim.cfg` that qual consumes.
 ///
 /// Sections are `[name]` lines; entries are `key = value` or `key : value`;
 /// `#` and `;` start comments. Only the `[CLI]` section is interpreted.
@@ -515,7 +515,7 @@ pub struct ResolutionInput {
     pub project_root: PathBuf,
     /// CLI-provided overrides (highest precedence).
     pub cli: ConfigFragment,
-    /// Parsed `[tool.manim-lint]`, when a pyproject was found.
+    /// Parsed `[tool.qual]`, when a pyproject was found.
     pub pyproject: Option<PyprojectSection>,
     /// Parsed `manim.cfg`, when present.
     pub manim_cfg: Option<ManimCfgValues>,
@@ -744,21 +744,21 @@ mod tests {
     use super::*;
 
     const PYPROJECT: &str = r#"
-[tool.manim-lint]
+[tool.qual]
 select = ["MLC", "MLR"]
 min-confidence = "medium"
 fail-level = "error"
 default-profile = "production"
 exclude = ["media/**"]
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 frame-rate = 30
 pixel-width = 3840
 pixel-height = 2160
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "preview"
 renderer = "opengl"
 "#;
@@ -815,7 +815,7 @@ renderer = "opengl"
 
     #[test]
     fn respect_manim_cfg_false_ignores_manim_cfg() {
-        let pyproject = "[tool.manim-lint]\nrespect-manim-cfg = false\n";
+        let pyproject = "[tool.qual]\nrespect-manim-cfg = false\n";
         let mut input = input_with(pyproject);
         input.manim_cfg = Some(ManimCfgValues {
             frame_rate: Some(15.0),
@@ -835,7 +835,7 @@ renderer = "opengl"
 
     #[test]
     fn unknown_selector_is_a_config_error() {
-        let pyproject = "[tool.manim-lint]\nselect = [\"MLX999\"]\n";
+        let pyproject = "[tool.qual]\nselect = [\"MLX999\"]\n";
         assert!(matches!(
             resolve(&input_with(pyproject)),
             Err(ConfigError::UnknownSelector(_))
@@ -845,11 +845,11 @@ renderer = "opengl"
     #[test]
     fn duplicate_profile_names_are_rejected() {
         let pyproject = r#"
-[tool.manim-lint]
+[tool.qual]
 default-profile = "a"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "a"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "a"
 "#;
         assert!(matches!(
@@ -860,8 +860,8 @@ name = "a"
 
     #[test]
     fn missing_default_profile_is_rejected() {
-        let pyproject = "[[tool.manim-lint.profile]]\nname = \"a\"\n";
-        let full = format!("[tool.manim-lint]\n{pyproject}");
+        let pyproject = "[[tool.qual.profile]]\nname = \"a\"\n";
+        let full = format!("[tool.qual]\n{pyproject}");
         assert!(matches!(
             resolve(&input_with(&full)),
             Err(ConfigError::MissingDefaultProfile)
@@ -871,9 +871,9 @@ name = "a"
     #[test]
     fn unknown_default_profile_is_rejected() {
         let pyproject = r#"
-[tool.manim-lint]
+[tool.qual]
 default-profile = "missing"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "a"
 "#;
         assert!(matches!(
@@ -894,7 +894,7 @@ name = "a"
 
     #[test]
     fn unknown_pyproject_key_is_rejected() {
-        let pyproject = "[tool.manim-lint]\nnot-a-key = 1\n";
+        let pyproject = "[tool.qual]\nnot-a-key = 1\n";
         assert!(parse_pyproject(pyproject).is_err());
     }
 
@@ -951,9 +951,9 @@ name = "a"
     #[test]
     fn profile_zero_frame_rate_is_rejected() {
         let pyproject = r#"
-[tool.manim-lint]
+[tool.qual]
 default-profile = "p"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "p"
 frame-rate = 0
 "#;
@@ -966,9 +966,9 @@ frame-rate = 0
     #[test]
     fn profile_non_finite_frame_rate_is_rejected() {
         let pyproject = r#"
-[tool.manim-lint]
+[tool.qual]
 default-profile = "p"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "p"
 frame-rate = inf
 "#;
@@ -981,9 +981,9 @@ frame-rate = inf
     #[test]
     fn profile_zero_pixel_dimension_is_rejected() {
         let pyproject = r#"
-[tool.manim-lint]
+[tool.qual]
 default-profile = "p"
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "p"
 pixel-width = 0
 "#;
@@ -995,14 +995,14 @@ pixel-width = 0
 
     #[test]
     fn manim_cfg_zero_values_are_rejected() {
-        let mut input = input_with("[tool.manim-lint]\n");
+        let mut input = input_with("[tool.qual]\n");
         input.manim_cfg = Some(ManimCfgValues {
             frame_rate: Some(0.0),
             ..ManimCfgValues::default()
         });
         assert!(matches!(resolve(&input), Err(ConfigError::InvalidValue(_))));
 
-        let mut input = input_with("[tool.manim-lint]\n");
+        let mut input = input_with("[tool.qual]\n");
         input.manim_cfg = Some(ManimCfgValues {
             pixel_width: Some(0),
             ..ManimCfgValues::default()
@@ -1026,7 +1026,7 @@ pixel-width = 0
 
     #[test]
     fn non_empty_stub_paths_is_an_explicit_refusal() {
-        let pyproject = "[tool.manim-lint]\nstub-paths = [\"stubs\"]\n";
+        let pyproject = "[tool.qual]\nstub-paths = [\"stubs\"]\n";
         let error = resolve(&input_with(pyproject)).expect_err("must refuse");
         assert!(matches!(error, ConfigError::StubPathsUnimplemented));
         assert!(
@@ -1039,7 +1039,7 @@ pixel-width = 0
     #[test]
     fn target_python_format_and_bounds_are_validated() {
         for good in ["3.6", "3.8", "3.11", "3.12"] {
-            let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{good}\"\n");
+            let pyproject = format!("[tool.qual]\ntarget-python = \"{good}\"\n");
             assert!(
                 resolve(&input_with(&pyproject)).is_ok(),
                 "{good} must be accepted"
@@ -1048,7 +1048,7 @@ pixel-width = 0
         for bad in [
             "2.7", "3.0", "3.5", "3.13", "4.0", "3", "3.11.2", "py3", "3.x", "",
         ] {
-            let pyproject = format!("[tool.manim-lint]\ntarget-python = \"{bad}\"\n");
+            let pyproject = format!("[tool.qual]\ntarget-python = \"{bad}\"\n");
             assert!(
                 matches!(
                     resolve(&input_with(&pyproject)),
@@ -1061,7 +1061,7 @@ pixel-width = 0
 
     #[test]
     fn target_python_below_the_gating_floor_names_the_floor() {
-        let pyproject = "[tool.manim-lint]\ntarget-python = \"3.5\"\n";
+        let pyproject = "[tool.qual]\ntarget-python = \"3.5\"\n";
         let error = resolve(&input_with(pyproject)).expect_err("must refuse");
         assert_eq!(
             error.to_string(),
@@ -1072,7 +1072,7 @@ pixel-width = 0
 
     #[test]
     fn target_python_newer_than_parser_grammar_names_the_bound() {
-        let pyproject = "[tool.manim-lint]\ntarget-python = \"3.13\"\n";
+        let pyproject = "[tool.qual]\ntarget-python = \"3.13\"\n";
         let error = resolve(&input_with(pyproject)).expect_err("must refuse");
         let message = error.to_string();
         assert!(message.contains("3.13"), "{message}");
@@ -1081,20 +1081,15 @@ pixel-width = 0
 
     #[test]
     fn declared_manim_version_is_tracked_and_format_checked() {
-        let config = resolve(&input_with(
-            "[tool.manim-lint]\nmanim-version = \"0.20.1\"\n",
-        ))
-        .unwrap();
+        let config = resolve(&input_with("[tool.qual]\nmanim-version = \"0.20.1\"\n")).unwrap();
         assert_eq!(config.declared_manim_version.as_deref(), Some("0.20.1"));
 
-        let config = resolve(&input_with("[tool.manim-lint]\n")).unwrap();
+        let config = resolve(&input_with("[tool.qual]\n")).unwrap();
         assert_eq!(config.declared_manim_version, None);
         assert_eq!(config.manim_version, "0.20", "builtin default kept");
 
         assert!(matches!(
-            resolve(&input_with(
-                "[tool.manim-lint]\nmanim-version = \"latest\"\n"
-            )),
+            resolve(&input_with("[tool.qual]\nmanim-version = \"latest\"\n")),
             Err(ConfigError::InvalidValue(_))
         ));
     }

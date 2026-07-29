@@ -1,4 +1,4 @@
-//! `manim-lint cost` golden tests (DESIGN §8.1, §4.1, roadmap Phase 3).
+//! `qual cost` golden tests (DESIGN §8.1, §4.1, roadmap Phase 3).
 //!
 //! The report shows per-scene plays with frame estimates, hot contexts
 //! with entry kind / provenance / multiplicity factors and a per-callback
@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use manim_lint::application::{ApplicationError, run_cost};
+use qual::application::{ApplicationError, run_cost};
 
 /// Writes fixture files into a fresh temp project.
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {

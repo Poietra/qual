@@ -6,5 +6,5 @@ from manim import Scene, Square
 class デモシーン(Scene):
     def construct(self):
         square = Square()
-        self.play(square.animate.shift(2))  # manim-lint: ignore[MLC108]
+        self.play(square.animate.shift(2))  # qual: ignore[MLC108]
         self.wait()

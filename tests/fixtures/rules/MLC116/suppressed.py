@@ -7,4 +7,4 @@ class SuppressedPostTransformTarget(Scene):
         target = Circle()
         self.add(source)
         self.play(Transform(source, target))
-        self.play(target.animate.shift(RIGHT))  # manim-lint: ignore[MLC116]
+        self.play(target.animate.shift(RIGHT))  # qual: ignore[MLC116]

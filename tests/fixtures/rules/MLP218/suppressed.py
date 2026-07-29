@@ -6,4 +6,4 @@ class Demo(Scene):
         square = Square()
         self.add(square)
         square.add_updater(lambda m, dt: m.set_fill(RED))
-        self.wait(4)  # manim-lint: ignore[MLP218]
+        self.wait(4)  # qual: ignore[MLP218]

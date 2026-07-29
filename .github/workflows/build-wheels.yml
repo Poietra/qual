@@ -137,7 +137,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install wheels/*.whl
-      - run: manim-lint --version
+      - run: qual --version
       - name: Verify license material in the wheel
         run: |
           python - <<'PY'

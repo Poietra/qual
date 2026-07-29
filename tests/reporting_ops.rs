@@ -6,23 +6,23 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use manim_lint::application::check;
-use manim_lint::cli::{CheckArgs, ExitStatus};
-use manim_lint::diagnostic::{
+use qual::application::check;
+use qual::cli::{CheckArgs, ExitStatus};
+use qual::diagnostic::{
     Confidence, Diagnostic, Fix, FixApplicability, Severity, SourcePosition, SourceSpan, TextEdit,
 };
-use manim_lint::reporting::{OutputFormat, fixes};
-use manim_lint::source::SourceManager;
+use qual::reporting::{OutputFormat, fixes};
+use qual::source::SourceManager;
 use serde_json::Value;
 
 const PYPROJECT: &str = r#"
-[tool.manim-lint]
+[tool.qual]
 select = ["MLC", "MLR", "MLP", "MLD"]
 min-confidence = "high"
 fail-level = "warning"
 default-profile = "production"
 
-[[tool.manim-lint.profile]]
+[[tool.qual.profile]]
 name = "production"
 renderer = "cairo"
 pixel-width = 1920
@@ -38,7 +38,7 @@ const GOOD_SCENE: &str = "\
 a = 1
 b = 2
 
-value = 3  # manim-lint: ignore[MLC999]
+value = 3  # qual: ignore[MLC999]
 
 c = 4
 d = 5
@@ -78,7 +78,7 @@ fn sarif_output_has_required_structure() {
     assert_eq!(run["columnKind"], "unicodeCodePoints");
 
     let driver = &run["tool"]["driver"];
-    assert_eq!(driver["name"], "manim-lint");
+    assert_eq!(driver["name"], "qual");
     assert!(driver["version"].is_string());
     assert!(driver["informationUri"].is_string());
 

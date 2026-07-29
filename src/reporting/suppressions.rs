@@ -1,10 +1,10 @@
 //! Inline suppression comments (DESIGN §8.3).
 //!
-//! - `code  # manim-lint: ignore[MLC108]` suppresses that *statement's*
+//! - `code  # qual: ignore[MLC108]` suppresses that *statement's*
 //!   diagnostics.
-//! - A standalone `# manim-lint: ignore[...]` comment applies to the next
+//! - A standalone `# qual: ignore[...]` comment applies to the next
 //!   statement.
-//! - `# manim-lint: file-ignore[MLP]` applies to the whole file and is only
+//! - `# qual: file-ignore[MLP]` applies to the whole file and is only
 //!   allowed in the header region (shebang / encoding declaration / module
 //!   docstring).
 //! - An unknown rule ID inside a suppression produces its own `MLC001`
@@ -104,10 +104,10 @@ pub fn collect(file: &SourceFile) -> (SuppressionIndex, Vec<Diagnostic>) {
     let header_end = header_end_line(file);
 
     for comment in file.comments() {
-        let Some(directive) = comment.text.find("manim-lint:") else {
+        let Some(directive) = comment.text.find("qual:") else {
             continue;
         };
-        let rest = comment.text[directive + "manim-lint:".len()..].trim_start();
+        let rest = comment.text[directive + "qual:".len()..].trim_start();
         match parse_directive(rest) {
             Some((DirectiveKind::Ignore, selectors)) => {
                 let target = target_span(statements.as_deref(), &code_lines, comment);
@@ -133,7 +133,7 @@ pub fn collect(file: &SourceFile) -> (SuppressionIndex, Vec<Diagnostic>) {
                 file,
                 comment,
                 "malformed suppression comment; expected \
-                 `manim-lint: ignore[RULE, ...]` or `manim-lint: file-ignore[RULE, ...]`",
+                 `qual: ignore[RULE, ...]` or `qual: file-ignore[RULE, ...]`",
             )),
         }
     }
@@ -299,7 +299,7 @@ enum DirectiveKind {
     FileIgnore,
 }
 
-/// Parses `ignore[...]` / `file-ignore[...]` after the `manim-lint:` marker.
+/// Parses `ignore[...]` / `file-ignore[...]` after the `qual:` marker.
 fn parse_directive(rest: &str) -> Option<(DirectiveKind, Vec<String>)> {
     let (kind, after) = if let Some(after) = rest.strip_prefix("file-ignore") {
         (DirectiveKind::FileIgnore, after)
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn end_of_line_suppression_matches_same_line() {
-        let sources = file_from("x = 1  # manim-lint: ignore[MLC108]\ny = 2\n");
+        let sources = file_from("x = 1  # qual: ignore[MLC108]\ny = 2\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert!(warnings.is_empty());
         assert!(index.suppresses(&diagnostic_at(1, "MLC108")));
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn standalone_suppression_applies_to_next_statement() {
-        let sources = file_from("# manim-lint: ignore[MLP201]\n\nlabel = 1\nother = 2\n");
+        let sources = file_from("# qual: ignore[MLP201]\n\nlabel = 1\nother = 2\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert!(warnings.is_empty());
         assert!(index.suppresses(&diagnostic_at(3, "MLP201")));
@@ -480,7 +480,7 @@ mod tests {
         // line *and* rules may anchor deeper inside the continuation; the
         // standalone form must cover the entire statement.
         let sources = file_from(
-            "# manim-lint: ignore[MLC102]\n\
+            "# qual: ignore[MLC102]\n\
              self.play(\n\
              \x20   square.shift(RIGHT)\n\
              )\n\
@@ -505,13 +505,13 @@ mod tests {
     fn end_of_line_suppression_covers_the_whole_multiline_statement() {
         for text in [
             // Comment on the first line of the statement…
-            "self.play(  # manim-lint: ignore[MLC102]\n\
+            "self.play(  # qual: ignore[MLC102]\n\
              \x20   square.shift(RIGHT)\n\
              )\n",
             // …and on its closing line: both are "the same statement".
             "self.play(\n\
              \x20   square.shift(RIGHT)\n\
-             )  # manim-lint: ignore[MLC102]\n",
+             )  # qual: ignore[MLC102]\n",
         ] {
             let sources = file_from(text);
             let (index, warnings) = collect(&sources.files()[0]);
@@ -531,7 +531,7 @@ mod tests {
         // to the statement after it.
         let sources = file_from(
             "self.play(\n\
-             \x20   # manim-lint: ignore[MLC102]\n\
+             \x20   # qual: ignore[MLC102]\n\
              \x20   square.shift(RIGHT)\n\
              )\n\
              other = 1\n",
@@ -546,8 +546,8 @@ mod tests {
     #[test]
     fn stacked_standalone_comments_all_reach_the_next_statement() {
         let sources = file_from(
-            "# manim-lint: ignore[MLC102]\n\
-             # manim-lint: ignore[MLC104]\n\
+            "# qual: ignore[MLC102]\n\
+             # qual: ignore[MLC104]\n\
              self.play(\n\
              \x20   square.shift(RIGHT)\n\
              )\n",
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn compound_statement_suppression_covers_the_header_not_the_body() {
         let sources = file_from(
-            "# manim-lint: ignore[MLP201]\n\
+            "# qual: ignore[MLP201]\n\
              for item in items:\n\
              \x20   process(item)\n",
         );
@@ -581,7 +581,7 @@ mod tests {
             "def construct(self):\n\
              \x20   self.play(\n\
              \x20       square.shift(RIGHT)\n\
-             \x20   )  # manim-lint: ignore[MLC102]\n\
+             \x20   )  # qual: ignore[MLC102]\n\
              \x20   self.add(square)\n",
         );
         let (index, warnings) = collect(&sources.files()[0]);
@@ -604,7 +604,7 @@ mod tests {
         // statement: it belongs to the body statement, not the header.
         let sources = file_from(
             "def construct(self):\n\
-             \x20   # manim-lint: ignore[MLC101]\n\
+             \x20   # qual: ignore[MLC101]\n\
              \x20   self.play(\n\
              \x20   )\n\
              \x20   self.play()\n",
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn multiline_def_header_is_one_span_up_to_its_colon() {
         let sources = file_from(
-            "# manim-lint: ignore[MLC105]\n\
+            "# qual: ignore[MLC105]\n\
              def helper(\n\
              \x20   value,\n\
              ):\n\
@@ -641,8 +641,8 @@ mod tests {
     fn unparsable_file_falls_back_to_line_matching() {
         // `def = 1` lexes but does not parse: no AST, Phase 0 fallback.
         let sources = file_from(
-            "x = 1  # manim-lint: ignore[MLC108]\n\
-             # manim-lint: ignore[MLP201]\n\
+            "x = 1  # qual: ignore[MLC108]\n\
+             # qual: ignore[MLP201]\n\
              y = 2\n\
              def = 1\n",
         );
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn prefix_selector_suppresses_whole_category() {
-        let sources = file_from("x = 1  # manim-lint: ignore[MLP]\n");
+        let sources = file_from("x = 1  # qual: ignore[MLP]\n");
         let (index, _) = collect(&sources.files()[0]);
         assert!(index.suppresses(&diagnostic_at(1, "MLP201")));
         assert!(!index.suppresses(&diagnostic_at(1, "MLC101")));
@@ -665,9 +665,8 @@ mod tests {
 
     #[test]
     fn file_ignore_in_header_applies_to_whole_file() {
-        let sources = file_from(
-            "#!/usr/bin/env python\n# manim-lint: file-ignore[MLP]\n\"\"\"doc\"\"\"\nx = 1\n",
-        );
+        let sources =
+            file_from("#!/usr/bin/env python\n# qual: file-ignore[MLP]\n\"\"\"doc\"\"\"\nx = 1\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert!(warnings.is_empty());
         assert!(index.suppresses(&diagnostic_at(4, "MLP201")));
@@ -676,7 +675,7 @@ mod tests {
 
     #[test]
     fn file_ignore_after_header_warns_and_does_not_suppress() {
-        let sources = file_from("x = 1\n# manim-lint: file-ignore[MLP]\ny = 2\n");
+        let sources = file_from("x = 1\n# qual: file-ignore[MLP]\ny = 2\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].rule_id, "MLC001");
@@ -685,7 +684,7 @@ mod tests {
 
     #[test]
     fn unknown_rule_id_warns_and_does_not_suppress() {
-        let sources = file_from("x = 1  # manim-lint: ignore[MLC999, MLC108]\n");
+        let sources = file_from("x = 1  # qual: ignore[MLC999, MLC108]\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].rule_id, "MLC001");
@@ -699,7 +698,7 @@ mod tests {
     fn unknown_rule_id_on_a_multiline_statement_still_warns() {
         // The statement-span rework must not change MLC001 semantics.
         let sources = file_from(
-            "# manim-lint: ignore[MLC999]\n\
+            "# qual: ignore[MLC999]\n\
              self.play(\n\
              \x20   square.shift(RIGHT)\n\
              )\n",
@@ -712,7 +711,7 @@ mod tests {
 
     #[test]
     fn malformed_directive_warns() {
-        let sources = file_from("x = 1  # manim-lint: ignore MLC108\n");
+        let sources = file_from("x = 1  # qual: ignore MLC108\n");
         let (index, warnings) = collect(&sources.files()[0]);
         assert_eq!(warnings.len(), 1);
         assert!(index.is_empty());
@@ -720,8 +719,7 @@ mod tests {
 
     #[test]
     fn docstring_end_line_bounds_the_header() {
-        let sources =
-            file_from("\"\"\"multi\nline\ndoc\"\"\"\n# manim-lint: file-ignore[MLD]\nx = 1\n");
+        let sources = file_from("\"\"\"multi\nline\ndoc\"\"\"\n# qual: file-ignore[MLD]\nx = 1\n");
         let (index, warnings) = collect(&sources.files()[0]);
         // Comment is on line 4, docstring ends on line 3: outside the header.
         assert_eq!(warnings.len(), 1);

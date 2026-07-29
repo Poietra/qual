@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://manim-lint.dev/schemas/static-facts-v0.json",
-  "title": "manim-lint StaticFacts v0",
+  "$id": "https://raw.githubusercontent.com/Poietra/qual/main/schemas/static-facts-v0.json",
+  "title": "Qual StaticFacts v0",
   "description": "Stable external projection of static Manim semantic facts. This is not a serialization of internal analyzer handles or cache entries.",
   "type": "object",
   "additionalProperties": false,
@@ -216,7 +216,7 @@
       "additionalProperties": false,
       "required": ["name", "version", "semantic_build_hash"],
       "properties": {
-        "name": { "const": "manim-lint" },
+        "name": { "const": "qual" },
         "version": { "type": "string", "minLength": 1 },
         "semantic_build_hash": { "$ref": "#/$defs/sha256" }
       }
