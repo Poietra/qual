@@ -12,9 +12,9 @@ pub(crate) use components::{AnalysisComponent, build as build_analysis_component
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -31,6 +31,8 @@ const PROJECT_KEY_MAGIC: &[u8] = b"whole-project";
 const COMPONENT_KEY_MAGIC: &[u8] = b"dependency-component";
 const MAX_PROJECT_ENTRIES: usize = 16;
 const MAX_COMPONENT_ENTRIES: usize = 256;
+const CACHE_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+const CACHE_OPEN_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Whether a check used, populated, or deliberately bypassed the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -610,19 +612,47 @@ fn open_connection(path: &Path) -> Result<Connection, CacheError> {
         path: directory.to_path_buf(),
         source,
     })?;
-    let connection = Connection::open(path)?;
-    connection.busy_timeout(Duration::from_secs(2))?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
+
+    // SQLite's busy handler does not cover every SQLITE_LOCKED result. In
+    // particular, processes that create the same database concurrently can
+    // race while changing the initial journal mode to WAL. Retry the complete
+    // connection setup so a transient first-open race does not disable the
+    // cache for one of the callers.
+    let deadline = Instant::now() + CACHE_BUSY_TIMEOUT;
+    loop {
+        match open_connection_once(path) {
+            Ok(connection) => return Ok(connection),
+            Err(error) if error.is_contention() && Instant::now() < deadline => {
+                std::thread::sleep(CACHE_OPEN_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn open_connection_once(path: &Path) -> Result<Connection, CacheError> {
+    let mut connection = Connection::open(path)?;
+    connection.busy_timeout(CACHE_BUSY_TIMEOUT)?;
+    let journal_mode: String =
+        connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+    }
     connection.pragma_update(None, "synchronous", "NORMAL")?;
-    let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    // Check and migrate the schema only after taking the write reservation.
+    // Without this transaction, concurrent creators can all observe version
+    // zero and one may drop tables that another has just initialized.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version != CACHE_SCHEMA_VERSION {
-        connection.execute_batch(
+        transaction.execute_batch(
             "DROP TABLE IF EXISTS analysis_entries;
              DROP TABLE IF EXISTS component_entries;
              DROP TABLE IF EXISTS cache_metadata;",
         )?;
     }
-    connection.execute_batch(
+    transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS analysis_entries (
              cache_key BLOB PRIMARY KEY NOT NULL,
              diagnostics_json TEXT NOT NULL,
@@ -643,7 +673,8 @@ fn open_connection(path: &Path) -> Result<Connection, CacheError> {
          INSERT OR IGNORE INTO cache_metadata(singleton, access_counter)
          VALUES (1, 0);",
     )?;
-    connection.pragma_update(None, "user_version", CACHE_SCHEMA_VERSION)?;
+    transaction.pragma_update(None, "user_version", CACHE_SCHEMA_VERSION)?;
+    transaction.commit()?;
     Ok(connection)
 }
 
@@ -785,6 +816,14 @@ pub enum CacheError {
 }
 
 impl CacheError {
+    fn is_contention(&self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(error.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        )
+    }
+
     fn is_corruption(&self) -> bool {
         match self {
             Self::Sqlite(rusqlite::Error::SqliteFailure(error, _)) => matches!(
