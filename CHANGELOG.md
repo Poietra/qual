@@ -15,6 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`DESIGN.md` is a historical design record, not the specification.** It was
+  written before the implementation existed and described a Python program:
+  a 78-line `src/manim_lint/*.py` source tree, phases 0–6 of future work, a
+  `class Rule(Protocol)`, and a fix validator built on
+  `ast.parse(feature_version=...)` that the bundled fixed grammar cannot
+  provide. README and `CONTRIBUTING.md` nevertheless called it authoritative
+  and told contributors to read it first, so following it produced wrong work.
+  The sections that could only misdirect — the Python repository layout, the
+  implementation roadmap, and the issue-sized backlog — are removed; the rule
+  catalog, CLI, and test-strategy sections carry explicit superseded notes
+  naming what actually governs; and the drifted claims about supersessions and
+  fix validation are corrected against the code.
+- **The Manim semantic model now lives in `docs/architecture.md`, in English.**
+  It is the part of the design that is still true and load-bearing — the Scene
+  lifecycle, the exact `Scene.play` state machine, the `dt`-parameter updater
+  convention, membership versus visibility, and the renderer-specific point
+  layouts. Legacy section numbers are kept in the headings so existing
+  "DESIGN §3.x" citations still resolve.
+- `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/index.md`,
+  `docs/releasing.md`, and `docs/rules/README.md` now point contributors at
+  documents that match the repository, and `AGENTS.md` no longer directs
+  anyone to "start with Phase 0" or withhold claims about reserved rules — the
+  catalog has been 92 implemented / 0 reserved since 0.2.0.
+- **Recorded decision: authoritative documentation is written in English.**
+  `DESIGN.md` stays Japanese as the one deliberate exception, because a design
+  record is preserved rather than maintained; no contributor needs to read it.
 - README, CLI, GitHub, crates.io, and PyPI-facing copy now lead with Qual as
   the Manim-aware linter: render-time errors, visual bugs, and per-frame
   performance traps before rendering. The README is a concise product entry

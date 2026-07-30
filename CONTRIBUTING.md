@@ -1,17 +1,30 @@
 # Contributing to Qual
 
-Thank you for contributing. Two documents outrank this one:
+Thank you for contributing. Read
+[docs/architecture.md](docs/architecture.md) first: it is the map of the
+pipeline and the fact layers, it carries the Manim semantic model the rules
+rest on, and it ends with the invariants every change must keep.
 
-- [`DESIGN.md`](DESIGN.md) is the **authoritative specification** — product
-  scope, Manim semantic model, rule catalog, CLI/JSON contracts, and the
-  implementation invariants. Read it before changing implementation code.
-- [`AGENTS.md`](AGENTS.md) states the standing repository rules. The most
+The documents that describe the shipped tool are:
+
+- [docs/architecture.md](docs/architecture.md) — implementation layout, fact
+  layers, semantic model, invariants.
+- [`docs/rules/`](docs/rules/README.md) — the rule catalog. One page per rule
+  ID with its fixed meaning, severity, and confidence.
+- [`docs/reference/cli.md`](docs/reference/cli.md),
+  [`docs/guides/configuration.md`](docs/guides/configuration.md), and
+  `schemas/` — the CLI, configuration, and JSON contracts.
+- [`AGENTS.md`](AGENTS.md) — the standing repository rules. The most
   important one: when you change a public diagnostic, configuration, or JSON
-  contract, update `DESIGN.md`, its schema tests, and the rule documentation
-  **in the same change**.
+  contract, update the affected docs and schema tests **in the same change**.
 
-For a guided tour of the pipeline and the fact layers before diving into
-code, read [docs/architecture.md](docs/architecture.md).
+**Authoritative documentation is written in English.** README, `docs/`, and
+this file are the contract; requiring Japanese of a contributor is not.
+[`DESIGN.md`](DESIGN.md) is the one exception, and deliberately so: it is a
+Japanese-language *design record* from before the implementation existed,
+kept for the reasoning behind the semantic model and the invariants. It is
+not a specification, it is not synchronized with the code, and you do not
+need to read it to contribute.
 
 ## Development environment
 
@@ -73,11 +86,13 @@ tests/                    integration tests, golden rule fixtures (tests/fixture
 
 ## How to add a rule
 
-Every rule ID already exists in the DESIGN §7 catalog with a fixed meaning,
-default severity, and minimum confidence. Implementing one:
+The catalog is complete: 92 rules implemented, none reserved. A change here
+is a new rule ID or a fix to an existing one, never the implementation of a
+placeholder.
 
-1. **Read its catalog row** in DESIGN §7.x (and any prose notes below the
-   table). The `RuleMetadata` you write must match that row exactly: `id`,
+1. **Read its catalog page** under [`docs/rules/`](docs/rules/README.md), and
+   its neighbours in `src/rules/registry.rs`. The `RuleMetadata` you write
+   must match the documented meaning exactly: `id`,
    `summary`, `default_severity`, `minimum_confidence`,
    `implementation_phase`, `required_profiles`, `required_capabilities`,
    `supersedes`. Do not invent a new ID and do not change the meaning of an
@@ -94,8 +109,8 @@ default severity, and minimum confidence. Implementing one:
    `portability/`). Rules have no visitors of their own; they query the
    `RuleContext` fact layers (qualified calls, `LifecycleFacts`,
    `CostFacts`, statement/binding facts, profiles).
-   **The canonical traversal rule (DESIGN §5.6): no module-root AST walks
-   in rule code.** If your rule needs a position or binding the facts do
+   **The canonical traversal rule: no module-root AST walks in rule
+   code.** If your rule needs a position or binding the facts do
    not carry yet, promote it into a frontend fact
    (`src/frontend/statements.rs` or `index.rs`) instead of re-walking the
    tree; the only acceptable local traversals are fact-anchored (starting
@@ -180,8 +195,8 @@ Calibration measurements belong in versioned evidence under
 
 ## Corpus labeling
 
-`tests/corpus/manifest-v1.json` is the labeled release corpus (DESIGN
-§11.4), enforced by `tests/corpus_gate.rs` on every `cargo test`. Each
+`tests/corpus/manifest-v1.json` is the labeled release corpus, enforced by
+`tests/corpus_gate.rs` on every `cargo test`. Each
 case pins:
 
 - `path` — the case source under `tests/corpus/`;
@@ -203,8 +218,9 @@ case pins:
    snapshots keep a license note — see
    `tests/corpus/cases/manim_example_scenes/README.md`).
 2. Run the default check over the file **in isolation** and adjudicate
-   every diagnostic by hand against Manim semantics (the DESIGN §3
-   model / the pinned Manim source). A diagnostic you cannot justify as a
+   every diagnostic by hand against Manim semantics (the semantic model in
+   [docs/architecture.md](docs/architecture.md) and the pinned Manim
+   source). A diagnostic you cannot justify as a
    true positive is a bug to fix first, not a label to record.
 3. Add the manifest entry with `label_revision: 1`, the source sha256,
    and the adjudicated expectations; state the provenance.
@@ -229,7 +245,7 @@ Deleting or weakening a `false-positive-guard` case needs the same
 justification as deleting a regression test: these cases are the pinned
 form of real review findings.
 
-## Contributor checklist — the DESIGN §15 invariants
+## Contributor checklist — the implementation invariants
 
 Every change must keep all of these:
 
@@ -257,5 +273,5 @@ The JSON envelope (`schemas/diagnostics-v1.json`), the baseline format
 (`schemas/baseline-v1.json`), SARIF output, rule IDs and their meanings,
 exit codes, and the configuration schema are public contracts. A released
 rule ID never changes meaning. If your change touches any of these, update
-`DESIGN.md`, the schema tests, and the affected rule docs in the same
-change — a PR that changes a contract in code only will not be accepted.
+[`docs/reference/`](docs/reference/cli.md), the schema tests, and the
+affected rule docs in the same change — a PR that changes a contract in code only will not be accepted.

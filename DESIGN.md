@@ -1,9 +1,32 @@
-# Qual 設計書
+# Qual 設計記録（historical design record）
 
-- 状態: 実装済み（v0.2.0、ルール 92/92）
-- 対象: Manim Community 0.20 系（実地参照は 2026-07-17 時点の `0.20.1`、基底コミット `4d25c031`。ローカルフォークの未コミット高速化を含む作業ツリーは `local_0_20_1_4d25c031` オーバーレイ側にのみ反映する）
-- 実装言語: Rust 2024 edition（rustc 1.85 以上）。本書が Python 実装を前提に書かれた箇所は歴史的経緯であり、現行の実装配置は `docs/architecture.md` と `CONTRIBUTING.md` が正典
-- CLI / Cargo package / PyPI distribution 名: `qual` / `qual` / `qual-manim`
+> **この文書は仕様書ではない。実装前に書かれた設計記録である。**
+>
+> 本書は Rust 実装が存在しない時点で、Python 実装を前提に書かれた。内容は
+> コードと同期しておらず、同期させる予定もない。実装を変更する前にこれを
+> 読む必要はなく、本書と実装が食い違った場合は常に実装側が正しい。
+>
+> 現行の正典は次のとおり:
+>
+> | 知りたいこと | 正典 |
+> | --- | --- |
+> | 実装配置・fact layer・不変条件 | [`docs/architecture.md`](docs/architecture.md) |
+> | Manim の意味モデル（旧 §3） | [`docs/architecture.md`](docs/architecture.md) の "The Manim semantic model" |
+> | rule catalog（92 rules） | [`docs/rules/`](docs/rules/README.md) |
+> | CLI・設定・JSON 契約 | [`docs/reference/`](docs/reference/cli.md)、[`schemas/`](schemas/) |
+> | 作業手順・rule の追加方法 | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+>
+> **言語方針**: 正典となる文書は英語で書く（README、`docs/`、`CONTRIBUTING.md`）。
+> 本書が日本語のみであることは、設計記録として保存する以上そのままにする。
+> 英語話者の contributor に本書の読解を要求しない。
+>
+> 残した理由: §3 の意味モデルと §4 の記号的コストモデルの導出、および §15 の
+> 不変条件がなぜその形なのかという判断過程は、今も価値がある。ただし
+> §3 と §15 はすでに `docs/architecture.md` に英語で移してあり、そちらが正典である。
+
+- 執筆時点の想定: Manim Community 0.20 系（実地参照は 2026-07-17 時点の `0.20.1`、基底コミット `4d25c031`）
+- 執筆時点の想定実装言語: Python（実際の実装は Rust 2024 edition / rustc 1.85 以上）
+- 実装状況: 完了。rule catalog は 92 実装 / 0 予約
 
 ## 1. 結論
 
@@ -380,7 +403,13 @@ Python AST の `col_offset` / `end_col_offset` は UTF-8 byte offset である�
 - token / comment lookup
 - newline style と source encoding の保持
 
-fix 適用後は必ず設定した `target-python` で `ast.parse(feature_version=...)` し、失敗したら全 edit を rollback する。標準 `ast` が parse できるのは実行中 interpreter 以下の grammar だけなので、より新しい target を指定した場合は明示的な CLI error にし、同じか新しい Python で linter を実行するよう案内する。
+fix 適用後は必ず再 parse し、失敗したら全 edit を rollback する。
+（実装との差異: これは Python 実装を前提に `ast.parse(feature_version=...)` を
+想定して書かれた。Rust 実装が同梱する grammar は rustpython-parser 0.4 の
+Python 3.12 固定で、`feature_version` に相当する pin は持たない。`target-python`
+は parse の仕方を変えず、parse された構文が target より新しい場合に `MLC000` として
+報告する post-parse gate である。`src/reporting/fixes.rs` と
+`src/frontend/features.rs` を参照。）
 
 ### 5.3 import と名前解決
 
@@ -703,6 +732,10 @@ JSON v1 の外部 envelope:
 
 ## 7. 初期 rule catalog
 
+> **superseded.** 以下は執筆時点で構想した catalog であり、出荷された 92 rules と
+> 一対一では対応しない（例: `MLC001` は本表に無いが実装されている）。ID ごとの
+> 正典は [`docs/rules/`](docs/rules/README.md) と `src/rules/registry.rs` である。
+
 以下は ID を先に予約する。`minimum confidence` は rule が発火できる最低確度であり、default 表示は設定の `min-confidence` に従う。
 
 ### 7.1 lifecycle / correctness
@@ -895,7 +928,10 @@ performance rule は次の emission gate と重複排除を持つ。
 
 `MLP209` の位置は root追加順ではなく、family flatten、`z_index` のstable sort、foregroundを反映したCairo effective display orderから計算する。順序がUnknownなら「83個」のような定量値を出さない。
 
-specificity の優先関係を `RuleMetadata.supersedes` で表す。初期値は `MLP224 > MLP203`、`MLP226 > MLP201`、`MLP220 > MLP204/MLP211`、`MLR112 > generic portability` とする。同じprimary span・同じ根拠なら最も具体的な一件だけを出す。
+specificity の優先関係を `RuleMetadata.supersedes` で表す。（実装との差異: 出荷されている関係は `MLP224 > MLP203`、`MLP226 > MLP201`、
+`MLP220 > MLP204/MLP211`、`MLP208 > MLP207`、`MLR119 > MLR107`、
+`MLD305 > MLR104`。構想した `MLR112 > generic portability` は存在しない。
+正典は `src/rules/registry.rs` の `RuleMetadata::supersedes`。）同じprimary span・同じ根拠なら最も具体的な一件だけを出す。
 
 `MLP214` と `MLP225`、`cairo_fork_workers` / `cairo_static_layers` のfast-path解釈は local fork overlay専用であり、upstream `v0_20` では無効にする。`MLP217` も knowledge profile が同じprocess-global SVG cache semanticsを宣言する場合だけ有効化する。存在しないAPIや設定を提案しない。
 
@@ -922,6 +958,12 @@ dot.add_updater(lambda m, dt: m.shift(dt * RIGHT))  # 時間基準
 `MLD302` は literal seed、local `random.Random(seed)`、local NumPy Generator のseedを追う。seed済みgeneratorをglobal randomと同じ非決定扱いにしない。`MLD304` は `--profile all` 等で複数rendererを実際に対象とした時だけ有効で、Cairo一件だけを明示したprojectにrenderer guardを要求しない。
 
 ## 8. CLI、設定、抑制
+
+> **superseded.** CLI flag、設定 key、JSON/SARIF 契約の正典は
+> [`docs/reference/cli.md`](docs/reference/cli.md)、
+> [`docs/guides/configuration.md`](docs/guides/configuration.md)、`schemas/`、
+> および `qual --help` である。本節の一覧には出荷済み flag の欠落がある
+> （`--analysis-summary` など）。
 
 ### 8.1 commands
 
@@ -1118,86 +1160,22 @@ componentはproject-local summary dependencyの推移閉包を含むため、こ
 
 lookup 時は source key に加えてentryごとのdependency manifestを再計算し、asset の作成・削除・内容変更・case-only path の変化でも必ず miss にする。source bytes は key 作成と解析で同じ snapshot を使う。SQLite WAL を使い、同じ project への並行 cold writer を許容する。entry は lookup / store ごとの単調な access sequenceで、recent 16 whole-project snapshotsとrecent 256 component snapshotsに制限し、store後に古いものを削除する。DBまたは保存JSONのparse破損時はstderrに警告してDBを削除・再構築し、component外の`FileId`を含む構造不正entryはそのentryだけを削除・再構築する。その他のcache I/O failureはその実行だけcacheを無効にし、必要なcomponentまたはfull analysisを続ける。cacheは正しさに必要な状態ではなく、いつでも捨てられる派生物とする。
 
-## 10. repository layout
+## 10. repository layout（削除済み）
 
-```text
-pyproject.toml
-README.md
-DESIGN.md
-src/qual/
-  __init__.py
-  __main__.py
-  cli.py
-  application.py
-  source.py
-
-  config/
-    model.py
-    loader.py
-
-  frontend/
-    parser.py
-    imports.py
-    names.py
-    index.py
-    cfg.py
-
-  knowledge/
-    model.py
-    profiles/
-      v0_20.json
-
-  semantic/
-    values.py
-    heap.py
-    state.py
-    events.py
-    summaries.py
-    interpreter.py
-
-  cost/
-    model.py
-    contexts.py
-    estimator.py
-
-  rules/
-    base.py
-    registry.py
-    lifecycle.py
-    rendering.py
-    performance.py
-    portability.py
-
-  reporting/
-    suppressions.py
-    text.py
-    json.py
-    sarif.py
-    fixes.py
-    baseline.py
-
-  cache.py
-
-docs/rules/
-docs/rfcs/
-  0001-static-facts-v0.md
-schemas/
-  diagnostics-v1.json
-  baseline-v1.json
-  static-facts-v0.json
-tools/
-  sync_manim_knowledge.py
-tests/
-  unit/
-  integration/
-  fixtures/
-    rules/
-    resolver/
-    lifecycle/
-  corpus/
-```
+この節は 78 行の Python source tree（`src/qual/*.py`、`tools/`、`tests/unit/`）
+だった。実装は Rust であり、記載されたパスは一つも存在しない。誤誘導しかしない
+ため本文ごと削除した。実際の配置は
+[`docs/architecture.md`](docs/architecture.md) が正典である。
 
 ## 11. テスト戦略
+
+> **superseded.** fixture の実際の配置は `tests/fixtures/rules/<ID>/` と
+> `tests/rules_*.rs` の golden test であり、本節が書く `branches.py` /
+> `expected.json` という名前ではない。§11.4 の release gate（発火候補 200 件の
+> 人手 label、precision 98%、95% Wilson 下限 95%）はどのコードも計算していない。
+> 実際に強制されているのは `tests/corpus_gate.rs` の corpus 件数下限と、
+> `CONTRIBUTING.md` が定める labeling protocol である。正典は
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) と `tests/`。
 
 ### 11.1 rule fixtures
 
@@ -1249,116 +1227,12 @@ OpenGL context は test node ごとに fresh process を原則とする。対象
 - peak RSS: 300 MiB 未満
 - diagnostic order と JSON は同じ入力で byte-stable
 
-## 12. 実装 roadmap
+## 12–13. 実装 roadmap と初期 backlog（削除済み）
 
-### Phase 0: 動く骨格
-
-- packaging と console script
-- `SourceManager`
-- config model / loader
-- `Diagnostic` / rule registry
-- text / JSON reporter
-- syntax error diagnostic
-
-受入条件: `qual check .` が複数ファイルを解析し、安定順で結果を出す。
-
-### Phase 1: 名前解決と direct-call rules
-
-- Manim 0.20 knowledge profile
-- aliases と `from manim import *`
-- Scene subclass 発見
-- qualified call facts
-- direct-call / literal rules: `MLC101`〜`MLC106`, `MLC109`, `MLC122`, `MLC126`, `MLC127`, `MLR101`, `MLR103`〜`MLR106`, `MLR115`, `MLR117`, `MLR124`, `MLR126`
-
-受入条件: import style を変えても同じ診断になり、対象コードを一度も import しない。
-
-### Phase 2: lifecycle abstract interpreter
-
-- CFG
-- allocation-site identity / alias
-- Scene membership / order
-- parent / submobject
-- updater state
-- animation begin / introducer / remover / replacement effect
-- remaining lifecycle rules `MLC107`〜`MLC129` と state-dependent `MLR102`, `MLR113`, `MLR114`, `MLR116`, `MLR125`, `MLR127`
-
-受入条件: branch、helper、fluent chain、同時 Animation を含む fixture で expected state と一致する。
-
-### Phase 3: cost model
-
-- hot-context propagation
-- run_time / FPS の constant evaluation
-- family / points / curves / pixels の symbolic dimensions
-- 先に高確度の `MLP201`, `MLP204`, `MLP205`, `MLP217`, `MLP218`, `MLP220`, `MLP226`, `MLP227`
-- cardinality 推定が安定してから `MLP202`, `MLP203`, `MLP207`, `MLP208`, `MLP211`, `MLP216`
-- `qual cost` の play / frame / family / pixel breakdown
-
-受入条件: diagnostic に frequency の根拠が表示され、Unknown のとき偽の数値を出さない。
-
-### Phase 4: renderer / visual compatibility
-
-- Cairo / OpenGL profile
-- 3D / fixed-in-frame / camera semantics
-- asset / font portability
-- conditional diagnostics
-- nightly differential render CI
-- renderer-dependent `MLR107`〜`MLR112`, `MLR118`〜`MLR123` と `MLD301`〜`MLD307`
-
-### Phase 5: 運用機能
-
-- SARIF
-- baseline
-- SQLite cache
-- safe autofix
-- 必要になった時点だけ LibCST fixer
-
-### Phase 6: static semantic toolchain
-
-P0:
-
-1. `rfc(static-facts)`: snapshot内ID、source anchor、Unknown taxonomy、責務境界を固定する。
-2. `feat(static-facts)`: rule selection非依存のversioned projectionと決定的JSON producerを公開する。
-3. `feat(dependency-graph)`: cache partitionから独立したsemantic forward/reverse edgeとreason pathを公開する。
-4. `feat(impact)`: before/after snapshotを比較し、削除・renameを含む保守的なScene/play/object候補を返す。
-
-P1:
-
-5. `feat(source-bridge)`: literal引数、既存`.shift(...)`、明確なmethod chain、一意bindingに限定してhash-guarded patch候補を生成する。
-6. `feat(rematch)`: patch後に再parse・再解析し、`Match | Ambiguous | Missing`とcoverage低下を返す。
-
-受入条件: 同一helperの複数call context、loop allocationのnon-singleton、`Transform` / `ReplacementTransform`の区別、理由付きdynamic-call Unknown、shared helperの全caller Sceneへの波及、before graphからの削除/rename追跡、incremental/full一致、worker数間byte一致、Shift-JIS/日本語anchor、rule selection非依存、Manim/user code非実行をfixtureで固定する。
-
-catalog entry はすべて `implementation_phase` をmetadataに持つ。まだそのphaseへ到達していないIDは `reserved/deferred` として `qual rules` に表示しても、checkでは登録しない。未実装ruleを「検査済み」と見せない。
-
-## 13. 最初の issue-sized backlog
-
-別の Codex は次の順で実装するとよい。一つの巨大 commit に抽象解釈全体を入れない。
-
-1. `pyproject.toml`、package、`SourceManager`、diagnostic schema、`check` command。
-2. Manim symbol profile の schema と `v0_20` の最小 subset。
-3. import alias / star import resolver と Scene discovery。
-4. `MLC101` empty play、`MLC102` invalid play arg、`MLC103` bound-method play。
-5. literal evaluator と `MLC104` duration、`MLC106` frozen stop condition。
-6. callback signature model と `MLC105`。
-7. `tokenize` source literal model と `MLR103` TeX escape。
-8. asset resolver と `MLR104`。
-9. event IR と直線的な `construct` interpreter。
-10. Scene membership / introducer / remover tests。
-11. CFG branch join と helper summaries。
-12. animation write-set と `MLC108`。
-13. frequency context と最初の `MLP201`。
-14. symbolic frame count / family size と diagnostic evidence。
-15. Cairo moving suffix estimator。
-16. parent/Scene membership を分離し、`MLC115` の再出現 fixture。
-17. renderer point-layout profile と `MLR112`。
-
-最初の三つの commit theme は次に固定する。
-
-```text
-1. CLI + source/diagnostic contracts
-2. Manim knowledge + qualified name resolution
-3. first certain/high-confidence rules
-```
+この二節は実装前に書かれた phase 0–6 の計画と issue-sized backlog だった。
+catalog は 92 rules / 0 reserved で完了しており、計画としての役割を終えたため
+本文ごと削除した。現在の作業手順は [`CONTRIBUTING.md`](CONTRIBUTING.md) が正典で、
+進行中の作業は GitHub issues が唯一の一覧である。
 
 ## 14. 参照すべき Manim source map
 

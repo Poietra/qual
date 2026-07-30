@@ -78,8 +78,9 @@ selected render profile prove it.
 - **Performance work:** use the [cost and coverage reports](guides/cost-and-coverage.md).
 - **Tool builders:** use the versioned [machine APIs](reference/machine-api.md)
   and [JSON schemas](reference/schemas.md).
-- **Contributors:** read the [architecture](architecture.md) and authoritative
-  [design specification](https://github.com/Poietra/qual/blob/main/DESIGN.md).
+- **Contributors:** read the [architecture](architecture.md) — the pipeline,
+  the Manim semantic model, and the invariants — then
+  [CONTRIBUTING.md](https://github.com/Poietra/qual/blob/main/CONTRIBUTING.md).
 
 !!! info "Current support"
 

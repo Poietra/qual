@@ -1,8 +1,9 @@
 # Rule catalog
 
 qual defines 92 rule IDs in four families, and all 92 are
-**implemented**. The authoritative catalog definition is
-[`DESIGN.md`](https://github.com/Poietra/qual/blob/main/DESIGN.md) section 7.
+**implemented**. This directory, together with the `RuleMetadata` in
+`src/rules/registry.rs`, is the catalog: one page per rule ID with its fixed
+meaning, default severity, and minimum confidence.
 
 One implemented rule is opt-in: `MLP225` has `default_enabled: false` and
 the capabilities `cost-report` + `local-fork-overlay` — its home is the
