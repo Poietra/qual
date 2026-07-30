@@ -2,7 +2,7 @@
 
 This document is the contributor's map of qual: how a Python source
 tree becomes diagnostics, which fact layer owns what, and where each piece
-lives. [`DESIGN.md`](../DESIGN.md) is the authoritative specification (the
+lives. [`DESIGN.md`](https://github.com/Poietra/qual/blob/main/DESIGN.md) is the authoritative specification (the
 section numbers below refer to it); this page is the guided tour.
 
 ## The pipeline
@@ -90,7 +90,7 @@ semantics — introducers/removers, auto-add, constructor signatures,
 `returns_self`, renderer notes, fork capabilities. Nothing in the
 analyzer hardcodes "what `FadeIn` does"; if the profile does not say it,
 the analyzer does not know it (absent facts mean *not curated*, never
-*false*). See [the profiles README](../src/knowledge/profiles/README.md)
+*false*). See [the profiles README](https://github.com/Poietra/qual/blob/main/src/knowledge/profiles/README.md)
 for provenance:
 
 - `upstream_0_20` describes the **clean** upstream base commit
@@ -232,7 +232,7 @@ reason-carrying unknown values; it includes Scenes, reachable objects,
 plays/animations, updaters, play-boundary membership/render order, renderer
 risks, and coverage frontiers. See
 [`docs/rfcs/0001-static-facts-v0.md`](rfcs/0001-static-facts-v0.md) and
-[`schemas/static-facts-v0.json`](../schemas/static-facts-v0.json).
+[`schemas/static-facts-v0.json`](https://github.com/Poietra/qual/blob/main/schemas/static-facts-v0.json).
 
 `qual static-facts [PATH...]` reads each source into one immutable raw
 byte snapshot, runs the frontend and lifecycle fact layers independently of
@@ -323,6 +323,6 @@ target could not be proven frame-varying, the rule would stay silent.
 12. Diagnostic order and serialized output are deterministic —
     byte-stable for the same input.
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the workflow built on top
+See [CONTRIBUTING.md](https://github.com/Poietra/qual/blob/main/CONTRIBUTING.md) for the workflow built on top
 of these: how to add a rule, the corpus labeling protocol, and the
 knowledge-profile review rules.

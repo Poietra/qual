@@ -1,4 +1,5 @@
-//! Static analysis for Manim source projects.
+//! Manim-aware static analysis for render-time errors, visual bugs, and
+//! per-frame performance traps.
 //!
 //! The analyzer never imports Manim and never executes analyzed user code.
 

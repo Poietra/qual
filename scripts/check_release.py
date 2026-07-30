@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "qual"
 PYPI_PROJECT_NAME = "qual-manim"
 REPOSITORY_URL = "https://github.com/Poietra/qual"
+DOCUMENTATION_URL = "https://poietra.github.io/qual/"
 SEMVER = re.compile(
     r"^(?P<major>0|[1-9]\d*)\."
     r"(?P<minor>0|[1-9]\d*)\."
@@ -75,11 +76,11 @@ def main() -> None:
         fail(f"Cargo package name must remain {PACKAGE_NAME}")
     if package.get("default-run") != PACKAGE_NAME:
         fail(f"default Cargo binary must remain {PACKAGE_NAME}")
-    for field in ("repository", "homepage"):
-        if package.get(field) != REPOSITORY_URL:
-            fail(f"Cargo {field} must remain {REPOSITORY_URL}")
-    if package.get("documentation") != f"{REPOSITORY_URL}#readme":
-        fail("Cargo documentation URL must point to the Qual README")
+    if package.get("repository") != REPOSITORY_URL:
+        fail(f"Cargo repository must remain {REPOSITORY_URL}")
+    for field in ("homepage", "documentation"):
+        if package.get(field) != DOCUMENTATION_URL:
+            fail(f"Cargo {field} must point to {DOCUMENTATION_URL}")
     bins = cargo.get("bin")
     if not isinstance(bins, list) or not any(
         isinstance(binary, dict)
@@ -137,8 +138,12 @@ def main() -> None:
     urls = project.get("urls")
     if not isinstance(urls, dict):
         fail("pyproject.toml has no [project.urls] table")
-    if urls.get("Homepage") != REPOSITORY_URL or urls.get("Repository") != REPOSITORY_URL:
-        fail("PyPI homepage and repository must point to the Qual repository")
+    if urls.get("Homepage") != DOCUMENTATION_URL:
+        fail(f"PyPI homepage must point to {DOCUMENTATION_URL}")
+    if urls.get("Documentation") != DOCUMENTATION_URL:
+        fail(f"PyPI documentation must point to {DOCUMENTATION_URL}")
+    if urls.get("Repository") != REPOSITORY_URL:
+        fail("PyPI repository must point to the Qual repository")
     if urls.get("Changelog") != f"{REPOSITORY_URL}/blob/main/CHANGELOG.md":
         fail("PyPI changelog URL must point to the Qual changelog")
     if project.get("dynamic") != ["version"] or "version" in project:

@@ -1,0 +1,27 @@
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  text-wrap: balance;
+}
+
+.md-typeset p,
+.md-typeset li {
+  text-wrap: pretty;
+}
+
+.md-typeset .qual-hero {
+  margin: 1.5rem 0 2rem;
+  max-width: 48rem;
+}
+
+.md-typeset .qual-hero h1 {
+  margin-bottom: 0.5rem;
+}
+
+.md-typeset .qual-hero p {
+  font-size: 1.1rem;
+}
+
+.md-typeset .grid.cards > ul > li {
+  border-radius: 0.25rem;
+}

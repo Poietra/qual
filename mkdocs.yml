@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+site_name: Qual
+site_description: The Manim-aware linter for render-time errors, visual bugs, and per-frame performance traps.
+site_url: https://poietra.github.io/qual/
+repo_url: https://github.com/Poietra/qual
+repo_name: Poietra/qual
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/motion-play
+    repo: fontawesome/brands/github
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Installation and first check: getting-started.md
+      - Configuration: guides/configuration.md
+      - CI, baselines, and fixes: guides/adoption.md
+      - Cost and coverage: guides/cost-and-coverage.md
+  - Rules:
+      - Rule catalog: rules/README.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Machine APIs: reference/machine-api.md
+      - JSON schemas: reference/schemas.md
+      - StaticFacts v0: rfcs/0001-static-facts-v0.md
+      - Dependency graph v0: rfcs/0002-semantic-dependency-graph-v0.md
+      - ChangeImpact v0: rfcs/0003-change-impact-v0.md
+      - SourceBridge v0: rfcs/0004-source-bridge-v0.md
+  - Internals:
+      - Architecture: architecture.md
+      - Performance evidence: research/perf-evidence.md
+      - Corpus evidence: research/corpus-evidence.md
+      - Releasing: releasing.md
+      - Design specification: https://github.com/Poietra/qual/blob/main/DESIGN.md
+
+copyright: Copyright &copy; 2026 Poietra · MIT License

@@ -99,7 +99,7 @@ impl std::str::FromStr for ColorMode {
 #[command(
     name = "qual",
     version,
-    about = "Static lifecycle and performance analysis for Manim scenes"
+    about = "A Manim-aware linter for render-time errors, visual bugs, and per-frame performance traps"
 )]
 pub struct Cli {
     /// Subcommand to run.

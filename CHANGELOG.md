@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A searchable Material for MkDocs site that brings installation, configuration,
+  adoption, cost/coverage, all 92 rule pages, CLI reference, JSON contracts,
+  RFCs, architecture, and research evidence into one GitHub Pages deployment.
+
+### Changed
+
+- README, CLI, GitHub, crates.io, and PyPI-facing copy now lead with Qual as
+  the Manim-aware linter: render-time errors, visual bugs, and per-frame
+  performance traps before rendering. The README is a concise product entry
+  point, while detailed operation and integration material lives in the docs.
+
 ## [0.3.0] - 2026-07-30
 
 ### Added
