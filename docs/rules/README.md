@@ -2,7 +2,7 @@
 
 qual defines 92 rule IDs in four families, and all 92 are
 **implemented**. The authoritative catalog definition is
-[`DESIGN.md`](../../DESIGN.md) section 7.
+[`DESIGN.md`](https://github.com/Poietra/qual/blob/main/DESIGN.md) section 7.
 
 One implemented rule is opt-in: `MLP225` has `default_enabled: false` and
 the capabilities `cost-report` + `local-fork-overlay` — its home is the

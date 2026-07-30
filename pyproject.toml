@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "qual-manim"
 dynamic = ["version"]
-description = "Static lifecycle and performance analysis for Manim scenes"
+description = "A Manim-aware linter for render-time errors, visual bugs, and per-frame performance traps"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -28,7 +28,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Poietra/qual"
+Homepage = "https://poietra.github.io/qual/"
+Documentation = "https://poietra.github.io/qual/"
 Repository = "https://github.com/Poietra/qual"
 Changelog = "https://github.com/Poietra/qual/blob/main/CHANGELOG.md"
 
