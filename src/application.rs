@@ -621,6 +621,12 @@ pub fn run_check(args: &CheckArgs) -> Result<Execution, ApplicationError> {
     if let Some(coverage) = &report.coverage {
         stderr.push_str(&coverage::render_text(coverage));
     }
+    // Configuration qual read but did not honor. Reported here rather than
+    // dropped, so a run never presents numbers derived from a render
+    // profile the project did not ask for (DESIGN §8.2 honesty).
+    for warning in &report.config.manim_cfg_warnings {
+        let _ = writeln!(stderr, "qual: warning: {warning}");
+    }
     for warning in &report.cache_warnings {
         let _ = writeln!(stderr, "qual: warning: {warning}");
     }
@@ -2565,6 +2571,16 @@ pub fn run_config_at(start: &Path) -> Result<Execution, ApplicationError> {
         "resolution": "enforced: pixel width and height must be nonzero in \
                        every analyzed profile, from any source (CLI, \
                        profile, manim.cfg)",
+        "respect-manim-cfg": "enforced: the [CLI] section supplies \
+                              pixel_width, pixel_height, frame_rate, \
+                              renderer, and quality; quality names (and \
+                              their -q flags) map to the upstream QUALITIES \
+                              table and override the individual keys in the \
+                              same file, matching Manim's digest_parser, \
+                              which applies quality last; a [CLI] key that \
+                              affects the render profile but is not \
+                              interpreted is listed in manim_cfg_warnings \
+                              rather than dropped",
         "knowledge-profile": format!(
             "enforced: profile {name} is loaded; an unknown \
              knowledge-profile is a configuration error",

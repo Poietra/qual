@@ -2652,6 +2652,7 @@ mod tests {
             fail_level: crate::diagnostic::Severity::Warning,
             knowledge_profile: None,
             respect_manim_cfg: true,
+            manim_cfg_warnings: Vec::new(),
             exclude: Vec::new(),
             per_file_ignores: BTreeMap::new(),
             source_roots: vec![".".to_owned()],

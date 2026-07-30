@@ -401,6 +401,158 @@ pub fn parse_pyproject(text: &str) -> Result<Option<PyprojectSection>, String> {
     Ok(file.tool.and_then(|tool| tool.qual))
 }
 
+/// A named Manim quality preset from `manim.constants.QUALITIES`.
+///
+/// Mirrors the upstream table verbatim; see [`ManimQuality::from_cfg_value`]
+/// for how a `manim.cfg` string maps onto it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManimQuality {
+    /// `fourk_quality` — 3840x2160 @ 60.
+    FourK,
+    /// `production_quality` — 2560x1440 @ 60.
+    Production,
+    /// `high_quality` — 1920x1080 @ 60.
+    High,
+    /// `medium_quality` — 1280x720 @ 30.
+    Medium,
+    /// `low_quality` — 854x480 @ 15.
+    Low,
+    /// `example_quality` — 854x480 @ 30. Has no CLI flag upstream.
+    Example,
+}
+
+/// One row of the upstream `QUALITIES` table.
+struct QualityRow {
+    quality: ManimQuality,
+    /// Preset name, e.g. `fourk_quality`.
+    name: &'static str,
+    /// Single-letter `-q` flag; `None` upstream for `example_quality`.
+    flag: Option<&'static str>,
+    pixel_width: u32,
+    pixel_height: u32,
+    frame_rate: f64,
+}
+
+/// The upstream `QUALITIES` table.
+///
+/// Transcribed from Manim Community `manim/constants.py` `QUALITIES`.
+/// `example_quality` carries `"flag": None` upstream and is therefore
+/// reachable only by its full name.
+const MANIM_QUALITIES: &[QualityRow] = &[
+    QualityRow {
+        quality: ManimQuality::FourK,
+        name: "fourk_quality",
+        flag: Some("k"),
+        pixel_width: 3840,
+        pixel_height: 2160,
+        frame_rate: 60.0,
+    },
+    QualityRow {
+        quality: ManimQuality::Production,
+        name: "production_quality",
+        flag: Some("p"),
+        pixel_width: 2560,
+        pixel_height: 1440,
+        frame_rate: 60.0,
+    },
+    QualityRow {
+        quality: ManimQuality::High,
+        name: "high_quality",
+        flag: Some("h"),
+        pixel_width: 1920,
+        pixel_height: 1080,
+        frame_rate: 60.0,
+    },
+    QualityRow {
+        quality: ManimQuality::Medium,
+        name: "medium_quality",
+        flag: Some("m"),
+        pixel_width: 1280,
+        pixel_height: 720,
+        frame_rate: 30.0,
+    },
+    QualityRow {
+        quality: ManimQuality::Low,
+        name: "low_quality",
+        flag: Some("l"),
+        pixel_width: 854,
+        pixel_height: 480,
+        frame_rate: 15.0,
+    },
+    QualityRow {
+        quality: ManimQuality::Example,
+        name: "example_quality",
+        flag: None,
+        pixel_width: 854,
+        pixel_height: 480,
+        frame_rate: 30.0,
+    },
+];
+
+impl ManimQuality {
+    /// Resolves a `manim.cfg` `quality` value.
+    ///
+    /// Upstream `_determine_quality` (`manim/_config/utils.py`) accepts the
+    /// single-letter flag first and otherwise passes the string through to
+    /// the `quality` setter, which raises `KeyError` unless it names a
+    /// preset. Both spellings are accepted here; anything else is an error,
+    /// because Manim would refuse to run at all.
+    fn from_cfg_value(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        if let Some(row) = MANIM_QUALITIES.iter().find(|row| row.flag == Some(trimmed)) {
+            return Ok(row.quality);
+        }
+        MANIM_QUALITIES
+            .iter()
+            .find(|row| row.name == trimmed)
+            .map(|row| row.quality)
+            .ok_or_else(|| {
+                let names: Vec<&str> = MANIM_QUALITIES.iter().map(|row| row.name).collect();
+                format!(
+                    "invalid quality value: {trimmed} (expected one of {})",
+                    names.join(", ")
+                )
+            })
+    }
+
+    fn row(self) -> &'static QualityRow {
+        MANIM_QUALITIES
+            .iter()
+            .find(|row| row.quality == self)
+            .expect("every ManimQuality variant is present in MANIM_QUALITIES")
+    }
+
+    /// The preset's canonical Manim name.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        self.row().name
+    }
+
+    /// Pixel width, height, and frame rate this preset forces.
+    #[must_use]
+    pub fn profile(self) -> (u32, u32, f64) {
+        let row = self.row();
+        (row.pixel_width, row.pixel_height, row.frame_rate)
+    }
+}
+
+/// `[CLI]` keys that change the analyzed render profile or the frame count
+/// it is multiplied by, and that qual does not interpret.
+///
+/// Present so a project that sets one is told its configuration was
+/// dropped rather than being handed a confident number derived from a
+/// profile qual never saw (DESIGN §8.2 honesty).
+const UNINTERPRETED_PROFILE_KEYS: &[&str] = &[
+    "resolution",
+    "frame_size",
+    "from_animation_number",
+    "upto_animation_number",
+    "save_last_frame",
+    "dry_run",
+    "transparent",
+    "format",
+];
+
 /// Values qual reads from `manim.cfg` (resolution, fps, renderer).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ManimCfgValues {
@@ -412,17 +564,33 @@ pub struct ManimCfgValues {
     pub frame_rate: Option<f64>,
     /// `renderer` from the `[CLI]` section.
     pub renderer: Option<Renderer>,
+    /// `quality` from the `[CLI]` section.
+    ///
+    /// Overrides the three keys above, matching Manim: `digest_parser`
+    /// applies `quality` *after* the int and float keys, and the `quality`
+    /// setter assigns `frame_size` and `frame_rate` unconditionally.
+    pub quality: Option<ManimQuality>,
+    /// Human-readable notes about `[CLI]` content qual did not honor.
+    pub warnings: Vec<String>,
 }
 
 impl ManimCfgValues {
     fn fragment(&self) -> ConfigFragment {
-        ConfigFragment {
+        let mut fragment = ConfigFragment {
             pixel_width: self.pixel_width,
             pixel_height: self.pixel_height,
             frame_rate: self.frame_rate,
             renderer: self.renderer,
             ..ConfigFragment::default()
+        };
+        // Manim applies `quality` last and lets it win; so do we.
+        if let Some(quality) = self.quality {
+            let (width, height, frame_rate) = quality.profile();
+            fragment.pixel_width = Some(width);
+            fragment.pixel_height = Some(height);
+            fragment.frame_rate = Some(frame_rate);
         }
+        fragment
     }
 }
 
@@ -482,7 +650,37 @@ pub fn parse_manim_cfg(text: &str) -> Result<ManimCfgValues, String> {
             "renderer" => {
                 values.renderer = Some(value.parse::<Renderer>()?);
             }
-            _ => {}
+            "quality" => {
+                values.quality = Some(ManimQuality::from_cfg_value(&value)?);
+            }
+            other => {
+                if UNINTERPRETED_PROFILE_KEYS.contains(&other) {
+                    values.warnings.push(format!(
+                        "manim.cfg [CLI] {other} affects the render profile but \
+                         qual does not interpret it; the analyzed profile ignores it"
+                    ));
+                }
+            }
+        }
+    }
+    // Manim resolves `quality` after the explicit keys and overwrites them.
+    // Say so rather than silently discarding what the file asked for.
+    if let Some(quality) = values.quality {
+        let overridden: Vec<&str> = [
+            values.pixel_width.map(|_| "pixel_width"),
+            values.pixel_height.map(|_| "pixel_height"),
+            values.frame_rate.map(|_| "frame_rate"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !overridden.is_empty() {
+            values.warnings.push(format!(
+                "manim.cfg [CLI] quality = {name} overrides {keys} in the same \
+                 file, matching Manim (digest_parser applies quality last)",
+                name = quality.name(),
+                keys = overridden.join(", "),
+            ));
         }
     }
     Ok(values)
@@ -533,10 +731,11 @@ pub fn resolve(input: &ResolutionInput) -> Result<ResolvedConfig, ConfigError> {
     let respect_manim_cfg = ConfigFragment::merge(&[&input.cli, &base, &defaults])
         .respect_manim_cfg
         .unwrap_or(true);
-    let manim_cfg = if respect_manim_cfg {
-        input.manim_cfg.clone().unwrap_or_default().fragment()
+    let (manim_cfg, manim_cfg_warnings) = if respect_manim_cfg {
+        let values = input.manim_cfg.clone().unwrap_or_default();
+        (values.fragment(), values.warnings)
     } else {
-        ConfigFragment::default()
+        (ConfigFragment::default(), Vec::new())
     };
 
     validate_profiles(&pyproject.profile)?;
@@ -597,6 +796,7 @@ pub fn resolve(input: &ResolutionInput) -> Result<ResolvedConfig, ConfigError> {
         fail_level: lint.fail_level.unwrap_or(Severity::Warning),
         knowledge_profile: lint.knowledge_profile,
         respect_manim_cfg,
+        manim_cfg_warnings,
         exclude: lint.exclude.unwrap_or_default(),
         per_file_ignores,
         source_roots: lint.source_roots.unwrap_or_default(),
@@ -803,6 +1003,7 @@ renderer = "opengl"
             pixel_height: Some(480),
             frame_rate: Some(15.0),
             renderer: None,
+            ..ManimCfgValues::default()
         });
         // "preview" defines renderer only; manim.cfg provides resolution/fps.
         input.profile_selection = ProfileSelection::Named("preview".to_owned());
@@ -923,6 +1124,165 @@ name = "a"
     #[test]
     fn invalid_manim_cfg_number_is_an_error() {
         assert!(parse_manim_cfg("[CLI]\npixel_width = wide\n").is_err());
+    }
+
+    // --- manim.cfg `quality` (#8) ---------------------------------------
+    //
+    // `quality` is the common way to set resolution and frame rate; before
+    // this it fell through the catch-all arm and every cost estimate was
+    // computed against 1920x1080/60 while `respect_manim_cfg: true` was
+    // reported. The table and the precedence below are transcribed from
+    // Manim Community, not invented:
+    //
+    //   * `manim/constants.py` `QUALITIES` — the five named presets plus
+    //     `example_quality`, each with a `flag`, `pixel_width`,
+    //     `pixel_height`, and `frame_rate`.
+    //   * `manim/_config/utils.py` `ManimConfig.digest_parser` — reads the
+    //     int keys (`pixel_width`, `pixel_height`) and float keys
+    //     (`frame_rate`) first, then near the end of the method does
+    //     `quality = parser["CLI"].get("quality", ...)` /
+    //     `if quality: self.quality = _determine_quality(quality)`.
+    //   * `manim/_config/utils.py` `ManimConfig.quality` setter — assigns
+    //     `self.frame_size` and `self.frame_rate` from the preset
+    //     unconditionally.
+    //
+    // Applying `quality` last and assigning unconditionally is what makes
+    // `quality` win over explicit keys in the same file.
+
+    #[test]
+    fn manim_cfg_quality_names_match_upstream_qualities_table() {
+        let expected = [
+            ("fourk_quality", 3840, 2160, 60.0),
+            ("production_quality", 2560, 1440, 60.0),
+            ("high_quality", 1920, 1080, 60.0),
+            ("medium_quality", 1280, 720, 30.0),
+            ("low_quality", 854, 480, 15.0),
+            ("example_quality", 854, 480, 30.0),
+        ];
+        for (name, width, height, frame_rate) in expected {
+            let values = parse_manim_cfg(&format!("[CLI]\nquality = {name}\n")).expect("parses");
+            let quality = values.quality.expect("quality recognized");
+            assert_eq!(quality.name(), name);
+            assert_eq!(quality.profile(), (width, height, frame_rate), "{name}");
+        }
+    }
+
+    #[test]
+    fn manim_cfg_quality_accepts_the_single_letter_flags() {
+        // `_determine_quality` matches `values["flag"]` before falling
+        // through to the preset name.
+        for (flag, name) in [
+            ("k", "fourk_quality"),
+            ("p", "production_quality"),
+            ("h", "high_quality"),
+            ("m", "medium_quality"),
+            ("l", "low_quality"),
+        ] {
+            let values = parse_manim_cfg(&format!("[CLI]\nquality = {flag}\n")).expect("parses");
+            assert_eq!(values.quality.expect("recognized").name(), name);
+        }
+        // `example_quality` carries `"flag": None` upstream, so no flag
+        // resolves to it and a literal "None" is not a quality.
+        assert!(parse_manim_cfg("[CLI]\nquality = None\n").is_err());
+    }
+
+    #[test]
+    fn manim_cfg_quality_only_produces_matching_resolution_and_frame_rate() {
+        // Acceptance: a manim.cfg setting only `quality`.
+        let mut input = ResolutionInput {
+            project_root: PathBuf::from("/project"),
+            ..ResolutionInput::default()
+        };
+        input.manim_cfg =
+            Some(parse_manim_cfg("[CLI]\nquality = fourk_quality\n").expect("parses"));
+        let config = resolve(&input).expect("resolves");
+        let profile = &config.active_profiles[0];
+        assert_eq!(profile.pixel_width, 3840);
+        assert_eq!(profile.pixel_height, 2160);
+        assert!((profile.frame_rate - 60.0).abs() < f64::EPSILON);
+        assert!(config.respect_manim_cfg);
+        assert!(
+            config.manim_cfg_warnings.is_empty(),
+            "an interpreted quality is not a warning: {:?}",
+            config.manim_cfg_warnings
+        );
+    }
+
+    #[test]
+    fn manim_cfg_quality_beats_explicit_keys_in_the_same_file_like_manim() {
+        // digest_parser applies quality after the int/float keys and the
+        // setter assigns unconditionally, so quality wins.
+        let values = parse_manim_cfg(
+            "[CLI]\npixel_width = 1280\npixel_height = 720\nframe_rate = 24\nquality = low_quality\n",
+        )
+        .expect("parses");
+        let mut input = ResolutionInput {
+            project_root: PathBuf::from("/project"),
+            ..ResolutionInput::default()
+        };
+        input.manim_cfg = Some(values);
+        let config = resolve(&input).expect("resolves");
+        let profile = &config.active_profiles[0];
+        assert_eq!((profile.pixel_width, profile.pixel_height), (854, 480));
+        assert!((profile.frame_rate - 15.0).abs() < f64::EPSILON);
+        assert!(
+            config
+                .manim_cfg_warnings
+                .iter()
+                .any(|note| note.contains("quality = low_quality")
+                    && note.contains("pixel_width")
+                    && note.contains("frame_rate")),
+            "the override is stated, not silent: {:?}",
+            config.manim_cfg_warnings
+        );
+    }
+
+    #[test]
+    fn cli_and_pyproject_still_outrank_manim_cfg_quality() {
+        // quality wins *within* manim.cfg; it does not change the outer
+        // chain (CLI > profile > pyproject > manim.cfg > defaults).
+        let mut input = input_with(PYPROJECT);
+        input.manim_cfg = Some(parse_manim_cfg("[CLI]\nquality = low_quality\n").expect("parses"));
+        input.cli.pixel_width = Some(3840);
+        input.cli.pixel_height = Some(2160);
+        let config = resolve(&input).expect("resolves");
+        let profile = &config.active_profiles[0];
+        assert_eq!((profile.pixel_width, profile.pixel_height), (3840, 2160));
+        // fps was not overridden on the CLI, so manim.cfg's quality supplies it
+        // unless the pyproject profile already set one.
+        assert!(profile.frame_rate > 0.0);
+    }
+
+    #[test]
+    fn invalid_manim_cfg_quality_is_an_error() {
+        // Manim's `quality` setter raises KeyError, so the project would
+        // not render at all; guessing a profile here would be worse.
+        let error = parse_manim_cfg("[CLI]\nquality = ultra\n").expect_err("rejected");
+        assert!(error.contains("ultra"), "{error}");
+        assert!(error.contains("fourk_quality"), "{error}");
+    }
+
+    #[test]
+    fn uninterpreted_profile_key_warns_instead_of_being_silent() {
+        // Acceptance: an unrecognized profile-affecting key produces a
+        // warning rather than silence.
+        let values = parse_manim_cfg("[CLI]\nresolution = 1920,1080\n").expect("parses");
+        assert_eq!(values.warnings.len(), 1, "{:?}", values.warnings);
+        assert!(values.warnings[0].contains("resolution"));
+        // A key qual has no opinion about stays silent — warning on
+        // everything would be noise, not honesty.
+        let quiet = parse_manim_cfg("[CLI]\nbackground_color = BLACK\n").expect("parses");
+        assert!(quiet.warnings.is_empty(), "{:?}", quiet.warnings);
+    }
+
+    #[test]
+    fn manim_cfg_warnings_are_dropped_when_the_file_is_not_consulted() {
+        let mut input = input_with(PYPROJECT);
+        input.manim_cfg = Some(parse_manim_cfg("[CLI]\nresolution = 1,1\n").expect("parses"));
+        input.cli.respect_manim_cfg = Some(false);
+        let config = resolve(&input).expect("resolves");
+        assert!(!config.respect_manim_cfg);
+        assert!(config.manim_cfg_warnings.is_empty());
     }
 
     // --- configuration honesty (review finding: accepted-but-ignored /
