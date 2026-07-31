@@ -179,9 +179,16 @@ and validate output against the checked-in schemas.
 
 ## Contributing
 
-[`DESIGN.md`](DESIGN.md) is the authoritative semantic model, rule catalog,
-and rollout specification. [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the
-repository layout, adding a rule, test gates, and knowledge-profile updates.
+[`docs/architecture.md`](docs/architecture.md) is the map: the pipeline, the
+Manim semantic model the rules rest on, and the invariants every change must
+keep. [`docs/rules/`](docs/rules/README.md) is the rule catalog and
+[`docs/reference/cli.md`](docs/reference/cli.md) the CLI and JSON contracts.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) explains the repository layout, adding a
+rule, test gates, and knowledge-profile updates.
+
+[`DESIGN.md`](DESIGN.md) is a historical design record written in Japanese
+before the implementation existed. It is not a specification and is not kept
+in sync with the code.
 
 ```bash
 cargo fmt --check

@@ -53,7 +53,7 @@ claimed by this workflow.
 Start from a clean `main` checkout after deciding whether the next version is
 a SemVer patch or minor release. Public diagnostic/configuration/JSON changes
 still follow the stronger contract-update rules in `AGENTS.md` and
-`DESIGN.md`.
+`CONTRIBUTING.md`.
 
 ```bash
 git pull --ff-only
@@ -74,7 +74,7 @@ python3 scripts/check_release.py --tag v0.2.1
 QUAL_MANIM_ROOT=../manim cargo test --test knowledge_drift -- --ignored
 ```
 
-The DESIGN §11.4 benchmark gate must also be run on the pinned reference
+The benchmark gate must also be run on the pinned reference
 machine before approving the release PR. The release workflow reruns the
 portable quality gates and fetches the public pinned Manim commit for upstream
 knowledge drift. Hosted Actions deliberately selects only the upstream drift

@@ -2,8 +2,193 @@
 
 This document is the contributor's map of qual: how a Python source
 tree becomes diagnostics, which fact layer owns what, and where each piece
-lives. [`DESIGN.md`](https://github.com/Poietra/qual/blob/main/DESIGN.md) is the authoritative specification (the
-section numbers below refer to it); this page is the guided tour.
+lives. Together with [`docs/rules/`](rules/README.md) (the rule catalog),
+[`docs/reference/`](reference/cli.md) plus `schemas/` (the CLI and JSON
+contracts), and [CONTRIBUTING.md](https://github.com/Poietra/qual/blob/main/CONTRIBUTING.md)
+(the workflow), it is what a contributor needs.
+
+[`DESIGN.md`](https://github.com/Poietra/qual/blob/main/DESIGN.md) is **not**
+a specification. It is a Japanese-language design record written before the
+Rust implementation existed, when the plan was to write qual in Python; it is
+not kept in sync with the code, and where the two disagree the code is right.
+Older citations of the form "DESIGN §3.2" refer to the semantic model, which
+now lives below in English, with the legacy section numbers kept in the
+headings so those references still resolve. "DESIGN §15" is the invariant list
+at the end of this page.
+
+## The Manim semantic model
+
+Everything qual reports rests on modelling what Manim actually does, rather
+than on matching API names. `FadeOut(mob)` auto-adds `mob` during play setup
+even when it was never added to the scene, and removes it afterwards as a
+remover; conversely a one-argument updater is no reason to call a plain
+`wait()` dynamic. The analyzer reproduces these state transitions first and
+diagnoses second.
+
+### Scene lifecycle (§3.1)
+
+```text
+module import
+  |
+Scene.__init__ / renderer, camera, file writer setup
+  |
+Scene.render()
+  |- setup()
+  |- construct()
+  |    |- object construction / family mutation
+  |    |- add / remove / foreground / fixed-in-frame
+  |    `- zero or more play / wait
+  |- tear_down()
+  `- renderer.scene_finished() / partial movie concatenation
+```
+
+`Scene.render` calls `setup -> construct -> tear_down` in that order. The base
+`setup` and `tear_down` are empty, so omitting `super()` in an override only
+*means* something when a user-defined intermediate base Scene actually does
+work there. Requiring `super()` in every `setup` override would be name
+matching; the rule only fires when the resolved base method has an effect.
+
+### The exact `Scene.play` state machine (§3.2)
+
+```text
+compile arguments
+  |- an Animation passes through
+  |- mob.animate... becomes _AnimationBuilder -> Animation
+  `- anything else is a runtime TypeError
+      |
+apply play kwargs to the animations
+      |
+auto-add non-introducer animation targets not in the Scene family
+      |
+duration = max(animation.run_time)
+      |
+decide whether a Wait is static or dynamic
+      |
+animation._setup_scene(scene)     # introducers Scene.add if needed
+      |
+animation.begin()
+  |- copy starting_mobject
+  |- normally suspend the live mobject's updaters
+  |- Transform copies the target and aligns data
+  `- interpolate(0)
+      |
+determine the moving / static object scope
+      |
+for each time-grid sample
+  |- updaters of the animation's private objects
+  |- animation.interpolate(alpha)
+  |- recursive updaters of the Scene mobjects
+  |- mesh updaters
+  |- Scene updaters
+  |- raster / readback / encode handoff
+  `- stop_condition
+      |
+animation.finish()                # interpolate(1), resume suspended updaters
+      |
+animation.clean_up_from_scene(scene)
+  |- removers are Scene.remove'd
+  `- ReplacementTransform does Scene.replace
+      |
+Scene.update_mobjects(0)
+```
+
+Consequences the rules depend on:
+
+- `Transform(mob, target)` normally leaves **`mob` itself** in the target's
+  shape. It does not leave `target` in the scene.
+- `ReplacementTransform(source, target)` swaps source for target during
+  cleanup.
+- Introducer and remover membership effects happen at play setup and cleanup,
+  **not** when the Animation object is constructed.
+- Two animations writing the same live family in one play can overwrite each
+  other; the later interpolation wins.
+- An animation's live-mobject updaters are normally suspended, but Scene
+  updaters, other scene mobjects, and the starting/target copies each follow
+  different rules.
+- `.animate` is not merely deferred syntax. Taking the builder runs
+  `generate_target()` immediately, so mutating the live object — or building a
+  second builder for it — between that point and the `play` call can animate a
+  stale or overwritten target.
+
+### Frame time and updaters (§3.3)
+
+The frame times of a normal render are those of
+`np.arange(0, run_time, 1 / frame_rate)`. A static estimate may report
+`ceil(run_time * fps)`, but never as an *exact* frame count: the boundary is
+floating-point. `finish()`'s `alpha=1` produces the final geometry and
+normally writes no extra video frame.
+
+Within one frame the order is:
+
+```text
+Animation.update_mobjects(dt)
+Animation.interpolate(alpha)
+Scene.update_mobjects(dt)   # top-level, recursing into submobjects
+Scene.update_meshes(dt)
+Scene.update_self(dt)       # Scene updaters run last
+Renderer.render(...)
+```
+
+The mobject-updater calling convention has a trap. Manim inspects the
+callback's signature for a parameter *named* `dt`; if there is one it calls
+`(mobject, dt)`, otherwise `(mobject)`. Merely taking two arguments does not
+make a callback time-based.
+
+`MLC105` mirrors that branch rather than approximating it by parameter count,
+and validates positional binding the way `inspect.Signature.bind` would. So
+`lambda dt:`, a keyword-only `dt`, and `lambda mob, delta:` are errors, while
+defaults, positional-only parameters, and `*args` are accepted as long as the
+call really binds. `Scene.add_updater` is a separate contract and always
+passes a single `dt`.
+
+A `wait()` is dynamic — rather than auto-freezing — when any of these is
+present:
+
+- `always_update_mobjects`
+- a Scene updater
+- a `stop_condition`
+- a time-based updater in the Scene family
+
+With only one-argument updaters, a default `wait()` can render as a still
+frame. That is a Manim-specific wrong-picture case the linter reports
+explicitly.
+
+### Scene membership, family, and draw order (§3.4)
+
+- `Scene.add` is not a set insert. It removes the object first and appends it,
+  which changes draw order.
+- Adding a parent makes its submobjects visible as part of the family.
+- `Mobject.add` ignores a duplicate child and refuses direct self-addition.
+- A `VMobject` family normally holds only VMobjects; mixing kinds needs a
+  `Group`.
+- `Scene.remove(child)` does **not** edit the parent's `submobjects`. It
+  rebuilds the Scene's root list without that child, so re-adding or animating
+  the original parent later makes the child reappear. Temporary removal and
+  structural removal are distinct.
+- Cairo's z-order and source-over compositing make it redraw the suffix from
+  the first moving or updater-bearing object onward, so a scene-list position
+  is also a performance fact.
+- Foreground objects can widen the moving scope.
+- OpenGL costs differ between a retained render plan and the immediate
+  fallback a custom subclass or callback forces.
+
+### 3D and fixed objects (§3.5)
+
+`ThreeDScene.add_fixed_orientation_mobjects` and `add_fixed_in_frame_mobjects`
+add the object to the Scene implicitly. The matching remove APIs differ by
+renderer: Cairo only unregisters the camera fixing, while the OpenGL branch
+also does `Scene.remove` after unfixing. Code assuming the object stays
+visible after unfixing is a renderer-portability finding.
+
+### Geometry storage is not renderer-independent (§3.6)
+
+The public `set_points_*` APIs and a raw `.points` assignment are not the same
+thing. Cairo's `VMobject` stores cubic Béziers at 4 points per curve, while
+`OpenGLVMobject` has paths storing quadratic Béziers at 3 points per curve. So
+`points.reshape((-1, 4, 3))`, four-point slicing, and a `set_points` that
+assumes the Cairo layout can all be OpenGL portability bugs. The point layout
+per renderer lives in the knowledge profile, and raw access is only diagnosed
+strongly when both the shape and the target renderer are established.
 
 ## The pipeline
 
@@ -102,13 +287,14 @@ for provenance:
   process-global SVG cache). Everything fork-gated is inert under
   `upstream_0_20`.
 - `generator.rs` / `src/bin/sync_manim_knowledge.rs` generate reviewable
-  candidates and drift-check the shipped profiles (the DESIGN §11.2
-  layer-9 gate, also `cargo test --test knowledge_drift -- --ignored`).
+  candidates and drift-check the shipped profiles
+  (`cargo test --test knowledge_drift -- --ignored`).
   Humans curate; the tool never writes into the profiles directory.
 
 ### Lifecycle interpreter (`src/semantic/`)
 
-The core of the analyzer (DESIGN §3, §5.5–§5.7): an abstract interpreter
+The core of the analyzer, and where the semantic model above is enforced:
+an abstract interpreter
 that runs each discovered Scene subclass's
 `__init__ → setup → construct → tear_down` lifecycle and produces
 `LifecycleFacts` — per-scene membership/order/updater state, play facts,
@@ -177,7 +363,7 @@ schemas define the external contract.
 
 ### Cost model (`src/cost/` and `src/render_order.rs`)
 
-`CostFacts` (DESIGN §4): symbolic, evidence-carrying — never fabricated
+`CostFacts`: symbolic, evidence-carrying — never fabricated
 numbers.
 
 - `contexts.rs` — hot-context propagation: updaters, `always_redraw`,
@@ -210,7 +396,7 @@ their findings enter the shared deterministic supersession/filter/sort pass.
 Rules have **no visitors of their own**: they
 query `RuleContext` fact layers. The canonical traversal rule: no
 module-root AST walks in rule code — needed positions are promoted into
-frontend facts instead (DESIGN §5.6).
+frontend facts instead.
 
 ### Reporting (`src/reporting/`)
 
@@ -303,7 +489,7 @@ evidence would say "per frame" without a number — and if the factory's
 target could not be proven frame-varying, the rule would stay silent.
 `qual coverage` then reports that frontier instead of hiding it.
 
-## The invariants that govern contributions (DESIGN §15)
+## The invariants that govern contributions
 
 1. Never import or execute the analyzed code or Manim.
 2. Never emit a certain/high diagnostic from `Unknown` facts.
