@@ -283,6 +283,12 @@ pub struct ResolvedConfig {
     pub knowledge_profile: Option<String>,
     /// Whether `manim.cfg` was consulted.
     pub respect_manim_cfg: bool,
+    /// Notes about `manim.cfg` `[CLI]` content that was read but not
+    /// honored. Empty when `manim.cfg` was fully interpreted or was not
+    /// consulted at all. Reporting `respect_manim_cfg: true` while
+    /// dropping keys is exactly the silent wrong answer DESIGN §8.2
+    /// forbids, so what was dropped is stated here.
+    pub manim_cfg_warnings: Vec<String>,
     /// Exclusion globs.
     pub exclude: Vec<String>,
     /// Per-file-glob rule suppressions.

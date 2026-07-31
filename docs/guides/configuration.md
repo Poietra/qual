@@ -40,6 +40,44 @@ CLI > selected profile > pyproject base > manim.cfg > builtin defaults
 `qual config` prints the final values and an `enforcement` section showing
 which settings affect analysis and which are informational.
 
+## `manim.cfg`
+
+When `respect-manim-cfg` is true (the default), qual reads the `[CLI]`
+section of `manim.cfg` in the project root and takes `pixel_width`,
+`pixel_height`, `frame_rate`, `renderer`, and `quality` from it.
+
+`quality` accepts the Manim preset names and their `-q` flags:
+
+| value | flag | resolution | fps |
+| --- | --- | --- | --- |
+| `low_quality` | `l` | 854x480 | 15 |
+| `medium_quality` | `m` | 1280x720 | 30 |
+| `high_quality` | `h` | 1920x1080 | 60 |
+| `production_quality` | `p` | 2560x1440 | 60 |
+| `fourk_quality` | `k` | 3840x2160 | 60 |
+| `example_quality` | — | 854x480 | 30 |
+
+Within `manim.cfg`, `quality` **overrides** `pixel_width`, `pixel_height`,
+and `frame_rate` set in the same file. This matches Manim: `digest_parser`
+(`manim/_config/utils.py`) reads the individual keys first and applies
+`quality` last, and the `quality` setter assigns `frame_size` and
+`frame_rate` unconditionally. The override is reported in
+`manim_cfg_warnings` rather than applied silently.
+
+`quality` only wins inside `manim.cfg`. The outer chain above is unchanged:
+a CLI flag or a pyproject profile still outranks it.
+
+A value that is not a preset is a configuration error (exit code 2), because
+Manim itself raises `KeyError` for it.
+
+A `[CLI]` key that affects the render profile but that qual does not
+interpret — `resolution`, `frame_size`, `from_animation_number`,
+`upto_animation_number`, `save_last_frame`, `dry_run`, `transparent`,
+`format` — is listed in the `manim_cfg_warnings` field of `qual config` and
+printed to stderr during `qual check`. Reporting `respect_manim_cfg: true`
+while quietly dropping such a key would be a confident answer derived from a
+render profile the project never asked for.
+
 ## Profiles
 
 Profiles let CI evaluate the same source under its real render targets:

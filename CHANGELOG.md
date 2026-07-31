@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`manim.cfg` `quality` is no longer silently dropped.** `quality` is the
+  usual way to set resolution and frame rate in Manim, but qual read only
+  `pixel_width`, `pixel_height`, `frame_rate`, and `renderer`; a project
+  configured with `quality = fourk_quality` was analyzed at 1920x1080/60
+  while `qual config` reported `respect_manim_cfg: true`, so every frame
+  estimate and cost class was computed against the wrong profile. The five
+  named presets and `example_quality` are now interpreted, by name and by
+  their `-q` flags, and an unknown value is a configuration error rather
+  than a guess. Within `manim.cfg`, `quality` overrides the individual keys,
+  matching Manim's `digest_parser`, which applies it last.
+- A `manim.cfg` `[CLI]` key that affects the render profile but that qual
+  does not interpret is now reported in the new `manim_cfg_warnings` field
+  of `qual config` and on stderr during `qual check`, instead of being
+  dropped without a word.
+
 ### Added
 
 - A searchable Material for MkDocs site that brings installation, configuration,
